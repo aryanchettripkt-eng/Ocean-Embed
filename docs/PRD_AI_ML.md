@@ -1,6 +1,6 @@
 # PRD: AI / ML Pipeline — OceanScope AI
 
-**Status:** Draft v4 (2026-10-22): v3 (richer inputs, ablations, ARMOR3D baseline, ARGO fine-tuning) + long sea-level history, climate-mode indices, temporal-consistency and per-year bias metrics  
+**Status:** Draft v5 (2026-10-22): v4 + primary success criterion (§1.1), ARGO profiles as input, ARGO fine-tuning in core, GREP ensemble as auxiliary target, 1993 start, depth-weighted loss, physics checks, live mode (§12)  
 **Lives in:** `ml/` of the monorepo (see `AGENTS.md`). Python package `oceanscope_ml` at `ml/src/oceanscope_ml/`.  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
@@ -27,7 +27,14 @@
 
 ## 1. Goal
 
-Produce daily 3D temperature fields (15 depths, 0.25° grid) over the North Indian Ocean from surface/dynamics inputs, with honest, reproducible evaluation, saved in a fixed format the backend serves.
+Produce daily 3D temperature fields (15 depths, 0.25° grid) over the North Indian Ocean from surface/dynamics inputs and recent ARGO profiles, with honest, reproducible evaluation, saved in a fixed format the backend serves.
+
+### 1.1 Primary success criterion (pre-registered; do not change after training starts)
+> **In the Bay of Bengal (region `bay_of_bengal` from §6.3: lon ≥ 78°E, lat ≥ 5°N), at the GLORYS levels between 50 and 300 m, the model's RMSE against held-out ARGO floats (§7) is lower than that of GLORYS12, the GREP ensemble mean and ARMOR3D at the same matchups.**
+- Measured on validation dates during development and on the sealed test year once, at the end (§0 rule 3). The test-year result is the headline.
+- A product that has no data for a matchup date (e.g. GREP after its last date) is reported as "n/a" for that period, never extrapolated.
+- Report the result whatever it is, with a bootstrap 95% confidence interval over **floats** (resample floats, not observations, 1000 times, fixed seed). "Better" means the upper CI bound of (model RMSE − competitor RMSE) is < 0.
+- Every other number (whole basin, other depths) is secondary and reported alongside. Do not redefine the region, depths or metric after seeing results; any change needs an entry in `docs/DECISIONS.md` made **before** the relevant training run.
 
 ### In scope
 - Scripted data download, inspection, preprocessing, alignment, climatology.
@@ -39,8 +46,8 @@ Produce daily 3D temperature fields (15 depths, 0.25° grid) over the North Indi
 
 ### Out of scope (unless the owner adds it)
 - Transformers, diffusion models, large foundation models.
-- Uncertainty estimation, temporal models, SST input (stretch, Section 10).
-- Any live/online inference in the web app.
+- Uncertainty estimation, temporal models, the hyper-local 1/12° model (stretch, Section 10).
+- On-demand inference inside the web app. (Scheduled daily inference, "live mode", is in scope as §12, after the published run exists.)
 - LLM/Muse Spark integration (belongs to the backend PRD).
 
 ---
@@ -66,12 +73,12 @@ grid:
   # cell centres: lon_min + 0.125, ..., lat_min + 0.125, ...
 
 time:
-  start: "2010-01-01"   # [CONFIRM] = intersection of all product coverages
+  start: "1993-01-01"   # [CONFIRM] = intersection of all product coverages (all inputs start ≤ 1993); first usable sample = start + long_history.days
   end:   "2021-12-31"   # [CONFIRM]
   day_boundary: UTC
 splits:
-  train: ["2010-01-01", "2018-12-01"]   # [CONFIRM]
-  val:   ["2019-01-01", "2020-12-01"]   # [CONFIRM]
+  train: ["1993-03-02", "2017-12-01"]   # [CONFIRM]
+  val:   ["2018-01-01", "2020-12-01"]   # [CONFIRM]
   test:  ["2021-01-01", "2021-12-31"]   # [CONFIRM] sealed
   gap_days: 30                           # dropped at the end of train and val
 
@@ -89,6 +96,11 @@ inputs:
     stride: 5              # frames at t-5, t-10, ..., t-60 (12 frames; days t..t-6 already in history_days)
     reduce: mean           # each frame = mean over its 5-day window, so frames are not noisy single days
   indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]   # daily scalars, broadcast to the grid as constant channels (day t only)
+  argo_input:              # recent ARGO profiles as sparse input channels, see §5.1 and §7
+    enabled: true
+    window_days: 10        # profiles from days t-9..t
+    min_year: 2004         # before this, the channels are all-empty (mask 0); that is expected
+    train_drop_frac: 0.3   # during training, randomly hide this fraction of available input profiles per sample
   ablation_groups:         # each run removes one group; see §5.7
     sst: [sst]
     sss: [sss]
@@ -99,6 +111,22 @@ inputs:
     history: history_days=1
     long_history: long_history.days=0
     indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]
+    argo_input: argo_input.enabled=false
+
+target:
+  primary: glorys12                 # thetao from GLOBAL_MULTIYEAR_PHY_001_030, area-mean to 0.25°
+  auxiliary: grep_mean              # GREP ensemble mean (GLOBAL_MULTIYEAR_PHY_ENS_001_031, daily), only on dates it covers
+  aux_weight: 0.5                   # [CONFIRM] loss = (1-w)·L_glorys + w·L_grep where GREP exists, else L_glorys
+  depth_weights:                    # per-level loss weight; levels between 50 and 300 m get the higher weight
+    band_m: [50, 300]
+    in_band: 2.0                    # [CONFIRM] ablation: 1.0 vs 2.0
+    out_band: 1.0
+
+finetune_argo:                      # core, §5.9
+  enabled: true
+  lambda: 0.1                       # [CONFIRM] tuned on validation ARGO from non-held-out floats only
+  epochs: 10
+  lr: 1.0e-4
 
 climatology:
   method: harmonic        # mean + first 3 annual harmonics, per cell and depth
@@ -152,8 +180,10 @@ publish:
 | `nino34` | NOAA CPC/PSL Niño 3.4 SST anomaly index | input (scalar, broadcast) | daily (or weekly, linearly interpolated) | ENSO state. Its source region is in the Pacific, **outside our box**, so this is information the model can't otherwise see (atmospheric bridge + Indonesian Throughflow). |
 | `dmi` | Dipole Mode Index (IOD), computed by us from OSTIA | input (scalar, broadcast) | daily | West box 50–70°E 10°S–10°N minus east box 90–110°E 10°S–0°, SST anomaly vs the **train-period** OSTIA climatology. Needs a small extra OSTIA download covering 10°S–0° (outside the main bbox). The IOD strongly tilts the Indian Ocean thermocline. |
 | `mjo_rmm1`, `mjo_rmm2` | BoM Real-time Multivariate MJO index (Wheeler & Hendon) | input (scalar, broadcast) | daily | Intraseasonal convection/wind bursts that drive equatorial Kelvin waves. Public text file, no account. |
+| `grep_mean` | GREP ensemble mean (Copernicus `GLOBAL_MULTIYEAR_PHY_ENS_001_031`, daily 0.25°, 75 levels) | auxiliary target | 0.25° daily | Members per current docs: GLORYS2V4, ORAS5, C-GLORS. **End date to be confirmed at M1** (catalogue metadata says 15 Dec 2020; documentation says "regularly updated"). Never an input. Also a competitor in §1.1. Interpolate to the 15 GLORYS depths. |
+| `argo_t_<d>`, `argo_mask` | ARGO profiles (same source as evaluation) | input (sparse) | point profiles | Only floats **not** in `argo_eval_floats.json`. Profile interpolated to the 15 depths (no extrapolation), placed in its nearest cell; if several in a cell within the window, keep the most recent. Value = anomaly vs `clim` for that cell/day/depth. `argo_mask` = 1 where a profile exists, `argo_age` = (t − profile day)/window_days. |
 | ARMOR3D | Copernicus multi-observation 3D T | external baseline only | 0.25° weekly/daily | Compared at ARGO points; never an input. |
-| ARGO | QC'd profiles (e.g. Argo GDAC / Copernicus INSITU) | evaluation; optional fine-tuning (§10) | point profiles | Use QC flags 1–2 only. Floats used for fine-tuning are never used for evaluation. |
+| ARGO | QC'd profiles (e.g. Argo GDAC / Copernicus INSITU) | evaluation; input channels and fine-tuning targets (§5.1, §5.9) | point profiles | Use QC flags 1–2 only. Held-out evaluation floats are never used as input or fine-tuning target. |
 
 **Rejected inputs (do not add):** atmospheric CO₂ or any other "global warming" scalar, and a calendar-year/trend channel. They are near-linear in time, carry no information that SST/SLA don't already contain, and let the model extrapolate a trend into the sealed test year instead of reading it from observations. Warming is handled by the observed inputs plus the per-year bias check in §5.8.
 
@@ -189,7 +219,8 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
   - ERA5 (and optional GloFAS): Copernicus CDS (`cdsapi`, key in env `CDSAPI_URL`/`CDSAPI_KEY`), area-subset requests, one month per request.
   - GEBCO (bbox subset), WOA23 monthly 0.25° temperature: one-off files.
   - Climate indices: Niño 3.4 from NOAA CPC/PSL, MJO RMM from the Australian Bureau of Meteorology; plain text files, no account. DMI is computed from OSTIA (§3). Record the exact URLs in `MANIFEST.json`.
-  - ARGO: Argo GDAC (or Copernicus INSITU), profiles inside the bbox and date range.
+  - GREP: same toolbox, daily ensemble-mean dataset (`..._phymnstd_my_0.25deg_P1D-m`), temperature only, 15 depths ± neighbours.
+  - ARGO: Argo GDAC (or Copernicus INSITU), profiles inside the bbox for the **whole** period (input channels and fine-tuning need training years too, from 2004).
 - Server-side subsetting is mandatory where the service supports it; never download global files when a subset is possible.
 - Resumable: skip files already present with matching size/checksum.
 - `--dry-run` prints planned requests and estimated sizes without downloading.
@@ -200,8 +231,9 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
 ## 5. Model specification
 
 ### 5.1 Input tensor
-`X: float32 [B, C, H_pad, W_pad]`. Channel order is generated by one function, `oceanscope_ml.data.channels.channel_list(config)`, and saved in every checkpoint; nothing else may hardcode it. Order: dynamic channels (core + forcing) for each history day oldest→newest, then static channels, then extra channels. Long-history frames (oldest→newest) follow the dynamic channels, then index channels, then static, then extra. With defaults: 11 dynamic × 7 days + 2 × 12 long-history frames + 4 indices + 1 bathymetry + 15 WOA + 5 extra = 126 channels.  
+`X: float32 [B, C, H_pad, W_pad]`. Channel order is generated by one function, `oceanscope_ml.data.channels.channel_list(config)`, and saved in every checkpoint; nothing else may hardcode it. Order: dynamic channels (core + forcing) for each history day oldest→newest, then static channels, then extra channels. Long-history frames (oldest→newest) follow the dynamic channels, then index channels, then static, then extra. ARGO input channels (15 anomaly levels + mask + age) come after the index channels. With defaults: 11 dynamic × 7 days + 2 × 12 long-history frames + 4 indices + 17 ARGO + 1 bathymetry + 15 WOA + 5 extra = 143 channels.  
 - Core/forcing/static channels: z-scored with train-period per-channel mean/std (scalar per channel, ocean cells only), then NaN → 0.  
+- ARGO channels: anomaly levels divided by the same `sigma_d` as the target; 0 where `argo_mask` = 0. During training only, drop `train_drop_frac` of the available input profiles per sample (fixed seed per epoch) so the model does not depend on any one float.
 - Index channels: z-scored with train-period mean/std of the index, constant over the grid; NaN not allowed (fail loudly if an index has gaps after interpolation).
 - `lat`, `lon`: min-max scaled to [-1, 1] over the region.  
 - `ocean_mask`: 1 where the GLORYS surface cell is valid, else 0.  
@@ -215,8 +247,9 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
 Plain 2D U-Net: `depth_levels` down/up stages, each stage = 2 × (Conv3×3 → GroupNorm(8) → SiLU), MaxPool down, bilinear upsample + conv up, skip connections by concatenation, final Conv1×1 → 15 channels. Parameters must be ≤ 10 M (assert in tests). No attention blocks in v1.
 
 ### 5.4 Loss
-Masked MSE over normalized anomalies:  
-`L = sum(M * (Ŷ − Y)²) / sum(M)` (Y's NaNs replaced by 0 under M=0). No depth weighting in v1.
+Depth-weighted masked MSE over normalized anomalies:  
+`L(Y) = sum(w_d · M · (Ŷ − Y)²) / sum(w_d · M)` (Y's NaNs replaced by 0 under M=0), `w_d` from `target.depth_weights`.  
+Total: `L = (1 − a)·L(Y_glorys) + a·L(Y_grep)` on dates where GREP exists, else `L(Y_glorys)`, with `a = target.aux_weight`. `Y_grep` uses the same climatology and `sigma_d` as GLORYS (computed from GLORYS train period). Ablations: `aux_weight = 0` and `in_band = 1.0`.
 
 ### 5.5 Training loop requirements
 - AMP when CUDA is available; deterministic seeding (`torch`, `numpy`, `random`).
@@ -239,7 +272,14 @@ Train the full model, then one run per `inputs.ablation_groups` entry with that 
 Written by `evaluate.py` on validation dates only (test only in `final_test.py`). These files are ML-internal, not part of the §6 contract or the manifest.
 1. **Day-to-day flicker** → `outputs/metrics/<run_id>_val_temporal.csv`, columns `model, depth_m, n, tend_rmse_pred_c, tend_rmse_glorys_c, tend_err_rmse_c, lag1_autocorr_pred, lag1_autocorr_glorys`, one row per depth plus `all`. Tendency = T(t) − T(t−1) per valid cell and depth, using only consecutive valid days. `tend_err_rmse_c` = RMS of (Δpred − ΔGLORYS). Compute for the U-Net and every baseline. **Flag in the report** any depth where `tend_rmse_pred_c > 1.5 × tend_rmse_glorys_c` (the model jumps around more than the ocean does). If flagged at ≥ 3 depths, that is the trigger for stretch item §10.2 (temporal model).
 2. **Per-year bias (warming check)** → `outputs/metrics/<run_id>_bias_by_year.csv`, columns `model, split, year, depth_m, n, bias_c, rmse_c`, for train years (from a held-in sample, labelled `split = train`) and val years. Because the target is an anomaly from a **fixed** 2010–2018 climatology, a warming ocean shows up as growing positive anomalies. A bias trend across years means the model is damping the trend; report it with the slope (°C/yr) per depth.
-3. Plot one 90-day time series at three fixed points (Arabian Sea, Bay of Bengal, equatorial; coordinates in config) at 0, 100 and 300 m: pred vs GLORYS → `outputs/figures/timeseries_<run_id>.png`.
+3. **Physics sanity checks** → `outputs/metrics/<run_id>_physics.csv`: (a) monthly, per region: change in 0–300 m heat content (ρ·c_p·∫T dz, ρ=1025, c_p=3990) vs ERA5 net heat flux integrated over the month; report the correlation and RMS difference for the model **and** for GLORYS (advection makes them differ; the point is the model should not be much worse than GLORYS); (b) fraction of predicted profiles with a temperature inversion > 0.5 °C where GLORYS has none at that cell/day; (c) fraction of cells with |T_pred − T_glorys| > 3 °C (gross outliers). Flag in the report if the model is > 2× GLORYS on (a) RMS or > 1% on (b).
+4. Plot one 90-day time series at three fixed points (Arabian Sea, Bay of Bengal, equatorial; coordinates in config) at 0, 100 and 300 m: pred vs GLORYS → `outputs/figures/timeseries_<run_id>.png`.
+
+### 5.9 ARGO fine-tuning (core)
+After the GLORYS/GREP training run, fine-tune the best checkpoint for `finetune_argo.epochs` with loss `L + λ · L_argo`, where `L_argo` = MSE between predicted and observed anomaly (both / `sigma_d`) at the 15 depths for training-period profiles from **non-held-out** floats, at their cell and day. Profiles used in `L_argo` for a sample must **not** also be in that sample's ARGO input channels (exclude them from the input when they are targets). Tune λ ∈ {0.03, 0.1, 0.3} on validation-period ARGO from non-held-out floats only. Report held-out-float metrics before and after fine-tuning; the after-model is the candidate for §1.1. Writes `best_ft.pt`; the run id gets suffix `_ft`.
+
+### 5.10 Ensemble (stretch §10.1)
+Out of scope for v1; see §10.
 
 ---
 
@@ -265,14 +305,16 @@ Dates = those in `inference.publish_splits` (default val + test). Stored dtype f
 | `temp_glorys` | (time, depth, lat, lon) | float16/float32 | °C (reference; present for all published dates) |
 | `coverage` | (time, lat, lon) | int8 | 0 = land/unsupported, 1 = valid prediction, 2 = insufficient inputs (prediction masked) |
 
-Attributes: `run_id`, `dataset_version`, `model_name`, `created_utc`, `split_of_each_date` (JSON mapping date ranges → train/val/test), `depths_m`.  
+Attributes: `run_id`, `dataset_version`, `model_name`, `created_utc`, `split_of_each_date` (JSON mapping date ranges → train/val/test/live), `depths_m`.  
+**Live dates (§12):** labelled `live`; `temp_glorys` is all-NaN for them (no reference exists yet). Consumers must handle this.  
 A prediction cell is "insufficient inputs" if any of `sla`, `sst`, `u_wind`, `v_wind` is invalid on day t, or fewer than 7 of the 9 core inputs are valid at that cell; `temp_pred` is NaN there.
 
 ### 6.3 Metrics files `outputs/metrics/`
 - `<run_id>_val.csv`, `<run_id>_test.csv`, `baseline_<name>_val.csv`: columns `model, split, depth_m, n, mae_c, rmse_c, bias_c, skill_vs_clim_pct`. One row per depth plus a row with `depth_m = all`.
 - `<run_id>_val_by_season.csv`: same + `season` (DJF, MAM, JJA, SON).
 - `<run_id>_val_by_region.csv`: same + `region` (`arabian_sea`: lon<78; `bay_of_bengal`: lon≥78 and lat≥5; `equatorial`: lat<5).
-- `argo_<run_id>.csv`: columns `depth_m, n_profiles, n_obs, mae_c, rmse_c, bias_c, glorys_mae_c, glorys_rmse_c` (GLORYS vs. ARGO at the same points, for context).
+- `argo_<run_id>.csv`: columns `depth_m, n_profiles, n_obs, mae_c, rmse_c, bias_c, glorys_mae_c, glorys_rmse_c, grep_mae_c, grep_rmse_c, armor3d_mae_c, armor3d_rmse_c` (each competitor vs. ARGO at the same held-out-float points; empty where a product has no data for those dates).
+- `<run_id>_headline.csv`: the §1.1 table (columns in §7). Optional in the manifest (`files.headline`, string or null) so older manifests stay valid.
 - `manifest.json` (exact schema, the backend validates it):
 ```json
 {
@@ -285,8 +327,8 @@ A prediction cell is "insufficient inputs" if any of `sla`, `sst`, `u_wind`, `v_
   "region": {"lon_min": 40.0, "lon_max": 100.0, "lat_min": 0.0, "lat_max": 30.0},
   "grid_resolution_deg": 0.25,
   "depths_m": [0.49, "... 15 values ..."],
-  "available_dates": {"start": "2019-01-01", "end": "2021-12-31"},
-  "splits": {"train": ["2010-01-01","2018-12-01"], "val": ["2019-01-01","2020-12-01"], "test": ["2021-01-01","2021-12-31"]},
+  "available_dates": {"start": "2018-01-01", "end": "2021-12-31"},
+  "splits": {"train": ["1993-03-02","2017-12-01"], "val": ["2018-01-01","2020-12-01"], "test": ["2021-01-01","2021-12-31"]},
   "test_evaluated": false,
   "files": {
     "predictions": "predictions/predictions_<run_id>.zarr",
@@ -296,7 +338,8 @@ A prediction cell is "insufficient inputs" if any of `sla`, `sst`, `u_wind`, `v_
     "metrics_test": null,
     "baselines_val": ["metrics/baseline_climatology_val.csv", "metrics/baseline_ridge_val.csv"],
     "argo": "metrics/argo_<run_id>.csv",
-    "argo_matches": "metrics/argo_matches_<run_id>.parquet"
+    "argo_matches": "metrics/argo_matches_<run_id>.parquet",
+    "headline": "metrics/<run_id>_headline.csv"
   }
 }
 ```
@@ -318,9 +361,9 @@ Bias = mean(pred − reference). skill_vs_clim_pct = 100 × (1 − RMSE_model / 
 ## 7. ARGO validation spec
 - Profiles: QC flags 1–2 for TEMP and PRES/DEPTH; position flag 1–2; within region and the prediction date range.
 - Matching: nearest grid cell (cell centre within 0.125°) and same UTC day. Interpolate the model profile (15 levels) linearly in depth to observed depths within [min(depths_m), max(depths_m)]; no extrapolation. Then bin errors to the nearest of the 15 depths for reporting.
-- Report n profiles, n observations, MAE/RMSE/bias per depth, and the same metrics for GLORYS vs. ARGO and ARMOR3D vs. ARGO.
-- **Float-level hold-out:** randomly assign 20% of ARGO floats (by `platform_number`, fixed seed) to `argo_eval_floats.json`. These are the only floats used for ARGO metrics. The remaining floats may be used for fine-tuning (§10).
-- Output `argo_matches_<run_id>.parquet`: `platform_number, cycle, time, lat, lon, depth_m, temp_obs_c, temp_pred_c, temp_glorys_c`.
+- Report n profiles, n observations, MAE/RMSE/bias per depth, and the same metrics for GLORYS vs. ARGO, GREP mean vs. ARGO (dates it covers) and ARMOR3D vs. ARGO, overall and for the §1.1 region and depth band, with the float-bootstrap CI. Write the §1.1 table to `outputs/metrics/<run_id>_headline.csv` with columns `period, product, n_floats, n_obs, rmse_c, ci_low_c, ci_high_c, diff_vs_model_c, diff_ci_low_c, diff_ci_high_c`.
+- **Float-level hold-out:** randomly assign 20% of ARGO floats (by `platform_number`, fixed seed) to `argo_eval_floats.json`. These are the only floats used for ARGO metrics and they are **never** used as model input or fine-tuning targets. The remaining floats are used as input channels (§5.1) and fine-tuning targets (§5.9). Stratify the split by region so the Bay of Bengal has held-out floats in every year; write per-region counts to the M1 inspection report.
+- Output `argo_matches_<run_id>.parquet`: `platform_number, cycle, time, lat, lon, depth_m, temp_obs_c, temp_pred_c, temp_glorys_c, temp_grep_c, temp_armor3d_c` (last two nullable).
 - The report must state that ARGO data is assimilated in GLORYS and therefore is not fully independent.
 
 ---
@@ -335,10 +378,12 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 6. `test_param_count`: U-Net with config defaults ≤ 10 M params.
 7. `test_prediction_contract`: `predict` on the fixture writes a store matching Section 6.2 exactly (names, dims, dtypes, attrs).
 8. `test_resume`: train 1 epoch, kill, resume → epoch counter and optimizer state continue.
+10. `test_argo_holdout`: building ARGO input channels and fine-tuning targets never uses a `platform_number` from `argo_eval_floats.json`, and a profile used as a fine-tuning target is absent from that sample's input channels.
+11. `test_depth_weights`: with all weights 1 the loss equals plain masked MSE.
 9. `test_manifest_schema`: generated `manifest.json` validates against the Section 6.3 schema (`ml/src/oceanscope_ml/schemas/manifest.schema.json`, JSON Schema, shared with the backend by copy at `backend/app/schemas/manifest.schema.json`; a CI check diffs the two).
 
 ### 8.1 Shared sample outputs (for backend and frontend development)
-`python -m oceanscope_ml.fixtures.make_sample_outputs --out ../fixtures/sample_outputs` writes a tiny but contract-exact output tree (Section 6.4 layout: 10 days, real region bbox at 1° spacing, 15 plausible depths, synthetic but physically plausible temperatures decreasing with depth, a land mask, some `coverage = 2` cells, and metrics CSVs with an obvious `SYNTHETIC` model name). It must not import torch. The output is committed to git (< 5 MB) so the backend and frontend can be built before any real data exists. **Synthetic values must never be presented as real results:** `manifest.json` carries `"synthetic": true`, and the backend/frontend show a banner when it is set.
+`python -m oceanscope_ml.fixtures.make_sample_outputs --out ../fixtures/sample_outputs` writes a tiny but contract-exact output tree (Section 6.4 layout: 10 days, real region bbox at 1° spacing, 15 plausible depths, synthetic but physically plausible temperatures decreasing with depth, a land mask, some `coverage = 2` cells, metrics CSVs with an obvious `SYNTHETIC` model name, a synthetic `_headline.csv`, the competitor columns in the ARGO files, and the last 2 of the 10 days labelled `live` with NaN `temp_glorys`). It must not import torch. The output is committed to git (< 5 MB) so the backend and frontend can be built before any real data exists. **Synthetic values must never be presented as real results:** `manifest.json` carries `"synthetic": true`, and the backend/frontend show a banner when it is set.
 
 ---
 
@@ -348,16 +393,17 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 |---|---|---|
 | M1 Data | `download.py` (one month first), `inspect.py`, `preprocess.py`, climatology, config confirmed | Inspection report exists; owner has confirmed all [CONFIRM] values; processed store passes a schema check; one day plotted for every variable in `outputs/figures/m1_sample_day.png`; tests 3–5 pass |
 | M2 Baselines + U-Net | `baselines.py`, `dataset.py`, `unet.py`, `train.py`, Colab + Kaggle notebooks | Baseline val CSVs exist; U-Net trains on Colab and Kaggle; resume works across a session restart; U-Net val RMSE < climatology val RMSE at ≥ 10 of 15 depths (if not, report and stop — do not tune on test) |
-| M3 Evaluation | `evaluate.py`, `argo_validation.py` | All Section 6.3 and §5.8 files exist for the best run; evaluation report `outputs/reports/evaluation_<run_id>.md` with tables generated by code and the leakage caveat |
+| M2b ARGO + fine-tune | ARGO input channels, `finetune.py` (§5.9) | Input channels pass a test that held-out floats never appear; fine-tuned model's validation ARGO RMSE reported before/after |
+| M3 Evaluation | `evaluate.py`, `argo_validation.py` | All Section 6.3, §5.8 and `_headline.csv` files exist for the best run; evaluation report `outputs/reports/evaluation_<run_id>.md` with tables generated by code and the leakage caveat |
 | M4 Inference + publish | `predict.py`, `manifest.json`, `publish.py` | Prediction store for published dates passes the contract test; total published size ≤ 3 GB; manifest validates against 6.3 schema; files visible in the HF dataset repo; backend loads them (backend PRD acceptance) |
 | M5 Final test | `final_test.py` | Run once on owner's instruction; results added to the evaluation report, clearly labelled |
 
 ---
 
 ## 10. Stretch (only on owner request, in this order)
-1. **ARGO fine-tuning:** after GLORYS training, fine-tune with loss = masked MSE vs GLORYS + λ × MSE vs ARGO profiles (from training-period, non-held-out floats, interpolated to the 15 depths at matched cells/days). Tune λ on validation-period ARGO from non-held-out floats only. Report the held-out-float ARGO metrics before and after. This is the only way to beat GLORYS against real observations.
-2. Temporal model (ConvLSTM over the history frames, or a recurrent U-Net) **only if** §5.8 flags flicker at ≥ 3 depths or the history ablation shows longer history keeps helping. Do **not** feed the model's own previous-day prediction back as an input in v1: errors compound over long runs and training needs unrolled sequences, which is costly on Colab.
-3. MC-dropout or ensemble uncertainty → `temp_pred_std` variable added to 6.2 (contract change, needs approval).
+1. **Ensemble of 3–5 models** (different seeds, same config) → mean as `temp_pred`, spread as `temp_pred_std` added to 6.2 (contract change, needs approval). Usually lowers RMSE and gives an uncertainty map.
+2. **Hyper-local 1/12° model** for one sub-region (default the Bay of Bengal box): same pipeline on the GLORYS native grid with OSTIA at native 0.05° (area-mean to 1/12°) and other inputs bilinearly interpolated. Expect gains mainly in the top ~100 m; separate run id and prediction store.
+3. Temporal model (ConvLSTM over the history frames, or a recurrent U-Net) **only if** §5.8 flags flicker at ≥ 3 depths or the history ablation shows longer history keeps helping. Do **not** feed the model's own previous-day prediction back as an input: errors compound over long runs and training needs unrolled sequences, which is costly on Colab.
 
 ---
 
@@ -370,8 +416,20 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 
 ---
 
-## 12. Open questions for the owner
-- Create accounts: Copernicus Marine, NASA Earthdata, Hugging Face (for the published outputs).
+## 12. Live mode (after the first real run is published; PHASES P9)
+A scheduled job produces one new day per run, about 3 days behind real time.
+- **Runner:** GitHub Actions `schedule:` workflow (daily, 06:00 UTC) on CPU. Credentials from GitHub secrets (`COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD`, `EARTHDATA_USERNAME/PASSWORD`, `CDSAPI_KEY`, `HF_TOKEN`). No database: the published zarr store on the HF dataset repo is the store.
+- **Inputs:** near-real-time versions of each product (DUACS NRT, OSTIA NRT, CCMP NRT, ERA5T, OSCAR NRT/interim, MULTIOBS SSS NRT, ARGO real-time profiles with RT QC flags 1–2, indices). The target date is the latest day for which every core input exists; record the per-input latency in the run log. If a required input is missing, skip the day (no partial maps) and log why.
+- **Model:** the published checkpoint, unchanged. No online learning. Retraining happens offline (e.g. every 3–6 months) and is published only if it passes the same validation gate.
+- **NRT vs reprocessed shift:** before enabling, run the model on one past month using NRT inputs and on the same month using reprocessed inputs; report the RMSE difference vs GLORYS per depth in `outputs/reports/live_mode_check.md`. Enable only if the owner accepts it.
+- **Output:** append the day to the prediction store with `split_of_each_date` label `live`, `temp_glorys` = NaN (no reference yet), then update `available_dates.end` in `manifest.json` last. Keep a rolling window (default 365 live days). This needs a contract note in `docs/DECISIONS.md` and a backend/frontend change to accept `live` dates and missing `temp_glorys`.
+- **Monitoring:** the workflow fails loudly (red run, no partial upload) on any error.
+
+---
+
+## 13. Open questions for the owner
+- Create accounts: Copernicus Marine, NASA Earthdata, Copernicus CDS, Hugging Face (for the published outputs).
 - Exact region and 15 depths (after M1 inspection).
 - Which ARGO source to use (GDAC vs. Copernicus INSITU).
-- Is the processed dataset small enough for a Kaggle Dataset (limit ~100 GB per dataset at time of writing; verify)?
+- GREP end date and members (verify at M1).
+- Storage: 1993–2021 at 0.25° with ~143 input channels is large; check Kaggle Dataset limits and Drive quota after M1 sizing.
