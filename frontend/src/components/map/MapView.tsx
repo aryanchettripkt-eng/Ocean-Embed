@@ -1,0 +1,284 @@
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
+import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
+import { formatCoord, formatTemp } from "../../lib/format";
+import { renderGridToCanvas } from "./GridCanvas";
+import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
+
+interface MapViewProps {
+  mapData?: MapResponse | null;
+  vmin: number;
+  vmax: number;
+  selectedLat: number | null;
+  selectedLon: number | null;
+  onSelectPoint: (lat: number, lon: number) => void;
+  showArgo?: boolean;
+  argoProfiles?: ArgoProfileMatch[];
+  className?: string;
+}
+
+interface HoverInfo {
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  value: number | null;
+  coverage: number;
+}
+
+export function MapView({
+  mapData,
+  vmin,
+  vmax,
+  selectedLat,
+  selectedLon,
+  onSelectPoint,
+  showArgo = false,
+  argoProfiles = [],
+  className = "",
+}: MapViewProps) {
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<MapLibreMap | null>(null);
+  const selectionMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const argoMarkersRef = useRef<maplibregl.Marker[]>([]);
+
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+
+  // Initialize MapLibre Map
+  useEffect(() => {
+    if (!mapContainerRef.current || mapInstanceRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: "https://tiles.openfreemap.org/styles/dark",
+      center: [70.0, 15.0],
+      zoom: 4,
+      minZoom: 2,
+      maxZoom: 10,
+      attributionControl: false,
+    });
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
+
+    map.on("load", () => {
+      setMapLoaded(true);
+    });
+
+    mapInstanceRef.current = map;
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, []);
+
+  // Update canvas grid layer when mapData, vmin, or vmax change
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !mapData) return;
+
+    const colormap = mapData.field === "error" ? "balance" : "thermal";
+    const canvas = renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap);
+    const dataUrl = canvas.toDataURL();
+
+    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
+      [40.0, 30.0], // Top-left [lon, lat]
+      [100.0, 30.0], // Top-right
+      [100.0, 0.0], // Bottom-right
+      [40.0, 0.0], // Bottom-left
+    ];
+
+    const sourceId = "ocean-grid-source";
+    const layerId = "ocean-grid-layer";
+
+    const existingSource = map.getSource(sourceId) as maplibregl.ImageSource | undefined;
+
+    if (existingSource) {
+      existingSource.updateImage({ url: dataUrl });
+    } else {
+      map.addSource(sourceId, {
+        type: "image",
+        url: dataUrl,
+        coordinates,
+      });
+
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0.9,
+          "raster-fade-duration": 150,
+          "raster-resampling": "nearest",
+        },
+      });
+    }
+  }, [mapLoaded, mapData, vmin, vmax]);
+
+  // Handle hover and click inspection over grid cells
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !mapData) return;
+
+    const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+      const { lng, lat } = e.lngLat;
+      const lonMin = 40.0;
+      const lonMax = 100.0;
+      const latMin = 0.0;
+      const latMax = 30.0;
+
+      if (lng >= lonMin && lng <= lonMax && lat >= latMin && lat <= latMax) {
+        const nLat = mapData.lat.length;
+        const nLon = mapData.lon.length;
+        const latRes = (latMax - latMin) / nLat;
+        const lonRes = (lonMax - lonMin) / nLon;
+
+        const r = Math.min(nLat - 1, Math.max(0, Math.floor((lat - latMin) / latRes)));
+        const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - lonMin) / lonRes)));
+
+        const cellLat = mapData.lat[r];
+        const cellLon = mapData.lon[c];
+        const val = mapData.values[r]?.[c] ?? null;
+        const cov = mapData.coverage[r]?.[c] ?? 0;
+
+        setHoverInfo({
+          x: e.point.x,
+          y: e.point.y,
+          lat: cellLat,
+          lon: cellLon,
+          value: val,
+          coverage: cov,
+        });
+      } else {
+        setHoverInfo(null);
+      }
+    };
+
+    const handleMouseLeave = () => {
+      setHoverInfo(null);
+    };
+
+    const handleClick = (e: maplibregl.MapMouseEvent) => {
+      const { lng, lat } = e.lngLat;
+      if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
+        const nLat = mapData.lat.length;
+        const nLon = mapData.lon.length;
+        const r = Math.min(nLat - 1, Math.max(0, Math.floor(lat / (30.0 / nLat))));
+        const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - 40.0) / (60.0 / nLon))));
+        const snappedLat = mapData.lat[r];
+        const snappedLon = mapData.lon[c];
+        onSelectPoint(snappedLat, snappedLon);
+      }
+    };
+
+    map.on("mousemove", handleMouseMove);
+    map.on("mouseout", handleMouseLeave);
+    map.on("click", handleClick);
+
+    return () => {
+      map.off("mousemove", handleMouseMove);
+      map.off("mouseout", handleMouseLeave);
+      map.off("click", handleClick);
+    };
+  }, [mapLoaded, mapData, onSelectPoint]);
+
+  // Update selection marker
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded) return;
+
+    if (selectedLat !== null && selectedLon !== null) {
+      if (!selectionMarkerRef.current) {
+        const el = document.createElement("div");
+        el.className = "relative flex items-center justify-center cursor-pointer";
+        el.innerHTML = `
+          <span class="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-cyan-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-400 border-2 border-white shadow-md"></span>
+        `;
+        selectionMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat([selectedLon, selectedLat])
+          .addTo(map);
+      } else {
+        selectionMarkerRef.current.setLngLat([selectedLon, selectedLat]);
+      }
+    } else if (selectionMarkerRef.current) {
+      selectionMarkerRef.current.remove();
+      selectionMarkerRef.current = null;
+    }
+  }, [mapLoaded, selectedLat, selectedLon]);
+
+  // Update ARGO markers
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded) return;
+
+    // Clear previous argo markers
+    argoMarkersRef.current.forEach((m) => m.remove());
+    argoMarkersRef.current = [];
+
+    if (showArgo && argoProfiles.length > 0) {
+      argoProfiles.forEach((p) => {
+        const el = document.createElement("div");
+        el.className = "group relative cursor-pointer";
+        el.innerHTML = `
+          <div class="h-3 w-3 rounded-full bg-amber-400 border border-slate-900 shadow-sm transition-transform group-hover:scale-125"></div>
+        `;
+        const marker = new maplibregl.Marker({ element: el })
+          .setLngLat([p.lon, p.lat])
+          .setPopup(
+            new maplibregl.Popup({ offset: 10, closeButton: false }).setHTML(`
+              <div class="text-xs p-1 text-slate-900">
+                <p class="font-bold">ARGO Float ${p.platform_number}</p>
+                <p>Cycle: ${p.cycle} (${p.n_obs} obs)</p>
+                <p class="text-[10px] text-slate-500">${p.time.slice(0, 10)}</p>
+              </div>
+            `)
+          )
+          .addTo(map);
+
+        argoMarkersRef.current.push(marker);
+      });
+    }
+  }, [mapLoaded, showArgo, argoProfiles]);
+
+  const sourceLabel =
+    mapData?.field === "error"
+      ? "Difference (Model − GLORYS)"
+      : mapData?.field === "glorys"
+      ? "GLORYS reanalysis"
+      : "Model prediction";
+
+  return (
+    <div className={`relative w-full h-full overflow-hidden select-none ${className}`}>
+      <div ref={mapContainerRef} className="w-full h-full" />
+
+      {/* Hover tooltip */}
+      {hoverInfo && (
+        <div
+          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-slate-950/90 backdrop-blur-md border border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-200"
+          style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
+        >
+          <div className="font-mono text-[11px] text-slate-400">
+            {formatCoord(hoverInfo.lat, hoverInfo.lon)}
+          </div>
+          {hoverInfo.coverage === 0 ? (
+            <div className="text-slate-500 font-medium text-[11px]">Land / Unmodelled</div>
+          ) : hoverInfo.coverage === 2 ? (
+            <div className="text-amber-400/90 font-medium text-[11px]">
+              No prediction (insufficient input data)
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="font-semibold text-cyan-300 font-mono text-sm">
+                {formatTemp(hoverInfo.value, 1)}
+              </span>
+              <span className="text-[10px] text-slate-400">({sourceLabel})</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -18,6 +18,7 @@ export type RegionSummaryResponse = components["schemas"]["RegionSummaryResponse
 export type MetricsResponse = components["schemas"]["MetricsResponse"];
 export type ArgoResponse = components["schemas"]["ArgoResponse"];
 export type ArgoProfilesResponse = components["schemas"]["ArgoProfilesResponse"];
+export type ArgoProfileMatch = components["schemas"]["ArgoProfileMatch"];
 export type HeadlineResponse = components["schemas"]["HeadlineResponse"];
 
 export class ApiError extends Error {
