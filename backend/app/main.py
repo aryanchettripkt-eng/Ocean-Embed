@@ -9,6 +9,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1 import api_v1_router
+from app.api.v1.data import router as data_router
 from app.api.v1.meta import get_health, get_meta
 from app.errors import (
     APIError,
@@ -45,6 +46,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Mount API v1 router
 app.include_router(api_v1_router)
+
+# Mount root aliases for data endpoints without duplicating in schema
+app.include_router(data_router, include_in_schema=False)
 
 
 # Root level endpoints for health and meta

@@ -1846,7 +1846,7 @@
     },
     "/api/v1/region-summary": {
       "get": {
-        "description": "Computes area-weighted (cos(lat)) mean, min, max, std over a sub-region or bounding box.",
+        "description": "Computes area-weighted (cos(lat)) mean, min, max, std over a sub-region or bbox.",
         "operationId": "get_region_summary_api_v1_region_summary_get",
         "parameters": [
           {

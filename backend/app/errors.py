@@ -47,7 +47,7 @@ class OutOfRegionError(APIError):
         self, message: str = "Requested coordinates fall outside the modelled region"
     ) -> None:
         super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             code="out_of_region",
             message=message,
         )
@@ -58,7 +58,7 @@ class BadDepthError(APIError):
         self, message: str = "Requested depth does not match any valid model depth"
     ) -> None:
         super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             code="bad_depth",
             message=message,
         )
@@ -67,7 +67,7 @@ class BadDepthError(APIError):
 class BothDepthParamsError(APIError):
     def __init__(self, message: str = "Provide either depth_m or depth_index, not both") -> None:
         super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             code="both_depth_params",
             message=message,
         )
@@ -114,7 +114,7 @@ class RangeTooLargeError(APIError):
         self, message: str = "Requested time range exceeds maximum limit of 366 days"
     ) -> None:
         super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             code="range_too_large",
             message=message,
         )
@@ -152,7 +152,7 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Handle FastAPI request validation errors."""
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=422,
         content={
             "error": {
                 "code": "validation_error",

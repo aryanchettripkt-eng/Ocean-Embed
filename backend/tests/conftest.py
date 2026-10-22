@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import app.api.v1.data as data_module
 import app.api.v1.meta as meta_module
 import app.data.loader as loader_module
 import app.data.store as store_module
@@ -23,3 +24,4 @@ def configure_test_data(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(store_module, "store", fixtures_store)
     monkeypatch.setattr(meta_module, "loader", fixtures_loader)
     monkeypatch.setattr(meta_module, "store", fixtures_store)
+    monkeypatch.setattr(data_module, "store", fixtures_store)
