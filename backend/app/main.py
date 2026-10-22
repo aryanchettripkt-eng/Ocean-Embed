@@ -1,11 +1,11 @@
 """OceanScope API FastAPI application entry point."""
 
-from typing import Any
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 
+from app.data.loader import loader
 from app.settings import settings
 
 app = FastAPI(
@@ -27,16 +27,29 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.get("/health", tags=["system"])
-def health() -> dict[str, Any]:
-    """Health check endpoint."""
-    return {
-        "status": "ok",
-        "run_id": "initial_skeleton",
-        "data_loaded": True,
-    }
+def health() -> JSONResponse:
+    """Health check endpoint returning 200 when data is loaded, 503 otherwise."""
+    if loader.is_loaded:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "ok",
+                "run_id": loader.active_run_id,
+                "data_loaded": True,
+            },
+        )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "error",
+            "run_id": None,
+            "data_loaded": False,
+            "detail": loader.load_error,
+        },
+    )
 
 
 @app.get("/api/v1/health", tags=["system"])
-def api_v1_health() -> dict[str, Any]:
+def api_v1_health() -> JSONResponse:
     """Base path health check endpoint."""
     return health()

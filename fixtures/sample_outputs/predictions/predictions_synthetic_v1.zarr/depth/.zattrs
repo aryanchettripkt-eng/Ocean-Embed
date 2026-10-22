@@ -1,4 +1,7 @@
 {
   "units": "m",
-  "positive": "down"
+  "positive": "down",
+  "_ARRAY_DIMENSIONS": [
+    "depth"
+  ]
 }

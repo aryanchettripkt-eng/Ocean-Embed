@@ -60,7 +60,8 @@
     "depths_m": {
       "type": "array",
       "items": { "type": "number", "minimum": 0 },
-      "minItems": 1
+      "minItems": 15,
+      "maxItems": 15
     },
     "available_dates": {
       "type": "object",

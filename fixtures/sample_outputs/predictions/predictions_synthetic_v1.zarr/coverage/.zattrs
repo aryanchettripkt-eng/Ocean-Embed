@@ -4,5 +4,10 @@
     1,
     2
   ],
-  "flag_meanings": "land_unsupported valid_prediction insufficient_inputs"
+  "flag_meanings": "land_unsupported valid_prediction insufficient_inputs",
+  "_ARRAY_DIMENSIONS": [
+    "time",
+    "lat",
+    "lon"
+  ]
 }
