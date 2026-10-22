@@ -1,0 +1,8 @@
+{
+  "flag_values": [
+    0,
+    1,
+    2
+  ],
+  "flag_meanings": "land_unsupported valid_prediction insufficient_inputs"
+}

@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  ml:
+    name: ML Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pytest jsonschema pyyaml numpy types-PyYAML types-jsonschema
+          pip install -e ./ml
+
+      - name: Run Ruff Lint
+        run: ruff check ml/
+
+      - name: Run Ruff Format Check
+        run: ruff format --check ml/
+
+      - name: Run Mypy
+        run: mypy ml/src
+
+      - name: Run Pytest
+        run: pytest -q ml/tests
+
+  backend:
+    name: Backend Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pytest httpx fastapi pydantic pydantic-settings jsonschema types-jsonschema
+          pip install -e ./backend
+
+      - name: Run Ruff Lint
+        run: ruff check backend/
+
+      - name: Run Ruff Format Check
+        run: ruff format --check backend/
+
+      - name: Run Mypy
+        run: mypy backend/app
+
+      - name: Verify Manifest Schema Parity
+        run: diff -u ml/src/oceanscope_ml/schemas/manifest.schema.json backend/app/schemas/manifest.schema.json
+
+      - name: Run Pytest
+        run: pytest -q backend/tests
+
+      - name: Verify OpenAPI Specification Up-to-Date
+        working-directory: backend
+        run: python -m app.export_openapi --check
+
+  frontend:
+    name: Frontend Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm typecheck
+
+      - name: Lint
+        working-directory: frontend
+        run: pnpm lint
+
+      - name: Test
+        working-directory: frontend
+        run: pnpm test
+
+      - name: Build
+        working-directory: frontend
+        run: pnpm build

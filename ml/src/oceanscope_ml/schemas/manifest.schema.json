@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OceanScopeManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "synthetic",
+    "active_run_id",
+    "dataset_version",
+    "model_name",
+    "created_utc",
+    "region",
+    "grid_resolution_deg",
+    "depths_m",
+    "available_dates",
+    "splits",
+    "test_evaluated",
+    "files"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "active_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "region": {
+      "type": "object",
+      "required": ["lon_min", "lon_max", "lat_min", "lat_max"],
+      "additionalProperties": false,
+      "properties": {
+        "lon_min": { "type": "number" },
+        "lon_max": { "type": "number" },
+        "lat_min": { "type": "number" },
+        "lat_max": { "type": "number" }
+      }
+    },
+    "grid_resolution_deg": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "depths_m": {
+      "type": "array",
+      "items": { "type": "number", "minimum": 0 },
+      "minItems": 1
+    },
+    "available_dates": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "end": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+      }
+    },
+    "splits": {
+      "type": "object",
+      "required": ["train", "val", "test"],
+      "additionalProperties": false,
+      "properties": {
+        "train": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "val": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "test": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "test_evaluated": {
+      "type": "boolean"
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "predictions",
+        "metrics_val",
+        "metrics_val_by_season",
+        "metrics_val_by_region",
+        "metrics_test",
+        "baselines_val",
+        "argo",
+        "argo_matches"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "predictions": { "type": "string" },
+        "metrics_val": { "type": "string" },
+        "metrics_val_by_season": { "type": ["string", "null"] },
+        "metrics_val_by_region": { "type": ["string", "null"] },
+        "metrics_test": { "type": ["string", "null"] },
+        "baselines_val": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "argo": { "type": ["string", "null"] },
+        "argo_matches": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

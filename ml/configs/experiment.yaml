@@ -1,0 +1,62 @@
+project: oceanscope-ai
+dataset_version: v1                 # bump when preprocessing output changes
+
+region:
+  lon_min: 40.0   # [CONFIRM]
+  lon_max: 100.0  # [CONFIRM]
+  lat_min: 0.0    # [CONFIRM]
+  lat_max: 30.0   # [CONFIRM]
+  lon_convention: "-180_180"
+  lat_order: ascending
+
+grid:
+  resolution_deg: 0.25
+  # cell centres: lon_min + 0.125, ..., lat_min + 0.125, ...
+
+time:
+  start: "2010-01-01"   # [CONFIRM] = intersection of all product coverages
+  end:   "2021-12-31"   # [CONFIRM]
+  day_boundary: UTC
+
+splits:
+  train: ["2010-01-01", "2018-12-01"]   # [CONFIRM]
+  val:   ["2019-01-01", "2020-12-01"]   # [CONFIRM]
+  test:  ["2021-01-01", "2021-12-31"]   # [CONFIRM] sealed
+  gap_days: 30                           # dropped at the end of train and val
+
+depths_m: []   # [CONFIRM] exactly 15 values copied from GLORYS native depth coordinate, ascending, last ~1000 m
+
+inputs:
+  core: [sla, u_current, v_current, u_wind, v_wind]
+  extra: [doy_sin, doy_cos, lat, lon, ocean_mask]
+
+climatology:
+  method: harmonic        # mean + first 3 annual harmonics, per cell and depth
+  n_harmonics: 3
+
+paths:                    # overridden by env vars OCEANSCOPE_DATA_DIR, OCEANSCOPE_OUT_DIR, OCEANSCOPE_CKPT_DIR
+  raw: data/raw
+  processed: data/processed
+  outputs: outputs
+  checkpoints: checkpoints
+
+train:
+  seed: 42
+  model: unet
+  base_channels: 32
+  depth_levels: 4
+  batch_size: 8
+  optimizer: adamw
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_epochs: 80
+  early_stopping_patience: 10
+  amp: true
+  num_workers: 2
+
+inference:
+  publish_splits: [val, test]   # dates written to the published prediction store (keeps it ~1-2 GB)
+  publish_dtype: float16
+
+publish:
+  hf_dataset_repo: ""          # [CONFIRM] e.g. <hf-user>/oceanscope-outputs; token from env HF_TOKEN
