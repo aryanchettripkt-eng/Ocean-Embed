@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class DataLoader:
@@ -23,10 +26,36 @@ class DataLoader:
     def _get_schema_path(self) -> Path:
         return Path(__file__).resolve().parent.parent / "schemas" / "manifest.schema.json"
 
+    def _maybe_download_from_hf(self) -> None:
+        """Download dataset from HF Hub if configured and manifest.json is absent."""
+        manifest_file = self.data_dir / "manifest.json"
+        if not manifest_file.exists() and settings.HF_DATASET_REPO:
+            try:
+                from huggingface_hub import snapshot_download
+
+                logger.info(
+                    "Downloading dataset from HF: %s (revision: %s) to %s",
+                    settings.HF_DATASET_REPO,
+                    settings.HF_DATASET_REVISION,
+                    self.data_dir,
+                )
+                snapshot_download(
+                    repo_id=settings.HF_DATASET_REPO,
+                    repo_type="dataset",
+                    revision=settings.HF_DATASET_REVISION,
+                    local_dir=str(self.data_dir),
+                    token=settings.HF_TOKEN,
+                )
+            except Exception as e:
+                logger.error("Failed to download dataset from HF: %s", e)
+                self._load_error = f"Failed to download dataset from HF: {e}"
+
     def load(self, data_dir: str | Path | None = None) -> None:
         """Attempt to load and validate manifest.json."""
         if data_dir is not None:
             self.data_dir = Path(data_dir)
+
+        self._maybe_download_from_hf()
 
         manifest_file = self.data_dir / "manifest.json"
         if not manifest_file.exists():
@@ -50,8 +79,12 @@ class DataLoader:
             self.manifest = raw_manifest
             self._load_error = None
         except Exception as e:
-            self._load_error = f"Manifest validation error: {e}"
-            self.manifest = None
+            # If we already had a valid manifest, keep serving it and log error (PRD §9 test 12)
+            if self.manifest is not None:
+                logger.error("Failed to reload new manifest, keeping current valid manifest: %s", e)
+            else:
+                self._load_error = f"Manifest validation error: {e}"
+                self.manifest = None
 
     @property
     def is_loaded(self) -> bool:

@@ -1,4 +1,1358 @@
 {
+  "components": {
+    "schemas": {
+      "ArgoMetricRow": {
+        "description": "Per-depth ARGO validation row comparing reconstructed temperature to matchups.",
+        "properties": {
+          "armor3d_mae_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Armor3D Mae C"
+          },
+          "armor3d_rmse_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Armor3D Rmse C"
+          },
+          "bias_c": {
+            "title": "Bias C",
+            "type": "number"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "glorys_mae_c": {
+            "title": "Glorys Mae C",
+            "type": "number"
+          },
+          "glorys_rmse_c": {
+            "title": "Glorys Rmse C",
+            "type": "number"
+          },
+          "grep_mae_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grep Mae C"
+          },
+          "grep_rmse_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grep Rmse C"
+          },
+          "mae_c": {
+            "title": "Mae C",
+            "type": "number"
+          },
+          "n_obs": {
+            "title": "N Obs",
+            "type": "integer"
+          },
+          "n_profiles": {
+            "title": "N Profiles",
+            "type": "integer"
+          },
+          "rmse_c": {
+            "title": "Rmse C",
+            "type": "number"
+          }
+        },
+        "required": [
+          "depth_m",
+          "n_profiles",
+          "n_obs",
+          "mae_c",
+          "rmse_c",
+          "bias_c",
+          "glorys_mae_c",
+          "glorys_rmse_c"
+        ],
+        "title": "ArgoMetricRow",
+        "type": "object"
+      },
+      "ArgoProfileMatch": {
+        "description": "ARGO profile marker coordinate for map display.",
+        "properties": {
+          "cycle": {
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "n_obs": {
+            "title": "N Obs",
+            "type": "integer"
+          },
+          "platform_number": {
+            "title": "Platform Number",
+            "type": "string"
+          },
+          "time": {
+            "title": "Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform_number",
+          "cycle",
+          "time",
+          "lat",
+          "lon",
+          "n_obs"
+        ],
+        "title": "ArgoProfileMatch",
+        "type": "object"
+      },
+      "ArgoProfilesResponse": {
+        "description": "Response model for GET /argo/profiles.",
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ArgoProfileMatch"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "profiles"
+        ],
+        "title": "ArgoProfilesResponse",
+        "type": "object"
+      },
+      "ArgoResponse": {
+        "description": "Response model for GET /argo.",
+        "properties": {
+          "caveat": {
+            "title": "Caveat",
+            "type": "string"
+          },
+          "n_obs_total": {
+            "title": "N Obs Total",
+            "type": "integer"
+          },
+          "n_profiles_total": {
+            "title": "N Profiles Total",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ArgoMetricRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "n_profiles_total",
+          "n_obs_total",
+          "caveat",
+          "rows"
+        ],
+        "title": "ArgoResponse",
+        "type": "object"
+      },
+      "AvailableDates": {
+        "description": "Date range covered by the dataset.",
+        "properties": {
+          "end": {
+            "description": "End date YYYY-MM-DD",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "description": "Start date YYYY-MM-DD",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "AvailableDates",
+        "type": "object"
+      },
+      "Caveats": {
+        "description": "Fixed scientific and data caveats returned to the UI.",
+        "properties": {
+          "argo": {
+            "title": "Argo",
+            "type": "string"
+          },
+          "glorys": {
+            "title": "Glorys",
+            "type": "string"
+          },
+          "live": {
+            "title": "Live",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "string"
+          }
+        },
+        "required": [
+          "glorys",
+          "argo",
+          "synthetic",
+          "live"
+        ],
+        "title": "Caveats",
+        "type": "object"
+      },
+      "ChatContext": {
+        "description": "Current explorer UI state passed as context to the assistant.",
+        "properties": {
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "depth_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depth M"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          }
+        },
+        "title": "ChatContext",
+        "type": "object"
+      },
+      "ChatInfo": {
+        "description": "Status of the LLM chat assistant.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "provider_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Label"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ChatInfo",
+        "type": "object"
+      },
+      "ChatMessage": {
+        "description": "Single message in a chat conversation.",
+        "properties": {
+          "content": {
+            "maxLength": 2000,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessage",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "description": "Request body for POST /chat.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "maxItems": 10,
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ChatResponse": {
+        "description": "Response model for POST /chat.",
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "provider_label": {
+            "title": "Provider Label",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCallRecord"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answer",
+          "tool_calls",
+          "provider_label",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "ChatResponse",
+        "type": "object"
+      },
+      "ColorRange": {
+        "description": "2nd and 98th percentile temperature bounds for visualization at depth.",
+        "properties": {
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "vmax": {
+            "title": "Vmax",
+            "type": "number"
+          },
+          "vmin": {
+            "title": "Vmin",
+            "type": "number"
+          }
+        },
+        "required": [
+          "depth_m",
+          "vmin",
+          "vmax"
+        ],
+        "title": "ColorRange",
+        "type": "object"
+      },
+      "ErrorRange": {
+        "description": "Fixed color scale bounds for reconstruction error fields.",
+        "properties": {
+          "vmax": {
+            "title": "Vmax",
+            "type": "number"
+          },
+          "vmin": {
+            "title": "Vmin",
+            "type": "number"
+          }
+        },
+        "required": [
+          "vmin",
+          "vmax"
+        ],
+        "title": "ErrorRange",
+        "type": "object"
+      },
+      "GridShape": {
+        "description": "Shape of the 2D spatial grid (lat, lon).",
+        "properties": {
+          "lat": {
+            "title": "Lat",
+            "type": "integer"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "GridShape",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HeadlineResponse": {
+        "description": "Response model for GET /headline.",
+        "properties": {
+          "criterion": {
+            "title": "Criterion",
+            "type": "string"
+          },
+          "met": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Met"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/HeadlineRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "criterion",
+          "met",
+          "rows"
+        ],
+        "title": "HeadlineResponse",
+        "type": "object"
+      },
+      "HeadlineRow": {
+        "description": "Single competitor row in the pre-registered Bay of Bengal 50-300m evaluation.",
+        "properties": {
+          "ci_high_c": {
+            "title": "Ci High C",
+            "type": "number"
+          },
+          "ci_low_c": {
+            "title": "Ci Low C",
+            "type": "number"
+          },
+          "diff_ci_high_c": {
+            "title": "Diff Ci High C",
+            "type": "number"
+          },
+          "diff_ci_low_c": {
+            "title": "Diff Ci Low C",
+            "type": "number"
+          },
+          "diff_vs_model_c": {
+            "title": "Diff Vs Model C",
+            "type": "number"
+          },
+          "n_floats": {
+            "title": "N Floats",
+            "type": "integer"
+          },
+          "n_obs": {
+            "title": "N Obs",
+            "type": "integer"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "product": {
+            "title": "Product",
+            "type": "string"
+          },
+          "rmse_c": {
+            "title": "Rmse C",
+            "type": "number"
+          }
+        },
+        "required": [
+          "period",
+          "product",
+          "n_floats",
+          "n_obs",
+          "rmse_c",
+          "ci_low_c",
+          "ci_high_c",
+          "diff_vs_model_c",
+          "diff_ci_low_c",
+          "diff_ci_high_c"
+        ],
+        "title": "HeadlineRow",
+        "type": "object"
+      },
+      "MapResponse": {
+        "description": "Response model for GET /map.",
+        "properties": {
+          "coverage": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "field": {
+            "enum": [
+              "pred",
+              "glorys",
+              "error"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "lat": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Lat",
+            "type": "array"
+          },
+          "lon": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Lon",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "title": "Split",
+            "type": "string"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/MapStats"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "units": {
+            "default": "degC",
+            "title": "Units",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "date",
+          "depth_m",
+          "field",
+          "split",
+          "lat",
+          "lon",
+          "values",
+          "coverage",
+          "stats"
+        ],
+        "title": "MapResponse",
+        "type": "object"
+      },
+      "MapStats": {
+        "description": "Summary statistics for the returned 2D field.",
+        "properties": {
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "n_valid": {
+            "title": "N Valid",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "n_valid"
+        ],
+        "title": "MapStats",
+        "type": "object"
+      },
+      "MetaResponse": {
+        "description": "Response model for GET /meta.",
+        "properties": {
+          "available_dates": {
+            "$ref": "#/components/schemas/AvailableDates"
+          },
+          "caveats": {
+            "$ref": "#/components/schemas/Caveats"
+          },
+          "chat": {
+            "$ref": "#/components/schemas/ChatInfo"
+          },
+          "color_ranges": {
+            "items": {
+              "$ref": "#/components/schemas/ColorRange"
+            },
+            "title": "Color Ranges",
+            "type": "array"
+          },
+          "dataset_version": {
+            "title": "Dataset Version",
+            "type": "string"
+          },
+          "depths_m": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Depths M",
+            "type": "array"
+          },
+          "error_range": {
+            "$ref": "#/components/schemas/ErrorRange"
+          },
+          "grid_resolution_deg": {
+            "title": "Grid Resolution Deg",
+            "type": "number"
+          },
+          "grid_shape": {
+            "$ref": "#/components/schemas/GridShape"
+          },
+          "latest_live_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Live Date"
+          },
+          "model_name": {
+            "title": "Model Name",
+            "type": "string"
+          },
+          "region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "splits": {
+            "$ref": "#/components/schemas/Splits"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "test_evaluated": {
+            "title": "Test Evaluated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "dataset_version",
+          "model_name",
+          "region",
+          "grid_resolution_deg",
+          "grid_shape",
+          "depths_m",
+          "available_dates",
+          "splits",
+          "test_evaluated",
+          "color_ranges",
+          "error_range",
+          "caveats",
+          "chat"
+        ],
+        "title": "MetaResponse",
+        "type": "object"
+      },
+      "MetricRow": {
+        "description": "Single evaluation metric row.",
+        "properties": {
+          "bias_c": {
+            "title": "Bias C",
+            "type": "number"
+          },
+          "depth_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Depth M"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "mae_c": {
+            "title": "Mae C",
+            "type": "number"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "rmse_c": {
+            "title": "Rmse C",
+            "type": "number"
+          },
+          "skill_vs_clim_pct": {
+            "title": "Skill Vs Clim Pct",
+            "type": "number"
+          },
+          "split": {
+            "title": "Split",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "split",
+          "depth_m",
+          "n",
+          "mae_c",
+          "rmse_c",
+          "bias_c",
+          "skill_vs_clim_pct"
+        ],
+        "title": "MetricRow",
+        "type": "object"
+      },
+      "MetricsResponse": {
+        "description": "Response model for GET /metrics.",
+        "properties": {
+          "group_by": {
+            "enum": [
+              "depth",
+              "season",
+              "region"
+            ],
+            "title": "Group By",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/MetricRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "enum": [
+              "val",
+              "test"
+            ],
+            "title": "Split",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "split",
+          "group_by",
+          "rows"
+        ],
+        "title": "MetricsResponse",
+        "type": "object"
+      },
+      "ProfileResponse": {
+        "description": "Response model for GET /profile.",
+        "properties": {
+          "coverage": {
+            "title": "Coverage",
+            "type": "integer"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depths_m": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Depths M",
+            "type": "array"
+          },
+          "error": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Error",
+            "type": "array"
+          },
+          "glorys": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Glorys",
+            "type": "array"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "pred": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Pred",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "title": "Split",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "date",
+          "lat",
+          "lon",
+          "split",
+          "coverage",
+          "depths_m",
+          "pred",
+          "glorys",
+          "error"
+        ],
+        "title": "ProfileResponse",
+        "type": "object"
+      },
+      "Region": {
+        "description": "Bounding box of the modelled region.",
+        "properties": {
+          "lat_max": {
+            "title": "Lat Max",
+            "type": "number"
+          },
+          "lat_min": {
+            "title": "Lat Min",
+            "type": "number"
+          },
+          "lon_max": {
+            "title": "Lon Max",
+            "type": "number"
+          },
+          "lon_min": {
+            "title": "Lon Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lon_min",
+          "lon_max",
+          "lat_min",
+          "lat_max"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "RegionSummaryResponse": {
+        "description": "Response model for GET /region-summary.",
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "field": {
+            "enum": [
+              "pred",
+              "glorys",
+              "error"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "n_total": {
+            "title": "N Total",
+            "type": "integer"
+          },
+          "n_valid": {
+            "title": "N Valid",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "date",
+          "depth_m",
+          "field",
+          "n_valid",
+          "n_total"
+        ],
+        "title": "RegionSummaryResponse",
+        "type": "object"
+      },
+      "Splits": {
+        "description": "Start and end dates for train, validation, and test splits.",
+        "properties": {
+          "test": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Test",
+            "type": "array"
+          },
+          "train": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Train",
+            "type": "array"
+          },
+          "val": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Val",
+            "type": "array"
+          }
+        },
+        "required": [
+          "train",
+          "val",
+          "test"
+        ],
+        "title": "Splits",
+        "type": "object"
+      },
+      "TimeseriesResponse": {
+        "description": "Response model for GET /timeseries.",
+        "properties": {
+          "dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dates",
+            "type": "array"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "glorys": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Glorys",
+            "type": "array"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "pred": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Pred",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Split",
+            "type": "array"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "lat",
+          "lon",
+          "depth_m",
+          "dates",
+          "pred",
+          "glorys",
+          "split"
+        ],
+        "title": "TimeseriesResponse",
+        "type": "object"
+      },
+      "ToolCallRecord": {
+        "description": "Recorded tool call executed during assistant reasoning.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "arguments",
+          "result"
+        ],
+        "title": "ToolCallRecord",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
   "info": {
     "description": "Subsurface ocean temperature reconstruction API for the North Indian Ocean",
     "title": "OceanScope AI API",
@@ -6,10 +1360,220 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/argo": {
+      "get": {
+        "description": "Returns held-out float validation metrics comparing model and competitors against ARGO observations.",
+        "operationId": "get_argo_api_v1_argo_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgoResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Independent ARGO float matchup metrics",
+        "tags": [
+          "validation"
+        ]
+      }
+    },
+    "/api/v1/argo/profiles": {
+      "get": {
+        "description": "Returns coordinates of matched ARGO float profiles for map marker rendering.",
+        "operationId": "get_argo_profiles_api_v1_argo_profiles_get",
+        "parameters": [
+          {
+            "description": "Filter profiles by date YYYY-MM-DD",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter profiles by date YYYY-MM-DD",
+              "title": "Date"
+            }
+          },
+          {
+            "description": "Filter minimum latitude",
+            "in": "query",
+            "name": "lat_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter minimum latitude",
+              "title": "Lat Min"
+            }
+          },
+          {
+            "description": "Filter maximum latitude",
+            "in": "query",
+            "name": "lat_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter maximum latitude",
+              "title": "Lat Max"
+            }
+          },
+          {
+            "description": "Filter minimum longitude",
+            "in": "query",
+            "name": "lon_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter minimum longitude",
+              "title": "Lon Min"
+            }
+          },
+          {
+            "description": "Filter maximum longitude",
+            "in": "query",
+            "name": "lon_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter maximum longitude",
+              "title": "Lon Max"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgoProfilesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Matched ARGO float profile coordinates",
+        "tags": [
+          "validation"
+        ]
+      }
+    },
+    "/api/v1/chat": {
+      "post": {
+        "description": "Conversational assistant grounded in OutputStore queries with tool calling and number-grounding guards.",
+        "operationId": "post_chat_api_v1_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LLM oceanographic data assistant",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/api/v1/headline": {
+      "get": {
+        "description": "Returns the pre-registered headline comparison in the Bay of Bengal 50-300m with float-bootstrap CIs.",
+        "operationId": "get_headline_api_v1_headline_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeadlineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pre-registered primary success criterion table",
+        "tags": [
+          "validation"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
-        "description": "Base path health check endpoint.",
-        "operationId": "api_v1_health_api_v1_health_get",
+        "description": "Returns 200 OK and active run_id when data is loaded, 503 otherwise.",
+        "operationId": "get_health_api_v1_health_get",
         "responses": {
           "200": {
             "content": {
@@ -20,15 +1584,576 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Api V1 Health",
+        "summary": "Health check",
         "tags": [
           "system"
         ]
       }
     },
+    "/api/v1/map": {
+      "get": {
+        "description": "Returns 2D grid slice for a given date, depth, and field (pred, glorys, error).",
+        "operationId": "get_map_api_v1_map_get",
+        "parameters": [
+          {
+            "description": "Date formatted as YYYY-MM-DD",
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "description": "Date formatted as YYYY-MM-DD",
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Target depth in meters",
+            "in": "query",
+            "name": "depth_m",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target depth in meters",
+              "title": "Depth M"
+            }
+          },
+          {
+            "description": "Depth index 0-14",
+            "in": "query",
+            "name": "depth_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Depth index 0-14",
+              "title": "Depth Index"
+            }
+          },
+          {
+            "description": "Field to return",
+            "in": "query",
+            "name": "field",
+            "required": false,
+            "schema": {
+              "default": "pred",
+              "description": "Field to return",
+              "enum": [
+                "pred",
+                "glorys",
+                "error"
+              ],
+              "title": "Field",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "2D horizontal temperature field slice",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/v1/meta": {
+      "get": {
+        "description": "Returns active run metadata, coordinate ranges, depths, color scales, scientific caveats, and chat assistant configuration.",
+        "operationId": "get_meta_api_v1_meta_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dataset and model metadata",
+        "tags": [
+          "metadata"
+        ]
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "description": "Returns precomputed evaluation metrics grouped by depth, season, or region.",
+        "operationId": "get_metrics_api_v1_metrics_get",
+        "parameters": [
+          {
+            "description": "Evaluation split",
+            "in": "query",
+            "name": "split",
+            "required": false,
+            "schema": {
+              "default": "val",
+              "description": "Evaluation split",
+              "enum": [
+                "val",
+                "test"
+              ],
+              "title": "Split",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Grouping criterion",
+            "in": "query",
+            "name": "group_by",
+            "required": false,
+            "schema": {
+              "default": "depth",
+              "description": "Grouping criterion",
+              "enum": [
+                "depth",
+                "season",
+                "region"
+              ],
+              "title": "Group By",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model and baseline validation metrics",
+        "tags": [
+          "validation"
+        ]
+      }
+    },
+    "/api/v1/profile": {
+      "get": {
+        "description": "Returns 15-depth vertical temperature profile for a given lat, lon, and date.",
+        "operationId": "get_profile_api_v1_profile_get",
+        "parameters": [
+          {
+            "description": "Latitude in degrees north",
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "description": "Latitude in degrees north",
+              "title": "Lat",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Longitude in degrees east",
+            "in": "query",
+            "name": "lon",
+            "required": true,
+            "schema": {
+              "description": "Longitude in degrees east",
+              "title": "Lon",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Date formatted as YYYY-MM-DD",
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "description": "Date formatted as YYYY-MM-DD",
+              "title": "Date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Vertical temperature profile at a point",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/v1/region-summary": {
+      "get": {
+        "description": "Computes area-weighted (cos(lat)) mean, min, max, std over a sub-region or bounding box.",
+        "operationId": "get_region_summary_api_v1_region_summary_get",
+        "parameters": [
+          {
+            "description": "Date formatted as YYYY-MM-DD",
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "description": "Date formatted as YYYY-MM-DD",
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Target depth in meters",
+            "in": "query",
+            "name": "depth_m",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target depth in meters",
+              "title": "Depth M"
+            }
+          },
+          {
+            "description": "Depth index 0-14",
+            "in": "query",
+            "name": "depth_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Depth index 0-14",
+              "title": "Depth Index"
+            }
+          },
+          {
+            "description": "Bbox minimum latitude",
+            "in": "query",
+            "name": "lat_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bbox minimum latitude",
+              "title": "Lat Min"
+            }
+          },
+          {
+            "description": "Bbox maximum latitude",
+            "in": "query",
+            "name": "lat_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bbox maximum latitude",
+              "title": "Lat Max"
+            }
+          },
+          {
+            "description": "Bbox minimum longitude",
+            "in": "query",
+            "name": "lon_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bbox minimum longitude",
+              "title": "Lon Min"
+            }
+          },
+          {
+            "description": "Bbox maximum longitude",
+            "in": "query",
+            "name": "lon_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bbox maximum longitude",
+              "title": "Lon Max"
+            }
+          },
+          {
+            "description": "Predefined region name",
+            "in": "query",
+            "name": "region",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "arabian_sea",
+                    "bay_of_bengal",
+                    "equatorial"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Predefined region name",
+              "title": "Region"
+            }
+          },
+          {
+            "description": "Field to summarize",
+            "in": "query",
+            "name": "field",
+            "required": false,
+            "schema": {
+              "default": "pred",
+              "description": "Field to summarize",
+              "enum": [
+                "pred",
+                "glorys",
+                "error"
+              ],
+              "title": "Field",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Area-weighted regional summary statistics",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/v1/timeseries": {
+      "get": {
+        "description": "Returns daily time series for up to 366 days at a specific grid cell and depth.",
+        "operationId": "get_timeseries_api_v1_timeseries_get",
+        "parameters": [
+          {
+            "description": "Latitude in degrees north",
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "description": "Latitude in degrees north",
+              "title": "Lat",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Longitude in degrees east",
+            "in": "query",
+            "name": "lon",
+            "required": true,
+            "schema": {
+              "description": "Longitude in degrees east",
+              "title": "Lon",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Target depth in meters",
+            "in": "query",
+            "name": "depth_m",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Target depth in meters",
+              "title": "Depth M"
+            }
+          },
+          {
+            "description": "Depth index 0-14",
+            "in": "query",
+            "name": "depth_index",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Depth index 0-14",
+              "title": "Depth Index"
+            }
+          },
+          {
+            "description": "Start date YYYY-MM-DD",
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "description": "Start date YYYY-MM-DD",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          {
+            "description": "End date YYYY-MM-DD",
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "description": "End date YYYY-MM-DD",
+              "title": "End",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeseriesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Time series of temperature at a point and depth",
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/health": {
       "get": {
-        "description": "Health check endpoint returning 200 when data is loaded, 503 otherwise.",
+        "description": "Convenience root health check delegating to /api/v1/health.",
         "operationId": "health_health_get",
         "responses": {
           "200": {
@@ -40,9 +2165,31 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Health",
+        "summary": "Root health check",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/meta": {
+      "get": {
+        "description": "Convenience root metadata delegating to /api/v1/meta.",
+        "operationId": "meta_meta_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Root metadata",
+        "tags": [
+          "metadata"
         ]
       }
     }

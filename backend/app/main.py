@@ -1,11 +1,22 @@
-"""OceanScope API FastAPI application entry point."""
+"""OceanScope AI API FastAPI application entry point."""
 
-from fastapi import FastAPI
+from __future__ import annotations
+
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
-from app.data.loader import loader
+from app.api.v1 import api_v1_router
+from app.api.v1.meta import get_health, get_meta
+from app.errors import (
+    APIError,
+    api_error_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
+from app.schemas.models import MetaResponse
 from app.settings import settings
 
 app = FastAPI(
@@ -14,8 +25,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
-origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+# Exception handlers enforcing PRD_BACKEND Section 4 JSON error envelope
+app.add_exception_handler(APIError, api_error_handler)  # type: ignore[arg-type]
+app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 
+# CORS middleware
+origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -23,33 +39,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip middleware for responses > 1 KB
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+# Mount API v1 router
+app.include_router(api_v1_router)
 
-@app.get("/health", tags=["system"])
+
+# Root level endpoints for health and meta
+@app.get("/health", tags=["system"], summary="Root health check")
 def health() -> JSONResponse:
-    """Health check endpoint returning 200 when data is loaded, 503 otherwise."""
-    if loader.is_loaded:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "ok",
-                "run_id": loader.active_run_id,
-                "data_loaded": True,
-            },
-        )
-    return JSONResponse(
-        status_code=503,
-        content={
-            "status": "error",
-            "run_id": None,
-            "data_loaded": False,
-            "detail": loader.load_error,
-        },
-    )
+    """Convenience root health check delegating to /api/v1/health."""
+    return get_health()
 
 
-@app.get("/api/v1/health", tags=["system"])
-def api_v1_health() -> JSONResponse:
-    """Base path health check endpoint."""
-    return health()
+@app.get("/meta", response_model=MetaResponse, tags=["metadata"], summary="Root metadata")
+def meta(response: Response) -> MetaResponse:
+    """Convenience root metadata delegating to /api/v1/meta."""
+    return get_meta(response)

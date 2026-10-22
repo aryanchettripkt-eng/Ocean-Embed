@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER_LABEL: str = "LLM"
     CHAT_RATE_LIMIT: str = "10/minute"
     CHAT_DAILY_CAP: int = 500
+    RELOAD_INTERVAL_MIN: int = 60
     LOG_LEVEL: str = "INFO"
 
 
