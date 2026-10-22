@@ -15,26 +15,20 @@ class DataLoader:
     """Manages loading and validation of output manifest and datasets."""
 
     def __init__(self, data_dir: str | Path | None = None) -> None:
-        self.is_custom_dir = data_dir is not None
         self.data_dir = Path(data_dir or settings.DATA_DIR)
         self.manifest: dict[str, Any] | None = None
         self._load_error: str | None = None
-        self.load(allow_fallback=not self.is_custom_dir)
+        self.load()
 
     def _get_schema_path(self) -> Path:
         return Path(__file__).resolve().parent.parent / "schemas" / "manifest.schema.json"
 
-    def load(self, allow_fallback: bool = True) -> None:
+    def load(self, data_dir: str | Path | None = None) -> None:
         """Attempt to load and validate manifest.json."""
-        manifest_file = self.data_dir / "manifest.json"
-        if allow_fallback and not manifest_file.exists():
-            fallback_dir = (
-                Path(__file__).resolve().parent.parent.parent.parent / "fixtures" / "sample_outputs"
-            )
-            if (fallback_dir / "manifest.json").exists():
-                manifest_file = fallback_dir / "manifest.json"
-                self.data_dir = fallback_dir
+        if data_dir is not None:
+            self.data_dir = Path(data_dir)
 
+        manifest_file = self.data_dir / "manifest.json"
         if not manifest_file.exists():
             self._load_error = f"Manifest not found in {self.data_dir}"
             self.manifest = None

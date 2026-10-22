@@ -39,20 +39,25 @@ secrets/
 *.key
 
 # Data and Models (AGENTS.md rule 3: never commit raw/processed data or checkpoints)
-/data/raw/
-/data/processed/
-/checkpoints/
-/outputs/
-/data/**/*.nc
-/data/**/*.zarr/
+data/
+outputs/
+checkpoints/
+ml/data/
+ml/outputs/
+ml/checkpoints/
+*.nc
 *.pt
 *.pth
 *.ckpt
 *.bin
 *.onnx
 
-# Allow fixtures sample_outputs
-!/fixtures/sample_outputs/**
+# Ignore zarr directories everywhere except fixtures
+*.zarr/
+!fixtures/
+!fixtures/**/
+!fixtures/**/*.zarr/
+!fixtures/**
 
 # Testing and Coverage
 .pytest_cache/

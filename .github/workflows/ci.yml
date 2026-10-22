@@ -74,6 +74,14 @@ jobs:
         if: ${{ needs.filter.outputs.ml == 'true' }}
         run: pytest -q
 
+      - name: Verify Git Ignore Rules for Data and Fixtures
+        if: ${{ needs.filter.outputs.ml == 'true' }}
+        working-directory: .
+        run: |
+          git check-ignore -q ml/data/raw/x.nc
+          git check-ignore -q ml/outputs/x
+          ! git check-ignore -q fixtures/sample_outputs/predictions/predictions_synthetic_v1.zarr/.zattrs
+
   backend:
     name: Backend Checks
     needs: filter
@@ -139,11 +147,11 @@ jobs:
         with:
           package_json_file: frontend/package.json
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         if: ${{ needs.filter.outputs.frontend == 'true' }}
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
           cache-dependency-path: "frontend/pnpm-lock.yaml"
 

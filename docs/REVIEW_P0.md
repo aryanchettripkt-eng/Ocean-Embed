@@ -70,4 +70,4 @@ The fixture grid is `lat = 0, 1, …, 30` (31 points) and `lon = 40, …, 100` (
 `ml/configs/experiment.yaml` `inputs.core` still lists only `sla, u/v_current, u/v_wind`. That matches the PRD Gemini was given. The v3 PRD (SST, SSS, ADT, wind-stress curl, ERA5, static priors, history) landed afterwards and will be applied in P1.
 
 ## What's good
-Manifest validates against the schema; ML and backend schema copies are identical and CI diffs them; `synthetic: true` and the SYNTHETIC banner text are in place; coverage masking in the store is correct (pred is NaN wherever coverage ≠ 1); fixtures are 92 KB; secrets are env-only; the Dockerfile runs as non-root on port 7860; the OpenAPI export/check works.
+Manifest validates against the schema; ML and backend schema copies are identical and CI diffs them; `synthetic: true` and the SYNTHETIC banner text are in place; coverage masking in the store is correct (pred is NaN wherever coverage ≠ 1); fixtures are about 1 MB, well under the 5 MB limit; secrets are env-only; the Dockerfile runs as non-root on port 7860; the OpenAPI export/check works.
