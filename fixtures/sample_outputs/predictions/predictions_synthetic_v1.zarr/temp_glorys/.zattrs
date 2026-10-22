@@ -1,4 +1,10 @@
 {
   "units": "degC",
-  "long_name": "GLORYS reference subsurface temperature"
+  "long_name": "GLORYS reference subsurface temperature",
+  "_ARRAY_DIMENSIONS": [
+    "time",
+    "depth",
+    "lat",
+    "lon"
+  ]
 }

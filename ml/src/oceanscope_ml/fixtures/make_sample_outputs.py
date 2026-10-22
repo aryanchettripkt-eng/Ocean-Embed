@@ -1,4 +1,4 @@
-"""Generate tiny, contract-exact synthetic sample outputs for OceanScope AI.
+"""Generate contract-exact synthetic sample outputs for OceanScope AI.
 
 Follows specifications in docs/PRD_AI_ML.md Section 6 and Section 8.1.
 Outputs are written with synthetic: true and must never be presented as real results.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import zarr
+import xarray as xr
 
 
 def generate_sample_outputs(out_dir: Path) -> None:
@@ -33,13 +34,14 @@ def generate_sample_outputs(out_dir: Path) -> None:
     model_name = "SYNTHETIC_DEMO"
     dataset_version = "v1"
 
-    # Region and coordinates
+    # Region and coordinates (using cell centres: Review A8)
+    # Resolution = 1.0 deg. Centres: lon 40.5..99.5 (60), lat 0.5..29.5 (30)
     lon_min, lon_max = 40.0, 100.0
     lat_min, lat_max = 0.0, 30.0
     res = 1.0
 
-    lons = np.arange(lon_min, lon_max + res / 2.0, res, dtype=np.float64)
-    lats = np.arange(lat_min, lat_max + res / 2.0, res, dtype=np.float64)
+    lons = np.arange(lon_min + res / 2.0, lon_max, res, dtype=np.float64)
+    lats = np.arange(lat_min + res / 2.0, lat_max, res, dtype=np.float64)
     n_lon = len(lons)
     n_lat = len(lats)
 
@@ -64,29 +66,23 @@ def generate_sample_outputs(out_dir: Path) -> None:
 
     dates = pd.date_range("2020-01-01", periods=10, freq="D")
     n_time = len(dates)
-    times = dates.values.astype("datetime64[ns]")
 
     # Build land mask: 0 = land/unsupported, 1 = ocean valid, 2 = insufficient inputs
-    # Indian subcontinent rough bounds: lat 8..28, lon 68..88
-    # Arabian peninsula: lat 12..30, lon 40..58
     coverage = np.ones((n_time, n_lat, n_lon), dtype=np.int8)
 
     for i_lat, lat in enumerate(lats):
         for i_lon, lon in enumerate(lons):
-            # Land condition
             is_arabia = (lat >= 13.0) and (lon <= 56.0)
             is_india = (lat >= 8.0) and (lon >= 69.0) and (lon <= 87.0) and (lat + 0.5 * lon > 48.0)
             is_africa = (lat <= 12.0) and (lon <= 51.0)
             is_burma = (lat >= 16.0) and (lon >= 92.0)
             if is_arabia or is_india or is_africa or is_burma:
                 coverage[:, i_lat, i_lon] = 0
-            # Some insufficient inputs along coastal fringe or edge
-            elif (lat == 0.0 or lon == 40.0) and ((i_lat + i_lon) % 3 == 0):
+            elif (i_lat == 0 or i_lon == 0) and ((i_lat + i_lon) % 3 == 0):
                 coverage[:, i_lat, i_lon] = 2
 
     # Synthesize physically plausible temperatures
-    # T(z) = T_deep + (T_surf - T_deep) * exp(-z / 200)
-    # T_surf ~ 29°C equator, cooling to ~24°C at 30°N
+    # T(z) = T_deep + (T_surf - T_deep) * exp(-z / 220)
     temp_glorys = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
     temp_pred = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
 
@@ -100,101 +96,126 @@ def generate_sample_outputs(out_dir: Path) -> None:
                 cov = coverage[t_idx, i_lat, i_lon]
                 if cov == 1:
                     surf_t = lat_factor + 0.5 * np.cos(np.radians(lon))
-                    # depth profile
                     vert = 4.0 + (surf_t - 4.0) * np.exp(-depth_arr / 220.0)
                     temp_glorys[t_idx, :, i_lat, i_lon] = vert
-                    # prediction has small synthetic residual error
-                    err = 0.25 * np.sin(depth_arr / 80.0) + 0.1 * np.cos(np.radians(lat * 2))
+                    # Deterministic, depth-varying synthetic anomaly error
+                    err = 0.22 * np.sin(depth_arr / 70.0) + 0.08 * np.cos(np.radians(lat * 2))
                     temp_pred[t_idx, :, i_lat, i_lon] = vert + err
 
-    # 1. Write Zarr Store
+    # 1. Build and write xarray Dataset with zarr_format=2 (Review A1)
+    ds = xr.Dataset(
+        data_vars={
+            "temp_pred": (
+                ("time", "depth", "lat", "lon"),
+                temp_pred,
+                {"units": "degC", "long_name": "Reconstructed subsurface temperature"},
+            ),
+            "temp_glorys": (
+                ("time", "depth", "lat", "lon"),
+                temp_glorys,
+                {"units": "degC", "long_name": "GLORYS reference subsurface temperature"},
+            ),
+            "coverage": (
+                ("time", "lat", "lon"),
+                coverage,
+                {
+                    "flag_values": [0, 1, 2],
+                    "flag_meanings": "land_unsupported valid_prediction insufficient_inputs",
+                },
+            ),
+        },
+        coords={
+            "time": dates.values,
+            "depth": depth_arr.astype(np.float64),
+            "lat": lats,
+            "lon": lons,
+        },
+        attrs={
+            "run_id": run_id,
+            "dataset_version": dataset_version,
+            "model_name": model_name,
+            "created_utc": "2026-10-22T12:00:00Z",
+            "split_of_each_date": json.dumps({"2020-01-01/2020-01-10": "val"}),
+            "depths_m": depths_m,
+        },
+    )
+
+    ds["depth"].attrs["units"] = "m"
+    ds["depth"].attrs["positive"] = "down"
+    ds["lat"].attrs["units"] = "degrees_north"
+    ds["lon"].attrs["units"] = "degrees_east"
+
     zarr_path = predictions_dir / f"predictions_{run_id}.zarr"
     if zarr_path.exists():
-        import shutil
-
         shutil.rmtree(zarr_path)
 
-    root = zarr.open_group(str(zarr_path), mode="w", zarr_format=2)
+    encoding = {
+        "temp_pred": {"chunks": (1, n_depth, n_lat, n_lon), "dtype": "float32"},
+        "temp_glorys": {"chunks": (1, n_depth, n_lat, n_lon), "dtype": "float32"},
+        "coverage": {"chunks": (1, n_lat, n_lon), "dtype": "int8"},
+        "time": {"chunks": (n_time,)},
+        "depth": {"chunks": (n_depth,)},
+        "lat": {"chunks": (n_lat,)},
+        "lon": {"chunks": (n_lon,)},
+    }
 
-    # Coordinates
-    root.create_array("time", data=times.astype("int64"))
-    root["time"].attrs["units"] = "nanoseconds since 1970-01-01"
-    root["time"].attrs["calendar"] = "proleptic_gregorian"
+    ds.to_zarr(str(zarr_path), mode="w", consolidated=True, zarr_format=2, encoding=encoding)
 
-    root.create_array("depth", data=depth_arr.astype(np.float64))
-    root["depth"].attrs["units"] = "m"
-    root["depth"].attrs["positive"] = "down"
+    # 2. Compute Self-Consistent Validation Metrics (Review B2)
+    valid_mask = coverage == 1
+    # Climatology baseline reference error (synthetic ~ 0.58 °C)
+    clim_rmse_ref = 0.58
 
-    root.create_array("lat", data=lats.astype(np.float64))
-    root["lat"].attrs["units"] = "degrees_north"
+    def calc_stats(pred: np.ndarray, glorys: np.ndarray) -> tuple[int, float, float, float, float]:
+        diff = pred - glorys
+        n = int(np.count_nonzero(~np.isnan(diff)))
+        if n == 0:
+            return 0, 0.0, 0.0, 0.0, 0.0
+        mae = float(np.round(np.nanmean(np.abs(diff)), 2))
+        rmse = float(np.round(np.sqrt(np.nanmean(diff**2)), 2))
+        bias = float(np.round(np.nanmean(diff), 2))
+        skill = float(np.round(100.0 * (1.0 - rmse / clim_rmse_ref), 1))
+        return n, mae, rmse, bias, skill
 
-    root.create_array("lon", data=lons.astype(np.float64))
-    root["lon"].attrs["units"] = "degrees_east"
-
-    # Data variables (Chunking: 1 day per chunk = (1, n_depth, n_lat, n_lon))
-    chunk_4d = (1, n_depth, n_lat, n_lon)
-    chunk_3d = (1, n_lat, n_lon)
-
-    ds_pred = root.create_array(
-        "temp_pred",
-        data=temp_pred,
-        chunks=chunk_4d,
-        fill_value=np.nan,
-    )
-    ds_pred.attrs["units"] = "degC"
-    ds_pred.attrs["long_name"] = "Reconstructed subsurface temperature"
-
-    ds_glorys = root.create_array(
-        "temp_glorys",
-        data=temp_glorys,
-        chunks=chunk_4d,
-        fill_value=np.nan,
-    )
-    ds_glorys.attrs["units"] = "degC"
-    ds_glorys.attrs["long_name"] = "GLORYS reference subsurface temperature"
-
-    ds_cov = root.create_array(
-        "coverage",
-        data=coverage,
-        chunks=chunk_3d,
-        fill_value=0,
-    )
-    ds_cov.attrs["flag_values"] = [0, 1, 2]
-    ds_cov.attrs["flag_meanings"] = "land_unsupported valid_prediction insufficient_inputs"
-
-    root.attrs["run_id"] = run_id
-    root.attrs["dataset_version"] = dataset_version
-    root.attrs["model_name"] = model_name
-    root.attrs["created_utc"] = "2026-10-22T12:00:00Z"
-    root.attrs["split_of_each_date"] = json.dumps({str(d.date()): "val" for d in dates})
-    root.attrs["depths_m"] = depths_m
-
-    # 2. Write Validation Metrics CSVs
-    # Overall val metrics
+    # Overall validation metrics
     val_rows: list[dict[str, Any]] = []
-    for d in depths_m:
+    total_n_val = 0
+    all_pred_list: list[np.ndarray] = []
+    all_glorys_list: list[np.ndarray] = []
+
+    for d_idx, d_m in enumerate(depths_m):
+        p_d = temp_pred[:, d_idx, :, :][valid_mask]
+        g_d = temp_glorys[:, d_idx, :, :][valid_mask]
+        all_pred_list.append(p_d)
+        all_glorys_list.append(g_d)
+        n_d, mae_d, rmse_d, bias_d, skill_d = calc_stats(p_d, g_d)
+        total_n_val += n_d
         val_rows.append(
             {
                 "model": model_name,
                 "split": "val",
-                "depth_m": d,
-                "n": 10000,
-                "mae_c": 0.28,
-                "rmse_c": 0.38,
-                "bias_c": 0.04,
-                "skill_vs_clim_pct": 34.5,
+                "depth_m": d_m,
+                "n": n_d,
+                "mae_c": mae_d,
+                "rmse_c": rmse_d,
+                "bias_c": bias_d,
+                "skill_vs_clim_pct": skill_d,
             }
         )
+
+    all_p = np.concatenate(all_pred_list)
+    all_g = np.concatenate(all_glorys_list)
+    _, mae_all, rmse_all, bias_all, skill_all = calc_stats(all_p, all_g)
     val_rows.append(
         {
             "model": model_name,
             "split": "val",
             "depth_m": "all",
-            "n": 150000,
-            "mae_c": 0.29,
-            "rmse_c": 0.40,
-            "bias_c": 0.03,
-            "skill_vs_clim_pct": 32.8,
+            "n": total_n_val,
+            "mae_c": mae_all,
+            "rmse_c": rmse_all,
+            "bias_c": bias_all,
+            "skill_vs_clim_pct": skill_all,
         }
     )
     pd.DataFrame(val_rows).to_csv(metrics_dir / f"{run_id}_val.csv", index=False)
@@ -202,76 +223,116 @@ def generate_sample_outputs(out_dir: Path) -> None:
     # Seasonal metrics
     season_rows: list[dict[str, Any]] = []
     for season in ["DJF", "MAM", "JJA", "SON"]:
-        for d in depths_m:
+        season_n = 0
+        s_p_list: list[np.ndarray] = []
+        s_g_list: list[np.ndarray] = []
+        # Multiplier to provide subtle plausible variation across seasons
+        factor = {"DJF": 1.0, "MAM": 1.05, "JJA": 0.95, "SON": 1.02}[season]
+        for d_idx, d_m in enumerate(depths_m):
+            p_d = temp_pred[:, d_idx, :, :][valid_mask]
+            g_d = temp_glorys[:, d_idx, :, :][valid_mask]
+            err = (p_d - g_d) * factor
+            p_synth = g_d + err
+            s_p_list.append(p_synth)
+            s_g_list.append(g_d)
+            n_d, mae_d, rmse_d, bias_d, skill_d = calc_stats(p_synth, g_d)
+            season_n += n_d
             season_rows.append(
                 {
                     "model": model_name,
                     "split": "val",
                     "season": season,
-                    "depth_m": d,
-                    "n": 2500,
-                    "mae_c": 0.27,
-                    "rmse_c": 0.37,
-                    "bias_c": 0.03,
-                    "skill_vs_clim_pct": 35.1,
+                    "depth_m": d_m,
+                    "n": n_d,
+                    "mae_c": mae_d,
+                    "rmse_c": rmse_d,
+                    "bias_c": bias_d,
+                    "skill_vs_clim_pct": skill_d,
                 }
             )
+        s_all_p = np.concatenate(s_p_list)
+        s_all_g = np.concatenate(s_g_list)
+        _, mae_s, rmse_s, bias_s, skill_s = calc_stats(s_all_p, s_all_g)
         season_rows.append(
             {
                 "model": model_name,
                 "split": "val",
                 "season": season,
                 "depth_m": "all",
-                "n": 37500,
-                "mae_c": 0.28,
-                "rmse_c": 0.39,
-                "bias_c": 0.03,
-                "skill_vs_clim_pct": 33.2,
+                "n": season_n,
+                "mae_c": mae_s,
+                "rmse_c": rmse_s,
+                "bias_c": bias_s,
+                "skill_vs_clim_pct": skill_s,
             }
         )
     pd.DataFrame(season_rows).to_csv(metrics_dir / f"{run_id}_val_by_season.csv", index=False)
 
-    # Regional metrics
+    # Regional metrics (definitions from PRD_AI_ML §6.3)
     region_rows: list[dict[str, Any]] = []
-    for reg in ["arabian_sea", "bay_of_bengal", "equatorial"]:
-        for d in depths_m:
+    lat_grid = np.broadcast_to(lats[np.newaxis, :, np.newaxis], (n_time, n_lat, n_lon))
+    lon_grid = np.broadcast_to(lons[np.newaxis, np.newaxis, :], (n_time, n_lat, n_lon))
+
+    regions_def = {
+        "arabian_sea": valid_mask & (lon_grid < 78.0),
+        "bay_of_bengal": valid_mask & (lon_grid >= 78.0) & (lat_grid >= 5.0),
+        "equatorial": valid_mask & (lat_grid < 5.0),
+    }
+
+    for reg_name, reg_mask in regions_def.items():
+        reg_total_n = 0
+        r_p_list: list[np.ndarray] = []
+        r_g_list: list[np.ndarray] = []
+        for d_idx, d_m in enumerate(depths_m):
+            p_d = temp_pred[:, d_idx, :, :][reg_mask]
+            g_d = temp_glorys[:, d_idx, :, :][reg_mask]
+            r_p_list.append(p_d)
+            r_g_list.append(g_d)
+            n_d, mae_d, rmse_d, bias_d, skill_d = calc_stats(p_d, g_d)
+            reg_total_n += n_d
             region_rows.append(
                 {
                     "model": model_name,
                     "split": "val",
-                    "region": reg,
-                    "depth_m": d,
-                    "n": 3300,
-                    "mae_c": 0.29,
-                    "rmse_c": 0.39,
-                    "bias_c": 0.04,
-                    "skill_vs_clim_pct": 33.0,
+                    "region": reg_name,
+                    "depth_m": d_m,
+                    "n": n_d,
+                    "mae_c": mae_d,
+                    "rmse_c": rmse_d,
+                    "bias_c": bias_d,
+                    "skill_vs_clim_pct": skill_d,
                 }
             )
+        r_all_p = np.concatenate(r_p_list)
+        r_all_g = np.concatenate(r_g_list)
+        _, mae_r, rmse_r, bias_r, skill_r = calc_stats(r_all_p, r_all_g)
         region_rows.append(
             {
                 "model": model_name,
                 "split": "val",
-                "region": reg,
+                "region": reg_name,
                 "depth_m": "all",
-                "n": 50000,
-                "mae_c": 0.30,
-                "rmse_c": 0.41,
-                "bias_c": 0.04,
-                "skill_vs_clim_pct": 31.5,
+                "n": reg_total_n,
+                "mae_c": mae_r,
+                "rmse_c": rmse_r,
+                "bias_c": bias_r,
+                "skill_vs_clim_pct": skill_r,
             }
         )
     pd.DataFrame(region_rows).to_csv(metrics_dir / f"{run_id}_val_by_region.csv", index=False)
 
-    # Baseline Climatology CSV
+    # Climatology baseline CSV (skill = 0.0)
     clim_rows: list[dict[str, Any]] = []
-    for d in depths_m:
+    total_clim_n = 0
+    for d_idx, d_m in enumerate(depths_m):
+        n_d = int(np.count_nonzero(valid_mask))
+        total_clim_n += n_d
         clim_rows.append(
             {
                 "model": "climatology",
                 "split": "val",
-                "depth_m": d,
-                "n": 10000,
+                "depth_m": d_m,
+                "n": n_d,
                 "mae_c": 0.44,
                 "rmse_c": 0.58,
                 "bias_c": 0.00,
@@ -283,24 +344,27 @@ def generate_sample_outputs(out_dir: Path) -> None:
             "model": "climatology",
             "split": "val",
             "depth_m": "all",
-            "n": 150000,
-            "mae_c": 0.45,
-            "rmse_c": 0.60,
+            "n": total_clim_n,
+            "mae_c": 0.44,
+            "rmse_c": 0.58,
             "bias_c": 0.00,
             "skill_vs_clim_pct": 0.0,
         }
     )
     pd.DataFrame(clim_rows).to_csv(metrics_dir / "baseline_climatology_val.csv", index=False)
 
-    # Baseline Ridge CSV
+    # Ridge baseline CSV
     ridge_rows: list[dict[str, Any]] = []
-    for d in depths_m:
+    total_ridge_n = 0
+    for d_idx, d_m in enumerate(depths_m):
+        n_d = int(np.count_nonzero(valid_mask))
+        total_ridge_n += n_d
         ridge_rows.append(
             {
                 "model": "ridge",
                 "split": "val",
-                "depth_m": d,
-                "n": 10000,
+                "depth_m": d_m,
+                "n": n_d,
                 "mae_c": 0.36,
                 "rmse_c": 0.48,
                 "bias_c": 0.02,
@@ -312,61 +376,64 @@ def generate_sample_outputs(out_dir: Path) -> None:
             "model": "ridge",
             "split": "val",
             "depth_m": "all",
-            "n": 150000,
-            "mae_c": 0.37,
-            "rmse_c": 0.50,
+            "n": total_ridge_n,
+            "mae_c": 0.36,
+            "rmse_c": 0.48,
             "bias_c": 0.02,
-            "skill_vs_clim_pct": 16.7,
+            "skill_vs_clim_pct": 17.2,
         }
     )
     pd.DataFrame(ridge_rows).to_csv(metrics_dir / "baseline_ridge_val.csv", index=False)
 
-    # ARGO metrics CSV
-    argo_rows: list[dict[str, Any]] = []
-    for d in depths_m:
-        argo_rows.append(
+    # ARGO matchups Parquet and metrics CSV
+    argo_records: list[dict[str, Any]] = []
+    for platform_idx, (p_num, cyc, d_str, p_lat, p_lon) in enumerate(
+        [
+            ("2902123", 14, "2020-01-03T06:00:00Z", 12.5, 65.5),
+            ("2902124", 8, "2020-01-05T12:00:00Z", 8.5, 85.5),
+            ("2902125", 22, "2020-01-07T18:00:00Z", 4.5, 75.5),
+        ]
+    ):
+        for d_m in depths_m:
+            g_t = float(4.0 + (28.0 - 4.0) * np.exp(-d_m / 220.0))
+            p_t = float(g_t + 0.15 * np.sin(d_m / 60.0))
+            o_t = float(g_t + 0.08 * np.cos(d_m / 50.0))
+            argo_records.append(
+                {
+                    "platform_number": p_num,
+                    "cycle": cyc,
+                    "time": d_str,
+                    "lat": p_lat,
+                    "lon": p_lon,
+                    "depth_m": float(d_m),
+                    "temp_obs_c": round(o_t, 2),
+                    "temp_pred_c": round(p_t, 2),
+                    "temp_glorys_c": round(g_t, 2),
+                }
+            )
+
+    argo_matches_df = pd.DataFrame(argo_records)
+    table = pa.Table.from_pandas(argo_matches_df)
+    pq.write_table(table, metrics_dir / f"argo_matches_{run_id}.parquet")
+
+    argo_metric_rows: list[dict[str, Any]] = []
+    for d_m in depths_m:
+        sub = argo_matches_df[argo_matches_df["depth_m"] == d_m]
+        p_diff = sub["temp_pred_c"] - sub["temp_obs_c"]
+        g_diff = sub["temp_glorys_c"] - sub["temp_obs_c"]
+        argo_metric_rows.append(
             {
-                "depth_m": d,
-                "n_profiles": 45,
-                "n_obs": 45,
-                "mae_c": 0.32,
-                "rmse_c": 0.43,
-                "bias_c": 0.05,
-                "glorys_mae_c": 0.28,
-                "glorys_rmse_c": 0.38,
+                "depth_m": d_m,
+                "n_profiles": len(sub),
+                "n_obs": len(sub),
+                "mae_c": round(float(np.mean(np.abs(p_diff))), 2),
+                "rmse_c": round(float(np.sqrt(np.mean(p_diff**2))), 2),
+                "bias_c": round(float(np.mean(p_diff)), 2),
+                "glorys_mae_c": round(float(np.mean(np.abs(g_diff))), 2),
+                "glorys_rmse_c": round(float(np.sqrt(np.mean(g_diff**2))), 2),
             }
         )
-    pd.DataFrame(argo_rows).to_csv(metrics_dir / f"argo_{run_id}.csv", index=False)
-
-    # ARGO matches Parquet
-    argo_matches = pd.DataFrame(
-        [
-            {
-                "platform_number": "2902123",
-                "cycle": 14,
-                "time": "2020-01-05T06:00:00Z",
-                "lat": 12.0,
-                "lon": 65.0,
-                "depth_m": 10.0,
-                "temp_obs_c": 27.85,
-                "temp_pred_c": 27.92,
-                "temp_glorys_c": 27.88,
-            },
-            {
-                "platform_number": "2902124",
-                "cycle": 8,
-                "time": "2020-01-07T12:00:00Z",
-                "lat": 8.0,
-                "lon": 85.0,
-                "depth_m": 100.0,
-                "temp_obs_c": 22.10,
-                "temp_pred_c": 22.25,
-                "temp_glorys_c": 22.15,
-            },
-        ]
-    )
-    table = pa.Table.from_pandas(argo_matches)
-    pq.write_table(table, metrics_dir / f"argo_matches_{run_id}.parquet")
+    pd.DataFrame(argo_metric_rows).to_csv(metrics_dir / f"argo_{run_id}.csv", index=False)
 
     # 3. Write evaluation report
     report_content = (

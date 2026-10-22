@@ -1,4 +1,10 @@
 {
   "units": "degC",
-  "long_name": "Reconstructed subsurface temperature"
+  "long_name": "Reconstructed subsurface temperature",
+  "_ARRAY_DIMENSIONS": [
+    "time",
+    "depth",
+    "lat",
+    "lon"
+  ]
 }

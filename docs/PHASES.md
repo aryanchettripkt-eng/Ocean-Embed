@@ -22,7 +22,7 @@ Backend/frontend work never waits for the model: P1 and P2 run on synthetic samp
 | P0-1 | Create GitHub repo; push current `E:\meta` contents; protect `main` | Aryan (+ Claude) | AGENTS §3 |
 | P0-2 | Scaffold `ml/`, `backend/`, `frontend/`, `fixtures/` with package manifests, linters, empty test suites | Gemini | AGENTS §3 |
 | P0-3 | CI workflow: ml, backend, frontend jobs (lint, type, test); path filters | Gemini | AGENTS §6 |
-| P0-4 | Create accounts: Copernicus Marine, NASA Earthdata, Hugging Face, Vercel; store tokens as Colab/Kaggle secrets | Aryan | OPEN_QUESTIONS |
+| P0-4 | Create accounts: Copernicus Marine, NASA Earthdata, Copernicus CDS (ERA5), Hugging Face, Vercel; store tokens as Colab/Kaggle secrets | Aryan | OPEN_QUESTIONS |
 | P0-5 | `manifest.schema.json` (ML + backend copies) and the sample-outputs generator → commit `fixtures/sample_outputs/` | Gemini | PRD_AI_ML §6, §8.1 |
 
 **Exit gate:** CI green on `main` with empty suites; `fixtures/sample_outputs/` committed and valid against the schema; accounts exist.
@@ -81,6 +81,7 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 | P3-1 | `preprocess.py` + climatology on the one-month sample; sample-day figure; tests 3–5 | M1 |
 | P3-2 | Full-period download (server-side subset); full preprocessing; upload processed store to Kaggle Dataset / Drive | §4.1, §11 |
 | P3-3 | Baselines: climatology + ridge (LightGBM optional) → `baseline_*_val.csv` | §5.6 |
+| P3-4 | Download ARMOR3D for the published period (external baseline) | §3, §7 |
 
 **Exit gate:** processed store passes schema check and loads in a Colab and a Kaggle notebook; baseline validation metrics exist.
 
@@ -94,7 +95,8 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 | P4-1 | `dataset.py`, `unet.py`, `train.py` with AMP, resume, run logging; tests 1, 2, 6, 8 | §5 |
 | P4-2 | Thin Colab + Kaggle notebooks per runbook | §11 |
 | P4-3 | First full training run; verify resume across a session restart | M2 |
-| P4-4 | Up to ~5 tuning runs on **validation only** (lr, channels, extra inputs); pick best | M2 |
+| P4-4 | Up to ~5 tuning runs on **validation only** (lr, channels, history length); pick best | M2 |
+| P4-5 | Ablation runs, one per input group → `ablation_<run_id>.csv` | §5.7 |
 
 **Exit gate:** U-Net validation RMSE beats climatology at ≥ 10 of 15 depths. If not, stop and review with Claude/Aryan before more runs (no test-set peeking).
 
@@ -157,7 +159,7 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 ---
 
 ## P9 — Stretch (only if time remains, in this order)
-SST input → multi-day input window → uncertainty (`temp_pred_std`, needs a contract change) → SAM region selection.
+ARGO fine-tuning (PRD_AI_ML §10.1) → longer history / temporal model → uncertainty (`temp_pred_std`, needs a contract change) → SAM region selection.
 
 ---
 

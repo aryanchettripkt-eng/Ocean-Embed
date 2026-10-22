@@ -1,3 +1,6 @@
 {
-  "units": "degrees_east"
+  "units": "degrees_east",
+  "_ARRAY_DIMENSIONS": [
+    "lon"
+  ]
 }

@@ -1,12 +1,12 @@
 {
   "shape": [
-    61
+    60
   ],
   "chunks": [
-    61
+    60
   ],
   "dtype": "<f8",
-  "fill_value": 0.0,
+  "fill_value": "NaN",
   "order": "C",
   "filters": null,
   "dimension_separator": ".",
