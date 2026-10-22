@@ -1,6 +1,7 @@
-"""OceanScope AI API FastAPI application entry point."""
-
-from __future__ import annotations
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import api_v1_router
 from app.api.v1.data import router as data_router
 from app.api.v1.meta import get_health, get_meta
+from app.data.loader import loader
 from app.errors import (
     APIError,
     api_error_handler,
@@ -20,10 +22,43 @@ from app.errors import (
 from app.schemas.models import MetaResponse
 from app.settings import settings
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Lifespan context manager for initial loading and periodic manifest reload."""
+    loader.load()
+
+    reload_task = None
+    if settings.RELOAD_INTERVAL_MIN > 0:
+
+        async def periodic_manifest_reload() -> None:
+            while True:
+                await asyncio.sleep(settings.RELOAD_INTERVAL_MIN * 60)
+                try:
+                    logger.info("Executing periodic manifest reload check...")
+                    loader.load()
+                except Exception as e:
+                    logger.error("Periodic manifest reload failed: %s", e)
+
+        reload_task = asyncio.create_task(periodic_manifest_reload())
+
+    yield
+
+    if reload_task is not None:
+        reload_task.cancel()
+        try:
+            await reload_task
+        except asyncio.CancelledError:
+            pass
+
+
 app = FastAPI(
     title="OceanScope AI API",
     description="Subsurface ocean temperature reconstruction API for the North Indian Ocean",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Exception handlers enforcing PRD_BACKEND Section 4 JSON error envelope

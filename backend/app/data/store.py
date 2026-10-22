@@ -73,6 +73,7 @@ class OutputStore:
         self._cached_argo_matches: pd.DataFrame | None = None
         self._cached_headline: pd.DataFrame | None = None
         self._last_loader_id: int | None = None
+        self._last_manifest_id: int | None = None
 
     @property
     def loader(self) -> DataLoader:
@@ -85,7 +86,8 @@ class OutputStore:
 
     def _ensure_loaded(self) -> None:
         active_loader = self.loader
-        if self._last_loader_id != id(active_loader):
+        manifest_id = id(active_loader.manifest) if active_loader.manifest is not None else None
+        if self._last_loader_id != id(active_loader) or self._last_manifest_id != manifest_id:
             self._ds = None
             self._cached_meta = None
             self._cached_color_ranges = None
@@ -94,6 +96,7 @@ class OutputStore:
             self._cached_argo_matches = None
             self._cached_headline = None
             self._last_loader_id = id(active_loader)
+            self._last_manifest_id = manifest_id
 
         if not active_loader.is_loaded or active_loader.manifest is None:
             raise DataNotLoadedError(active_loader.load_error or "Data store is not loaded")

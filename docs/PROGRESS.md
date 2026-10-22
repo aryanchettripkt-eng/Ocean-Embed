@@ -10,6 +10,7 @@
 | 2026-10-23 | backend | P1-B1: Settings, loader, manifest validation, /health, /meta, openapi export | Gemini | backend/p1-b1-skeleton | complete | ruff, mypy, pytest, openapi check, pnpm typecheck/lint/test/build |
 | 2026-10-23 | backend | P1-B2: /map, /profile, /timeseries, /region-summary + grid snapping | Gemini | backend/p1-b2-data-endpoints | complete | ruff, mypy, pytest (19 passed incl warm p95 benchmark), openapi check, pnpm typecheck/lint/test/build |
 | 2026-10-23 | backend | P1-B3: /metrics, /argo, /argo/profiles, /headline, caveat strings | Gemini | backend/p1-b3-validation-endpoints | complete | ruff, mypy, pytest (26 passed), openapi check, pnpm typecheck/lint/test/build |
+| 2026-10-23 | backend | P1-B4: Live-date handling, LIVE_CAVEAT, periodic manifest reload | Gemini | backend/p1-b4-live-and-reload | complete | ruff, mypy, pytest (29 passed), openapi check, pnpm typecheck/lint/test/build |
 
 
 
