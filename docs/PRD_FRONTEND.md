@@ -1,6 +1,6 @@
 # PRD: Frontend Web App — OceanScope AI
 
-**Status:** Draft v1 (2026-10-22)  
+**Status:** Draft v2 (2026-10-22): headline card, live dates, competitor ARGO columns, updated sources  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
 **Lives in:** `frontend/` of the monorepo (see `AGENTS.md`).  
@@ -59,9 +59,9 @@ Accounts, saving user data, uploads, editing, offline mode, 3D globe rendering.
 Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 1024 px, bottom sheet on mobile); a details panel (right on desktop, sheet on mobile) when a point is selected.
 
 **Controls**
-- **Date:** date picker plus a slider with step buttons (±1 day), limited to `meta.available_dates`. Shows the split badge of the date (`Validation` / `Test` / `Training (in-sample)`).
+- **Date:** date picker plus a slider with step buttons (±1 day), limited to `meta.available_dates`. Shows the split badge of the date (`Validation` / `Test` / `Training (in-sample)` / `Live`). A "Latest" button jumps to `meta.latest_live_date` when it is not null.
 - **Depth:** a 15-step selector listing `meta.depths_m` as "0.5 m, 10 m, …" (formatted, not hardcoded).
-- **Field:** segmented control: *Model prediction* | *GLORYS reanalysis* | *Difference (model − GLORYS)*.
+- **Field:** segmented control: *Model prediction* | *GLORYS reanalysis* | *Difference (model − GLORYS)*. On `Live` dates the last two are disabled with the tooltip "No GLORYS reference yet for live dates", and `LIVE_CAVEAT` is shown under the map.
 - **Play:** optional animation over dates at 2 frames/s, prefetching the next 3 days.
 
 **Map**
@@ -74,7 +74,7 @@ Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 102
 
 **Details panel (selected cell)**
 - Header: snapped lat/lon, date, split badge.
-- **Vertical profile chart:** temperature (x) vs depth (y, increasing downward), two lines: model prediction and GLORYS; tooltip per depth.
+- **Vertical profile chart:** temperature (x) vs depth (y, increasing downward), two lines: model prediction and GLORYS (GLORYS line omitted on live dates); tooltip per depth.
 - **Time series chart** at the selected depth: ±90 days around the date (`/timeseries`), both lines, vertical marker at the selected date.
 - Short "How accurate is this depth?" line: val RMSE and bias at the selected depth from `/metrics`, linking to `/validation`.
 
@@ -83,15 +83,16 @@ Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 102
 **Defaults:** latest available validation date, depth closest to 100 m, field = prediction, no selection.
 
 ### 3.2 `/validation`
+- **Headline card (top of page):** the pre-registered criterion text from `/headline.criterion`, then model vs GLORYS12 / GREP / ARMOR3D RMSE with 95% intervals as a small dot-and-whisker chart, and a plain verdict from `/headline.met`: "Met", "Not met" or "Not yet evaluated" (null or 404). Show the verdict exactly as returned, including "Not met". Label the period (validation or test).
 - Summary cards: overall val RMSE, MAE, bias, skill vs climatology (from `/metrics?group_by=depth`, row `depth_m = all`).
 - **Per-depth chart:** RMSE vs depth for the model and each baseline.
 - Tables: by depth, by season, by region (sortable).
-- ARGO section: per-depth errors for the model and GLORYS vs ARGO, counts, `ARGO_CAVEAT` verbatim.
+- ARGO section: per-depth errors for the model, GLORYS, GREP and ARMOR3D vs ARGO (columns with no data shown as "n/a"), counts, `ARGO_CAVEAT` verbatim.
 - Test results section: shown only if `meta.test_evaluated`; otherwise the text "Final test-period evaluation not yet run."
 - `GLORYS_CAVEAT` verbatim at the top.
 
 ### 3.3 `/about`
-Static content (MDX allowed) explaining: the problem, data sources (DUACS, OSCAR, CCMP, GLORYS, ARGO) with links and required acknowledgements/licence lines, the method in plain language (inputs → U-Net → 15 depth anomalies + climatology), limitations (caveats verbatim from `/meta`), and team/credits. Numbers on this page must also come from the API, not be typed in.
+Static content (MDX allowed) explaining: the problem, data sources (DUACS SLA/ADT, OSTIA SST, MULTIOBS SSS, OSCAR, CCMP, ERA5, GEBCO, WOA23, climate indices from NOAA CPC and the Australian Bureau of Meteorology, GLORYS12, GREP, ARMOR3D, ARGO) with links and required acknowledgements/licence lines, the method in plain language (surface inputs with 7- and 60-day history, climate indices and recent ARGO floats → U-Net → 15 depth anomalies + climatology; trained on GLORYS and GREP, fine-tuned on ARGO), what "live" dates are, limitations (caveats verbatim from `/meta`), and team/credits. Numbers on this page must also come from the API, not be typed in.
 
 ### 3.4 Assistant (only if `meta.chat.enabled`)
 - Floating "Ask about the ocean" button → side drawer chat.
@@ -158,7 +159,7 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 
 ## 7. Tests (required)
 - Unit: `format.ts`, `colormaps.ts` (endpoints and NaN handling), `url-state.ts` (round-trip, invalid input), API error parsing.
-- Component: GridLayer renders correct pixel colour for a known value and transparent for null; DetailsPanel shows source labels; synthetic banner appears when `synthetic: true`; chat button absent when chat disabled.
+- Component: GridLayer renders correct pixel colour for a known value and transparent for null; DetailsPanel shows source labels; synthetic banner appears when `synthetic: true`; chat button absent when chat disabled; on a `live` date the GLORYS and Difference controls are disabled and `LIVE_CAVEAT` shows; the headline card renders "Met", "Not met" and "Not yet evaluated" correctly.
 - E2E (Playwright, mocks on): load `/`, change depth and date, click a cell, see profile chart; open `/validation`, see tables; shareable URL restores state.
 - CI: `pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm e2e` all green; generated types up to date with `backend/openapi.json`.
 

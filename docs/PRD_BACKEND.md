@@ -1,6 +1,6 @@
 # PRD: Backend API — OceanScope AI
 
-**Status:** Draft v1 (2026-10-22)  
+**Status:** Draft v2 (2026-10-22): live dates, `/headline`, competitor ARGO columns, periodic reload  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
 **Lives in:** `backend/` of the monorepo (see `AGENTS.md`).  
@@ -66,6 +66,7 @@ A small, fast, public, read-only HTTP API that lets the Next.js frontend (and th
 | `LLM_PROVIDER_LABEL` | no | `LLM` | Display name returned to the UI (e.g. "Llama via Meta API") |
 | `CHAT_RATE_LIMIT` | no | `10/minute` | Per IP |
 | `CHAT_DAILY_CAP` | no | `500` | Global requests per UTC day; then 429 |
+| `RELOAD_INTERVAL_MIN` | no | `60` | How often to check for a new manifest / HF revision (live mode appends a day daily). `0` disables. |
 | `LOG_LEVEL` | no | `INFO` | |
 
 Startup fails fast with a clear message if `manifest.json` is missing or invalid (validated against `app/schemas/manifest.schema.json`).
@@ -97,12 +98,13 @@ General rules:
   "grid_resolution_deg": 0.25,
   "grid_shape": {"lat": 120, "lon": 240},
   "depths_m": [ ...15 floats... ],
-  "available_dates": {"start":"2019-01-01","end":"2021-12-31"},
+  "available_dates": {"start":"2018-01-01","end":"2021-12-31"},
+  "latest_live_date": null,
   "splits": {"train":[...],"val":[...],"test":[...]},
   "test_evaluated": false,
   "color_ranges": [{"depth_m": 0.49, "vmin": 22.0, "vmax": 31.5}, ...],
   "error_range": {"vmin": -2.0, "vmax": 2.0},
-  "caveats": {"glorys": "...", "argo": "...", "synthetic": "..." },
+  "caveats": {"glorys": "...", "argo": "...", "synthetic": "...", "live": "..." },
   "chat": {"enabled": false, "provider_label": null}
 }
 ```
@@ -122,6 +124,8 @@ General rules:
 ```
 Must respond in < 300 ms warm, < 2 s cold (one chunk read) on HF Spaces CPU basic.
 
+On a `live` date (`split = "live"`), `field=glorys|error` returns 404 `reference_unavailable`; `field=pred` works as usual.
+
 ### 4.4 `GET /profile?lat=&lon=&date=`
 ```json
 { "run_id":"...","synthetic":false,"date":"...","lat":..,"lon":..,"split":"val","coverage":1,
@@ -138,7 +142,10 @@ Area-weighted (cos(lat)) mean, min, max, std, `n_valid`, `n_total` over cells wi
 Returns rows from the metrics CSVs for the active run **and** each baseline, as `{"model","split","depth_m","group","n","mae_c","rmse_c","bias_c","skill_vs_clim_pct"}`. `split=test` returns 404 `test_not_evaluated` while `test_evaluated` is false.
 
 ### 4.8 `GET /argo`
-Returns the `argo_<run_id>.csv` rows plus `{"n_profiles_total","n_obs_total","caveat"}` where `caveat` is the fixed string in Section 7.
+Returns the `argo_<run_id>.csv` rows (including the GREP and ARMOR3D columns, `null` where empty) plus `{"n_profiles_total","n_obs_total","caveat"}` where `caveat` is the fixed string in Section 7.
+
+### 4.8b `GET /headline`
+Returns the `<run_id>_headline.csv` rows (the pre-registered result, PRD_AI_ML §1.1) plus `{"criterion": "<fixed text from Section 7>", "met": true|false|null}` where `met` is true only if every competitor row with data has `diff_ci_high_c < 0` for the reported period (test if `test_evaluated`, else validation). 404 `headline_not_available` if the manifest has no headline file. Never computed by the backend from other files.
 
 ### 4.9 `GET /argo/profiles?date=&lat_min=&lat_max=&lon_min=&lon_max=`
 Matched ARGO profiles (from the matches Parquet) for map markers: `[{platform_number, cycle, time, lat, lon, n_obs}]`, max 500 rows.
@@ -201,7 +208,7 @@ One `OpenAICompatibleProvider` using Chat Completions with `tools`. Target provi
 Max 4 tool-call rounds per request; max 1,024 output tokens; 20 s total timeout. Tool errors are returned to the model as structured errors, not raised.
 
 ### 6.3 System prompt requirements (`prompt.py`, versioned constant)
-Must instruct the model to: use tools for every number; say "the data doesn't cover that" when a tool returns unavailable; always distinguish *model prediction* vs *GLORYS reanalysis* vs *ARGO observation*; mention that predictions are estimates and state the validation RMSE at that depth when asked about accuracy; refuse unrelated tasks briefly; never claim real-time data. If `synthetic` is true, state that the values are synthetic demo data.
+Must instruct the model to: use tools for every number; say "the data doesn't cover that" when a tool returns unavailable; always distinguish *model prediction* vs *GLORYS reanalysis* vs *ARGO observation*; mention that predictions are estimates and state the validation RMSE at that depth when asked about accuracy; refuse unrelated tasks briefly; never claim real-time data (live dates are about 3 days behind real time and have no GLORYS reference; say so when asked about them). If `synthetic` is true, state that the values are synthetic demo data.
 
 ### 6.4 Grounding guard
 After the final answer: extract every number with a decimal point or a unit (°C, m) from the answer and check it appears (after rounding to the shown precision) in some tool result or in the request context. If any does not, replace the answer with a fixed fallback ("I couldn't verify that answer against the data; here are the raw results:" + a compact rendering of the tool results) and log the event (without user text).
@@ -214,6 +221,8 @@ Rate limit per IP, global daily cap, message length limits, no tool other than t
 ## 7. Fixed caveat strings (`app/schemas/caveats.py`)
 - `GLORYS_CAVEAT`: "Predictions are trained to reproduce the GLORYS reanalysis. GLORYS assimilates satellite altimetry and ARGO profiles, so agreement with GLORYS is not the same as agreement with the real ocean."
 - `ARGO_CAVEAT`: "ARGO profiles are also assimilated into GLORYS, so this comparison is not fully independent."
+- `LIVE_CAVEAT`: "Live maps are made about 3 days behind real time from near-real-time inputs. There is no GLORYS reference for these dates yet, so they have not been checked the way validation dates have."
+- `HEADLINE_CRITERION`: "Bay of Bengal, 50–300 m: model RMSE vs held-out ARGO floats lower than GLORYS12, the GREP ensemble mean and ARMOR3D (95% float-bootstrap interval of the difference below zero)."
 - `SYNTHETIC_CAVEAT`: "This deployment is serving synthetic demo data, not model results."
 
 Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend displays them verbatim.
@@ -242,6 +251,9 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 7. Chat with a mocked provider: tool dispatch works; a fabricated number triggers the grounding fallback; round limit enforced; API key never appears in logs or responses.
 8. `openapi.json` is up to date.
 9. CORS: allowed origin passes, other origins get no CORS headers.
+10. Live dates: fixture `live` days return `split: "live"`, `/map?field=glorys` → 404 `reference_unavailable`, `/profile` has `glorys: null` values.
+11. `/headline`: rows pass through unchanged; `met` follows the rule in 4.8b; 404 when the manifest has no headline file.
+12. Reload: replacing `manifest.json` in `DATA_DIR` (or a new HF revision) is picked up within `RELOAD_INTERVAL_MIN` without restart; a broken new manifest keeps serving the old one and logs an error.
 
 ---
 
@@ -251,8 +263,9 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 |---|---|---|
 | B1 Skeleton | settings, loader, `/health`, `/meta`, Dockerfile, CI (ruff, mypy, pytest) | Runs locally on `fixtures/sample_outputs`; tests 1, 8 pass |
 | B2 Data endpoints | `/map`, `/profile`, `/timeseries`, `/region-summary` | Tests 2–6 pass; `/map` warm p95 < 300 ms locally |
-| B3 Metrics | `/metrics`, `/argo`, `/argo/profiles` | Tests pass against fixture metrics |
+| B3 Metrics | `/metrics`, `/argo`, `/argo/profiles`, `/headline` | Tests pass against fixture metrics (incl. 11) |
 | B4 Deploy | HF Space live serving sample outputs; then real outputs once ML M4 is done | Public URL `/api/v1/health` is 200; Vercel frontend can call it (CORS) |
+| B6 Live support | `live` dates, `LIVE_CAVEAT`, periodic manifest reload (`RELOAD_INTERVAL_MIN`, default 60) | Tests 10, 12 pass |
 | B5 Chat | provider, tools, prompt, guard, limits | Test 7 passes; enabled in prod only after the owner tests it |
 
 B1–B4 must not wait for the real model: they are built and deployed against the synthetic sample outputs.

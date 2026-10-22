@@ -71,3 +71,32 @@ The fixture grid is `lat = 0, 1, …, 30` (31 points) and `lon = 40, …, 100` (
 
 ## What's good
 Manifest validates against the schema; ML and backend schema copies are identical and CI diffs them; `synthetic: true` and the SYNTHETIC banner text are in place; coverage masking in the store is correct (pred is NaN wherever coverage ≠ 1); fixtures are about 1 MB, well under the 5 MB limit; secrets are env-only; the Dockerfile runs as non-root on port 7860; the OpenAPI export/check works.
+
+---
+
+# Re-review of `setup/p0-fixes` (commit `2ece8e8`)
+
+Reviewer: Claude · 2026-10-22. I re-ran the ML and backend checks in a clean copy (ruff, ruff format, mypy, pytest, openapi check, schema parity: **all pass**), opened the new fixture store with xarray 2026.9 / zarr 3.4, and recomputed the fixture metrics from the arrays.
+
+**Fixed and verified:** A1 (store opens in xarray, consolidated, correct dims/dtypes, daily chunks), A2 (`test_sample_outputs.py` checks generated and committed fixtures), A3 (path filters), A4 (per-package working dirs, `.[dev]` installs, strict mypy now applies), A6 (`lib/` gone), A7 (`tsbuildinfo` removed and ignored), A8 (cell-centre grid 30×60), B2 (metrics now computed from the arrays and match), B3 (date-range split map), B5 (15 depths, format checker), B7 (README, root README, `ml/notebooks/`). `main` was not touched; the work is on its own branch.
+
+## Still wrong (fix before merging)
+
+### R1. Frontend CI will fail: pnpm 11 needs Node 22, CI uses Node 20
+`frontend/package.json` now pins `pnpm@11.25.0`, whose `engines` field is `node >=22.13`. CI still sets up Node 20, so pnpm refuses to run. (It passed locally because the local Node is newer.) Node 20 reached end of life in April 2026 anyway.
+**Fix:** set `node-version: "22"` in `ci.yml`, add `"engines": {"node": ">=22.13"}` to `frontend/package.json`, set Node 22 in Vercel project settings, and change "Node 20 LTS" to "Node 22 LTS" in AGENTS.md §8.
+
+### R2. `.gitignore` no longer ignores data written by the ML pipeline (regression)
+The data rules were anchored to the repo root (`/data/raw/`, `/outputs/`, `/checkpoints/`, `/data/**/*.nc`). But every ML stage runs **from `ml/`** (PRD_AI_ML §4) with relative paths `data/raw`, `outputs`, `checkpoints`, so files land in `ml/data/raw/`, `ml/outputs/`, `ml/checkpoints/`, none of which are ignored now. One `git add .` after a download would commit gigabytes of NetCDF.
+**Fix:** use `ml/data/`, `ml/outputs/`, `ml/checkpoints/`, plus unanchored `*.nc` and `*.zarr/` with a working exception for fixtures: either `!fixtures/**/*.zarr/` on the directory itself, or keep fixtures un-ignored by only ignoring `*.zarr/` under `ml/`. Add a test or CI step: `git check-ignore -q ml/data/raw/x.nc && git check-ignore -q ml/outputs/x && ! git check-ignore -q fixtures/sample_outputs/predictions/predictions_synthetic_v1.zarr/.zattrs`.
+
+### R3. Backend silently serves synthetic data when real data is missing
+`backend/app/data/loader.py` falls back to `../fixtures/sample_outputs` whenever `DATA_DIR` has no manifest. I ran the app with `DATA_DIR=/nonexistent` and got `200 {"status":"ok","run_id":"synthetic_v1","data_loaded":true}`. PRD_BACKEND §4.1 says `/health` must return 503 when data failed to load. In production the Docker image doesn't contain `fixtures/`, so it would 503 there, but any deploy that includes the repo (or a dev pointing at a wrong path) would quietly serve fake data and report healthy.
+**Fix:** remove the implicit fallback. Tests set `DATA_DIR` to the fixtures path in `backend/tests/conftest.py` (env var or `DataLoader(data_dir=...)` injected into the app). Add a test that `/health` returns 503 for an empty `DATA_DIR` (the current failure test only checks the loader object, not the endpoint).
+
+### R4. Dependency floors (B4) not changed
+Both `pyproject.toml` files still allow `zarr>=2.14.2`, and the generator calls `to_zarr(..., zarr_format=2)`, which needs the zarr-3-era xarray API. Set `zarr>=3` and `xarray>=2024.10` (or whatever the oldest versions you actually tested are) in both packages.
+
+## Minor
+- `PROGRESS.md` says "pnpm 11 lockfile", but `frontend/pnpm-lock.yaml` wasn't changed in this commit. Fine if it was already pnpm 11-generated; R1's CI run will prove it.
+- CI on GitHub still unverified by me. After R1–R4, push the branch, open a PR to `main`, and paste the green CI link into PROGRESS.md. That is the P0 exit gate.

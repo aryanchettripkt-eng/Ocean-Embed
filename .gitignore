@@ -39,12 +39,12 @@ secrets/
 *.key
 
 # Data and Models (AGENTS.md rule 3: never commit raw/processed data or checkpoints)
-data/
-outputs/
-checkpoints/
-ml/data/
-ml/outputs/
-ml/checkpoints/
+/data/
+/outputs/
+/checkpoints/
+/ml/data/
+/ml/outputs/
+/ml/checkpoints/
 *.nc
 *.pt
 *.pth
