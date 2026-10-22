@@ -1,6 +1,6 @@
 # PRD: AI / ML Pipeline — OceanScope AI
 
-**Status:** Draft v3 (2026-10-22): richer inputs, ablations, ARMOR3D baseline, ARGO fine-tuning  
+**Status:** Draft v4 (2026-10-22): v3 (richer inputs, ablations, ARMOR3D baseline, ARGO fine-tuning) + long sea-level history, climate-mode indices, temporal-consistency and per-year bias metrics  
 **Lives in:** `ml/` of the monorepo (see `AGENTS.md`). Python package `oceanscope_ml` at `ml/src/oceanscope_ml/`.  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
@@ -83,6 +83,12 @@ inputs:
   static: [bathymetry, woa_clim_profile]    # bathymetry (GEBCO, log-depth); WOA23 temperature at the 15 depths for that month
   extra: [doy_sin, doy_cos, lat, lon, ocean_mask]
   history_days: 7          # stack the dynamic channels (core + forcing) for days t-6..t; [CONFIRM] try 7, 14, 30 in ablations
+  long_history:            # slow ocean memory (Rossby/Kelvin waves move the thermocline over weeks-months)
+    vars: [sla, adt]
+    days: 60               # [CONFIRM] 30 or 60 after ablation
+    stride: 5              # frames at t-5, t-10, ..., t-60 (12 frames; days t..t-6 already in history_days)
+    reduce: mean           # each frame = mean over its 5-day window, so frames are not noisy single days
+  indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]   # daily scalars, broadcast to the grid as constant channels (day t only)
   ablation_groups:         # each run removes one group; see §5.7
     sst: [sst]
     sss: [sss]
@@ -91,6 +97,8 @@ inputs:
     forcing: [net_heat_flux, precip]
     static: [bathymetry, woa_clim_profile]
     history: history_days=1
+    long_history: long_history.days=0
+    indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]
 
 climatology:
   method: harmonic        # mean + first 3 annual harmonics, per cell and depth
@@ -141,8 +149,15 @@ publish:
 | `net_heat_flux`, `precip` | ERA5 single levels (Copernicus CDS) | input | 0.25° hourly | Daily mean/sum. Needs CDS account. |
 | `bathymetry` | GEBCO | static input | 15″ | Area-mean to 0.25°; use log(1+depth). |
 | `woa_clim_profile` | World Ocean Atlas 2023 temperature | static input (by month) | 0.25° monthly | Interpolate to the 15 depths; 15 channels. |
+| `nino34` | NOAA CPC/PSL Niño 3.4 SST anomaly index | input (scalar, broadcast) | daily (or weekly, linearly interpolated) | ENSO state. Its source region is in the Pacific, **outside our box**, so this is information the model can't otherwise see (atmospheric bridge + Indonesian Throughflow). |
+| `dmi` | Dipole Mode Index (IOD), computed by us from OSTIA | input (scalar, broadcast) | daily | West box 50–70°E 10°S–10°N minus east box 90–110°E 10°S–0°, SST anomaly vs the **train-period** OSTIA climatology. Needs a small extra OSTIA download covering 10°S–0° (outside the main bbox). The IOD strongly tilts the Indian Ocean thermocline. |
+| `mjo_rmm1`, `mjo_rmm2` | BoM Real-time Multivariate MJO index (Wheeler & Hendon) | input (scalar, broadcast) | daily | Intraseasonal convection/wind bursts that drive equatorial Kelvin waves. Public text file, no account. |
 | ARMOR3D | Copernicus multi-observation 3D T | external baseline only | 0.25° weekly/daily | Compared at ARGO points; never an input. |
 | ARGO | QC'd profiles (e.g. Argo GDAC / Copernicus INSITU) | evaluation; optional fine-tuning (§10) | point profiles | Use QC flags 1–2 only. Floats used for fine-tuning are never used for evaluation. |
+
+**Rejected inputs (do not add):** atmospheric CO₂ or any other "global warming" scalar, and a calendar-year/trend channel. They are near-linear in time, carry no information that SST/SLA don't already contain, and let the model extrapolate a trend into the sealed test year instead of reading it from observations. Warming is handled by the observed inputs plus the per-year bias check in §5.8.
+
+**Optional (ablation only, if time allows):** daily river discharge for the Ganges–Brahmaputra, Irrawaddy and Godavari mouths from GloFAS (Copernicus CDS, same account as ERA5), as scalar channels. SSS already captures most of this signal; keep it only if the ablation shows a gain in the Bay of Bengal upper 100 m.
 
 **Leakage caveat (must appear in every results report):** GLORYS assimilates altimetry and ARGO; skill vs. GLORYS is not skill vs. the real ocean.
 
@@ -167,9 +182,13 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
 
 ### 4.1 Download stage requirements
 - Products and access (verify current product IDs/endpoints during implementation, record them in `data/raw/MANIFEST.json`):
-  - GLORYS12 and DUACS SLA: Copernicus Marine Toolbox (`copernicusmarine` Python package), subset server-side to the region bbox (+1° margin), date range and (GLORYS) the 15 depths ± neighbours. Needs `COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD`.
+  - GLORYS12, DUACS SLA + ADT, OSTIA SST, MULTIOBS SSS, ARMOR3D: Copernicus Marine Toolbox (`copernicusmarine` Python package), subset server-side to the region bbox (+1° margin), date range and (GLORYS) the 15 depths ± neighbours. OSTIA also needs the extra 10°S–0°, 50–110°E strip for the DMI. Needs `COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD`.
+  - The history windows need inputs from **60 days before** `time.start` (and before each split start); download that lead-in too.
   - OSCAR: NASA PO.DAAC (Earthdata login, `earthaccess` package).
   - CCMP: Remote Sensing Systems.
+  - ERA5 (and optional GloFAS): Copernicus CDS (`cdsapi`, key in env `CDSAPI_URL`/`CDSAPI_KEY`), area-subset requests, one month per request.
+  - GEBCO (bbox subset), WOA23 monthly 0.25° temperature: one-off files.
+  - Climate indices: Niño 3.4 from NOAA CPC/PSL, MJO RMM from the Australian Bureau of Meteorology; plain text files, no account. DMI is computed from OSTIA (§3). Record the exact URLs in `MANIFEST.json`.
   - ARGO: Argo GDAC (or Copernicus INSITU), profiles inside the bbox and date range.
 - Server-side subsetting is mandatory where the service supports it; never download global files when a subset is possible.
 - Resumable: skip files already present with matching size/checksum.
@@ -181,8 +200,9 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
 ## 5. Model specification
 
 ### 5.1 Input tensor
-`X: float32 [B, C, H_pad, W_pad]`. Channel order is generated by one function, `oceanscope_ml.data.channels.channel_list(config)`, and saved in every checkpoint; nothing else may hardcode it. Order: dynamic channels (core + forcing) for each history day oldest→newest, then static channels, then extra channels. With defaults: 11 dynamic × 7 days + 1 bathymetry + 15 WOA + 5 extra = 98 channels.  
+`X: float32 [B, C, H_pad, W_pad]`. Channel order is generated by one function, `oceanscope_ml.data.channels.channel_list(config)`, and saved in every checkpoint; nothing else may hardcode it. Order: dynamic channels (core + forcing) for each history day oldest→newest, then static channels, then extra channels. Long-history frames (oldest→newest) follow the dynamic channels, then index channels, then static, then extra. With defaults: 11 dynamic × 7 days + 2 × 12 long-history frames + 4 indices + 1 bathymetry + 15 WOA + 5 extra = 126 channels.  
 - Core/forcing/static channels: z-scored with train-period per-channel mean/std (scalar per channel, ocean cells only), then NaN → 0.  
+- Index channels: z-scored with train-period mean/std of the index, constant over the grid; NaN not allowed (fail loudly if an index has gaps after interpolation).
 - `lat`, `lon`: min-max scaled to [-1, 1] over the region.  
 - `ocean_mask`: 1 where the GLORYS surface cell is valid, else 0.  
 - Pad H and W with zeros (mask 0) to the next multiple of 2^depth_levels; crop outputs back.
@@ -214,6 +234,12 @@ Masked MSE over normalized anomalies:
 
 ### 5.7 Ablations (required for the evaluation report)
 Train the full model, then one run per `inputs.ablation_groups` entry with that group removed (same seed, same epochs budget). Report validation RMSE per depth for each, as `outputs/metrics/ablation_<run_id>.csv` with columns `removed_group, depth_m, rmse_c, delta_rmse_c`. Also report a history-length sweep (1, 7, 14, 30 days) if Colab/Kaggle time allows. This table is the main scientific evidence of which inputs matter.
+
+### 5.8 Temporal consistency and trend checks (required for the evaluation report)
+Written by `evaluate.py` on validation dates only (test only in `final_test.py`). These files are ML-internal, not part of the §6 contract or the manifest.
+1. **Day-to-day flicker** → `outputs/metrics/<run_id>_val_temporal.csv`, columns `model, depth_m, n, tend_rmse_pred_c, tend_rmse_glorys_c, tend_err_rmse_c, lag1_autocorr_pred, lag1_autocorr_glorys`, one row per depth plus `all`. Tendency = T(t) − T(t−1) per valid cell and depth, using only consecutive valid days. `tend_err_rmse_c` = RMS of (Δpred − ΔGLORYS). Compute for the U-Net and every baseline. **Flag in the report** any depth where `tend_rmse_pred_c > 1.5 × tend_rmse_glorys_c` (the model jumps around more than the ocean does). If flagged at ≥ 3 depths, that is the trigger for stretch item §10.2 (temporal model).
+2. **Per-year bias (warming check)** → `outputs/metrics/<run_id>_bias_by_year.csv`, columns `model, split, year, depth_m, n, bias_c, rmse_c`, for train years (from a held-in sample, labelled `split = train`) and val years. Because the target is an anomaly from a **fixed** 2010–2018 climatology, a warming ocean shows up as growing positive anomalies. A bias trend across years means the model is damping the trend; report it with the slope (°C/yr) per depth.
+3. Plot one 90-day time series at three fixed points (Arabian Sea, Bay of Bengal, equatorial; coordinates in config) at 0, 100 and 300 m: pred vs GLORYS → `outputs/figures/timeseries_<run_id>.png`.
 
 ---
 
@@ -322,7 +348,7 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 |---|---|---|
 | M1 Data | `download.py` (one month first), `inspect.py`, `preprocess.py`, climatology, config confirmed | Inspection report exists; owner has confirmed all [CONFIRM] values; processed store passes a schema check; one day plotted for every variable in `outputs/figures/m1_sample_day.png`; tests 3–5 pass |
 | M2 Baselines + U-Net | `baselines.py`, `dataset.py`, `unet.py`, `train.py`, Colab + Kaggle notebooks | Baseline val CSVs exist; U-Net trains on Colab and Kaggle; resume works across a session restart; U-Net val RMSE < climatology val RMSE at ≥ 10 of 15 depths (if not, report and stop — do not tune on test) |
-| M3 Evaluation | `evaluate.py`, `argo_validation.py` | All Section 6.3 files exist for the best run; evaluation report `outputs/reports/evaluation_<run_id>.md` with tables generated by code and the leakage caveat |
+| M3 Evaluation | `evaluate.py`, `argo_validation.py` | All Section 6.3 and §5.8 files exist for the best run; evaluation report `outputs/reports/evaluation_<run_id>.md` with tables generated by code and the leakage caveat |
 | M4 Inference + publish | `predict.py`, `manifest.json`, `publish.py` | Prediction store for published dates passes the contract test; total published size ≤ 3 GB; manifest validates against 6.3 schema; files visible in the HF dataset repo; backend loads them (backend PRD acceptance) |
 | M5 Final test | `final_test.py` | Run once on owner's instruction; results added to the evaluation report, clearly labelled |
 
@@ -330,7 +356,7 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 
 ## 10. Stretch (only on owner request, in this order)
 1. **ARGO fine-tuning:** after GLORYS training, fine-tune with loss = masked MSE vs GLORYS + λ × MSE vs ARGO profiles (from training-period, non-held-out floats, interpolated to the 15 depths at matched cells/days). Tune λ on validation-period ARGO from non-held-out floats only. Report the held-out-float ARGO metrics before and after. This is the only way to beat GLORYS against real observations.
-2. Longer history windows or a temporal model if the history ablation shows a gain.
+2. Temporal model (ConvLSTM over the history frames, or a recurrent U-Net) **only if** §5.8 flags flicker at ≥ 3 depths or the history ablation shows longer history keeps helping. Do **not** feed the model's own previous-day prediction back as an input in v1: errors compound over long runs and training needs unrolled sequences, which is costly on Colab.
 3. MC-dropout or ensemble uncertainty → `temp_pred_std` variable added to 6.2 (contract change, needs approval).
 
 ---

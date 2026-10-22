@@ -69,4 +69,4 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 ## 8. Environments
 - ML training runs on Google Colab / Kaggle (see `PRD_AI_ML.md` §4.1, §11). Code must run there unchanged: paths from env vars, resumable checkpoints.
 - Backend deploys to Hugging Face Spaces (Docker). Frontend deploys to Vercel.
-- Python 3.11. Node 20 LTS with pnpm.
+- Python 3.11. Node 22 LTS with pnpm.

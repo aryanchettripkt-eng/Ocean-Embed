@@ -13,3 +13,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Required ablation study per input group; ARMOR3D added as an external baseline at ARGO points.
 - ARGO fine-tuning is the first stretch goal, with a 20% float-level hold-out for evaluation.
 - Approved by Aryan.
+
+## 2026-10-22 — Long sea-level history, climate indices, flicker and trend checks
+- Added a 60-day sea-level (SLA, ADT) history at 5-day steps, so the model sees the slow ocean waves that move the thermocline.
+- Added daily climate-mode indices as inputs: Niño 3.4 (ENSO), DMI (Indian Ocean Dipole, computed from OSTIA) and MJO RMM1/2. Niño 3.4 carries information from outside the model's box.
+- Rejected: CO₂ / "global warming" scalars and a year/trend channel (no new information; risks extrapolating a trend into the test year). GloFAS river discharge is optional, kept only if its ablation helps.
+- Required evaluation: day-to-day flicker metric and per-year bias (warming check) (PRD_AI_ML §5.8). A temporal model is triggered only if flicker is flagged; feeding back the previous day's prediction is not used in v1.
+- Approved by Aryan (long history + flicker metric); climate indices proposed by Claude in answer to Aryan's request for extra environmental variables.
