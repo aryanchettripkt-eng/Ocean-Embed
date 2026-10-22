@@ -15,6 +15,7 @@
 | 2026-10-23 | frontend | P1-F2: Explorer map: MapLibre, canvas grid layer, controls, colorbar, coverage legend, URL state | Gemini | frontend/p1-f2-explorer-map | complete | pnpm typecheck, pnpm lint, pnpm test (22 passed), pnpm build |
 | 2026-10-23 | frontend | P1-F3: Details panel: profile + time-series charts, depth accuracy line | Gemini | frontend/p1-f3-details-panel | complete | pnpm typecheck, pnpm lint, pnpm test (26 passed), pnpm build |
 | 2026-10-23 | frontend | P1-F4: /validation (headline card, metrics tables, ARGO matchups) and /about pages, caveats, sealed test status | Gemini | frontend/p1-f4-validation-about | complete | pnpm typecheck, pnpm lint, pnpm test (30 passed), pnpm build |
+| 2026-10-23 | ml | P1-M1, P1-M2: download.py with --dry-run planning, inspect.py, data_inspection.md report, argo_eval_floats.json | Gemini | ml/p1-m1-m2-download-inspect | complete | ruff, mypy, pytest (8 passed), download --dry-run, inspect CLI |
 
 
 

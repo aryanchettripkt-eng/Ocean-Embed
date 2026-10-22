@@ -14,21 +14,61 @@ grid:
   # cell centres: lon_min + 0.125, ..., lat_min + 0.125, ...
 
 time:
-  start: "2010-01-01"   # [CONFIRM] = intersection of all product coverages
+  start: "1993-01-01"   # [CONFIRM] = intersection of all product coverages (all inputs start <= 1993)
   end:   "2021-12-31"   # [CONFIRM]
   day_boundary: UTC
 
 splits:
-  train: ["2010-01-01", "2018-12-01"]   # [CONFIRM]
-  val:   ["2019-01-01", "2020-12-01"]   # [CONFIRM]
+  train: ["1993-03-02", "2017-12-01"]   # [CONFIRM]
+  val:   ["2018-01-01", "2020-12-01"]   # [CONFIRM]
   test:  ["2021-01-01", "2021-12-31"]   # [CONFIRM] sealed
   gap_days: 30                           # dropped at the end of train and val
 
 depths_m: []   # [CONFIRM] exactly 15 values copied from GLORYS native depth coordinate, ascending, last ~1000 m
 
 inputs:
-  core: [sla, u_current, v_current, u_wind, v_wind]
+  core: [sla, adt, sst, sss, u_current, v_current, u_wind, v_wind, wind_stress_curl]
+  forcing: [net_heat_flux, precip]          # ERA5 daily means
+  static: [bathymetry, woa_clim_profile]    # bathymetry (GEBCO, log-depth); WOA23 temperature at the 15 depths for that month
   extra: [doy_sin, doy_cos, lat, lon, ocean_mask]
+  history_days: 7          # stack dynamic channels for days t-6..t; [CONFIRM] try 7, 14, 30 in ablations
+  long_history:            # slow ocean memory (Rossby/Kelvin waves move thermocline over weeks-months)
+    vars: [sla, adt]
+    days: 60               # [CONFIRM] 30 or 60 after ablation
+    stride: 5              # frames at t-5, t-10, ..., t-60 (12 frames)
+    reduce: mean           # each frame = mean over its 5-day window
+  indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]   # daily scalars broadcast to grid
+  argo_input:              # recent ARGO profiles as sparse input channels
+    enabled: true
+    window_days: 10        # profiles from days t-9..t
+    min_year: 2004         # before this, channels are all-empty (mask 0)
+    train_drop_frac: 0.3   # randomly hide fraction of input profiles during training
+  ablation_groups:
+    sst: [sst]
+    sss: [sss]
+    dynamics: [u_current, v_current]
+    winds: [u_wind, v_wind, wind_stress_curl]
+    forcing: [net_heat_flux, precip]
+    static: [bathymetry, woa_clim_profile]
+    history: history_days=1
+    long_history: long_history.days=0
+    indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]
+    argo_input: argo_input.enabled=false
+
+target:
+  primary: glorys12                 # thetao from GLOBAL_MULTIYEAR_PHY_001_030, area-mean to 0.25°
+  auxiliary: grep_mean              # GREP ensemble mean (GLOBAL_MULTIYEAR_PHY_ENS_001_031)
+  aux_weight: 0.5                   # [CONFIRM] loss = (1-w)*L_glorys + w*L_grep where GREP exists
+  depth_weights:
+    band_m: [50, 300]
+    in_band: 2.0                    # [CONFIRM] ablation: 1.0 vs 2.0
+    out_band: 1.0
+
+finetune_argo:
+  enabled: true
+  lambda: 0.1                       # [CONFIRM] tuned on validation ARGO from non-held-out floats only
+  epochs: 10
+  lr: 1.0e-4
 
 climatology:
   method: harmonic        # mean + first 3 annual harmonics, per cell and depth
@@ -55,7 +95,7 @@ train:
   num_workers: 2
 
 inference:
-  publish_splits: [val, test]   # dates written to the published prediction store (keeps it ~1-2 GB)
+  publish_splits: [val, test]   # dates written to the published prediction store
   publish_dtype: float16
 
 publish:
