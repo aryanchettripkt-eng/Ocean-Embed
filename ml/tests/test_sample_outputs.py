@@ -80,6 +80,12 @@ def _validate_output_tree(out_dir: Path) -> None:
     )
     assert np.all(np.isnan(pred_arr[invalid_broadcast])), "temp_pred not NaN where coverage != 1"
 
+    # Live dates (§12): last 2 days (index 8, 9) have all-NaN temp_glorys
+    glorys_arr = ds["temp_glorys"].values
+    assert np.all(np.isnan(glorys_arr[8:])), "temp_glorys not all-NaN on live dates"
+    # Predictions on live dates must exist where coverage == 1
+    assert np.any(~np.isnan(pred_arr[8:])), "temp_pred has no valid predictions on live dates"
+
     # Root attributes from PRD_AI_ML Section 6.2
     for attr in [
         "run_id",
@@ -90,6 +96,16 @@ def _validate_output_tree(out_dir: Path) -> None:
         "depths_m",
     ]:
         assert attr in ds.attrs, f"Missing root attribute '{attr}' in prediction store"
+
+    splits_map = json.loads(ds.attrs["split_of_each_date"])
+    assert any("live" in v for v in splits_map.values()), (
+        "Missing 'live' split in split_of_each_date"
+    )
+
+    # Splits from PRD_AI_ML Section 2 / 6.3
+    assert manifest["splits"]["train"] == ["1993-03-02", "2017-12-01"]
+    assert manifest["splits"]["val"] == ["2018-01-01", "2020-12-01"]
+    assert manifest["splits"]["test"] == ["2021-01-01", "2021-12-31"]
 
     # 3. Validate metrics CSVs
     val_csv_path = out_dir / manifest["files"]["metrics_val"]
@@ -129,7 +145,7 @@ def _validate_output_tree(out_dir: Path) -> None:
         r_all = r_df[r_df["depth_m"].astype(str) == "all"].iloc[0]
         assert int(r_depths["n"].sum()) == int(r_all["n"])
 
-    # ARGO parquet and CSV
+    # ARGO parquet and CSV (including GREP/ARMOR3D competitor columns)
     argo_csv = out_dir / manifest["files"]["argo"]
     argo_df = pd.read_csv(argo_csv)
     expected_argo_cols = {
@@ -141,12 +157,51 @@ def _validate_output_tree(out_dir: Path) -> None:
         "bias_c",
         "glorys_mae_c",
         "glorys_rmse_c",
+        "grep_mae_c",
+        "grep_rmse_c",
+        "armor3d_mae_c",
+        "armor3d_rmse_c",
     }
     assert expected_argo_cols.issubset(argo_df.columns)
 
     argo_parquet = out_dir / manifest["files"]["argo_matches"]
     pq_table = pq.read_table(argo_parquet)
     assert len(pq_table) > 0
+    expected_parquet_cols = {
+        "platform_number",
+        "cycle",
+        "time",
+        "lat",
+        "lon",
+        "depth_m",
+        "temp_obs_c",
+        "temp_pred_c",
+        "temp_glorys_c",
+        "temp_grep_c",
+        "temp_armor3d_c",
+    }
+    assert expected_parquet_cols.issubset(set(pq_table.column_names))
+
+    # Headline table (Section 1.1 / 7)
+    headline_rel = manifest["files"].get("headline")
+    assert headline_rel is not None, "Missing files.headline in manifest"
+    headline_path = out_dir / headline_rel
+    assert headline_path.exists(), f"Missing headline file at {headline_path}"
+    headline_df = pd.read_csv(headline_path)
+    expected_headline_cols = {
+        "period",
+        "product",
+        "n_floats",
+        "n_obs",
+        "rmse_c",
+        "ci_low_c",
+        "ci_high_c",
+        "diff_vs_model_c",
+        "diff_ci_low_c",
+        "diff_ci_high_c",
+    }
+    assert expected_headline_cols.issubset(headline_df.columns)
+    assert len(headline_df) > 0
 
 
 def test_sample_outputs_generation_in_temp_dir(tmp_path: Path) -> None:

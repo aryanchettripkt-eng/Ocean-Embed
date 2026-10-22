@@ -35,11 +35,11 @@
   },
   "splits": {
     "train": [
-      "2010-01-01",
-      "2018-12-01"
+      "1993-03-02",
+      "2017-12-01"
     ],
     "val": [
-      "2019-01-01",
+      "2018-01-01",
       "2020-12-01"
     ],
     "test": [
@@ -59,6 +59,7 @@
       "metrics/baseline_ridge_val.csv"
     ],
     "argo": "metrics/argo_synthetic_v1.csv",
-    "argo_matches": "metrics/argo_matches_synthetic_v1.parquet"
+    "argo_matches": "metrics/argo_matches_synthetic_v1.parquet",
+    "headline": "metrics/synthetic_v1_headline.csv"
   }
 }

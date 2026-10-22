@@ -124,7 +124,8 @@
           "items": { "type": "string" }
         },
         "argo": { "type": ["string", "null"] },
-        "argo_matches": { "type": ["string", "null"] }
+        "argo_matches": { "type": ["string", "null"] },
+        "headline": { "type": ["string", "null"] }
       }
     }
   }

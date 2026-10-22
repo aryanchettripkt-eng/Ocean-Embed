@@ -3,7 +3,7 @@
   "dataset_version": "v1",
   "model_name": "SYNTHETIC_DEMO",
   "created_utc": "2026-10-22T12:00:00Z",
-  "split_of_each_date": "{\"2020-01-01/2020-01-10\": \"val\"}",
+  "split_of_each_date": "{\"2020-01-01/2020-01-08\": \"val\", \"2020-01-09/2020-01-10\": \"live\"}",
   "depths_m": [
     0.5,
     5.0,

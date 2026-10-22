@@ -90,6 +90,7 @@ def generate_sample_outputs(out_dir: Path) -> None:
 
     for t_idx in range(n_time):
         day_factor = 0.2 * np.sin(2.0 * np.pi * t_idx / 365.0)
+        is_live = t_idx >= 8  # Last 2 days (2020-01-09, 2020-01-10) are live
         for i_lat, lat in enumerate(lats):
             lat_factor = 29.0 - 0.18 * lat + day_factor
             for i_lon, lon in enumerate(lons):
@@ -97,7 +98,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
                 if cov == 1:
                     surf_t = lat_factor + 0.5 * np.cos(np.radians(lon))
                     vert = 4.0 + (surf_t - 4.0) * np.exp(-depth_arr / 220.0)
-                    temp_glorys[t_idx, :, i_lat, i_lon] = vert
+                    if not is_live:
+                        temp_glorys[t_idx, :, i_lat, i_lon] = vert
                     # Deterministic, depth-varying synthetic anomaly error
                     err = 0.22 * np.sin(depth_arr / 70.0) + 0.08 * np.cos(np.radians(lat * 2))
                     temp_pred[t_idx, :, i_lat, i_lon] = vert + err
@@ -135,7 +137,12 @@ def generate_sample_outputs(out_dir: Path) -> None:
             "dataset_version": dataset_version,
             "model_name": model_name,
             "created_utc": "2026-10-22T12:00:00Z",
-            "split_of_each_date": json.dumps({"2020-01-01/2020-01-10": "val"}),
+            "split_of_each_date": json.dumps(
+                {
+                    "2020-01-01/2020-01-08": "val",
+                    "2020-01-09/2020-01-10": "live",
+                }
+            ),
             "depths_m": depths_m,
         },
     )
@@ -162,7 +169,9 @@ def generate_sample_outputs(out_dir: Path) -> None:
     ds.to_zarr(str(zarr_path), mode="w", consolidated=True, zarr_format=2, encoding=encoding)
 
     # 2. Compute Self-Consistent Validation Metrics (Review B2)
-    valid_mask = coverage == 1
+    # Validation period is days 0..7 (first 8 days)
+    val_slice = slice(0, 8)
+    val_valid_mask = coverage[val_slice] == 1
     # Climatology baseline reference error (synthetic ~ 0.58 °C)
     clim_rmse_ref = 0.58
 
@@ -184,8 +193,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
     all_glorys_list: list[np.ndarray] = []
 
     for d_idx, d_m in enumerate(depths_m):
-        p_d = temp_pred[:, d_idx, :, :][valid_mask]
-        g_d = temp_glorys[:, d_idx, :, :][valid_mask]
+        p_d = temp_pred[val_slice, d_idx, :, :][val_valid_mask]
+        g_d = temp_glorys[val_slice, d_idx, :, :][val_valid_mask]
         all_pred_list.append(p_d)
         all_glorys_list.append(g_d)
         n_d, mae_d, rmse_d, bias_d, skill_d = calc_stats(p_d, g_d)
@@ -229,8 +238,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
         # Multiplier to provide subtle plausible variation across seasons
         factor = {"DJF": 1.0, "MAM": 1.05, "JJA": 0.95, "SON": 1.02}[season]
         for d_idx, d_m in enumerate(depths_m):
-            p_d = temp_pred[:, d_idx, :, :][valid_mask]
-            g_d = temp_glorys[:, d_idx, :, :][valid_mask]
+            p_d = temp_pred[val_slice, d_idx, :, :][val_valid_mask]
+            g_d = temp_glorys[val_slice, d_idx, :, :][val_valid_mask]
             err = (p_d - g_d) * factor
             p_synth = g_d + err
             s_p_list.append(p_synth)
@@ -270,13 +279,13 @@ def generate_sample_outputs(out_dir: Path) -> None:
 
     # Regional metrics (definitions from PRD_AI_ML §6.3)
     region_rows: list[dict[str, Any]] = []
-    lat_grid = np.broadcast_to(lats[np.newaxis, :, np.newaxis], (n_time, n_lat, n_lon))
-    lon_grid = np.broadcast_to(lons[np.newaxis, np.newaxis, :], (n_time, n_lat, n_lon))
+    lat_grid = np.broadcast_to(lats[np.newaxis, :, np.newaxis], (8, n_lat, n_lon))
+    lon_grid = np.broadcast_to(lons[np.newaxis, np.newaxis, :], (8, n_lat, n_lon))
 
     regions_def = {
-        "arabian_sea": valid_mask & (lon_grid < 78.0),
-        "bay_of_bengal": valid_mask & (lon_grid >= 78.0) & (lat_grid >= 5.0),
-        "equatorial": valid_mask & (lat_grid < 5.0),
+        "arabian_sea": val_valid_mask & (lon_grid < 78.0),
+        "bay_of_bengal": val_valid_mask & (lon_grid >= 78.0) & (lat_grid >= 5.0),
+        "equatorial": val_valid_mask & (lat_grid < 5.0),
     }
 
     for reg_name, reg_mask in regions_def.items():
@@ -284,8 +293,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
         r_p_list: list[np.ndarray] = []
         r_g_list: list[np.ndarray] = []
         for d_idx, d_m in enumerate(depths_m):
-            p_d = temp_pred[:, d_idx, :, :][reg_mask]
-            g_d = temp_glorys[:, d_idx, :, :][reg_mask]
+            p_d = temp_pred[val_slice, d_idx, :, :][reg_mask]
+            g_d = temp_glorys[val_slice, d_idx, :, :][reg_mask]
             r_p_list.append(p_d)
             r_g_list.append(g_d)
             n_d, mae_d, rmse_d, bias_d, skill_d = calc_stats(p_d, g_d)
@@ -325,7 +334,7 @@ def generate_sample_outputs(out_dir: Path) -> None:
     clim_rows: list[dict[str, Any]] = []
     total_clim_n = 0
     for d_idx, d_m in enumerate(depths_m):
-        n_d = int(np.count_nonzero(valid_mask))
+        n_d = int(np.count_nonzero(val_valid_mask))
         total_clim_n += n_d
         clim_rows.append(
             {
@@ -357,7 +366,7 @@ def generate_sample_outputs(out_dir: Path) -> None:
     ridge_rows: list[dict[str, Any]] = []
     total_ridge_n = 0
     for d_idx, d_m in enumerate(depths_m):
-        n_d = int(np.count_nonzero(valid_mask))
+        n_d = int(np.count_nonzero(val_valid_mask))
         total_ridge_n += n_d
         ridge_rows.append(
             {
@@ -385,7 +394,7 @@ def generate_sample_outputs(out_dir: Path) -> None:
     )
     pd.DataFrame(ridge_rows).to_csv(metrics_dir / "baseline_ridge_val.csv", index=False)
 
-    # ARGO matchups Parquet and metrics CSV
+    # ARGO matchups Parquet and metrics CSV (including GREP and ARMOR3D competitors)
     argo_records: list[dict[str, Any]] = []
     for platform_idx, (p_num, cyc, d_str, p_lat, p_lon) in enumerate(
         [
@@ -398,6 +407,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
             g_t = float(4.0 + (28.0 - 4.0) * np.exp(-d_m / 220.0))
             p_t = float(g_t + 0.15 * np.sin(d_m / 60.0))
             o_t = float(g_t + 0.08 * np.cos(d_m / 50.0))
+            grep_t = float(g_t + 0.18 * np.sin(d_m / 45.0))
+            armor_t = float(g_t + 0.22 * np.cos(d_m / 40.0))
             argo_records.append(
                 {
                     "platform_number": p_num,
@@ -409,6 +420,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
                     "temp_obs_c": round(o_t, 2),
                     "temp_pred_c": round(p_t, 2),
                     "temp_glorys_c": round(g_t, 2),
+                    "temp_grep_c": round(grep_t, 2),
+                    "temp_armor3d_c": round(armor_t, 2),
                 }
             )
 
@@ -421,6 +434,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
         sub = argo_matches_df[argo_matches_df["depth_m"] == d_m]
         p_diff = sub["temp_pred_c"] - sub["temp_obs_c"]
         g_diff = sub["temp_glorys_c"] - sub["temp_obs_c"]
+        grep_diff = sub["temp_grep_c"] - sub["temp_obs_c"]
+        armor_diff = sub["temp_armor3d_c"] - sub["temp_obs_c"]
         argo_metric_rows.append(
             {
                 "depth_m": d_m,
@@ -431,9 +446,66 @@ def generate_sample_outputs(out_dir: Path) -> None:
                 "bias_c": round(float(np.mean(p_diff)), 2),
                 "glorys_mae_c": round(float(np.mean(np.abs(g_diff))), 2),
                 "glorys_rmse_c": round(float(np.sqrt(np.mean(g_diff**2))), 2),
+                "grep_mae_c": round(float(np.mean(np.abs(grep_diff))), 2),
+                "grep_rmse_c": round(float(np.sqrt(np.mean(grep_diff**2))), 2),
+                "armor3d_mae_c": round(float(np.mean(np.abs(armor_diff))), 2),
+                "armor3d_rmse_c": round(float(np.sqrt(np.mean(armor_diff**2))), 2),
             }
         )
     pd.DataFrame(argo_metric_rows).to_csv(metrics_dir / f"argo_{run_id}.csv", index=False)
+
+    # Headline CSV (Bay of Bengal 50-300m vs held-out ARGO, §1.1 table)
+    headline_rows = [
+        {
+            "period": "val",
+            "product": "model",
+            "n_floats": 3,
+            "n_obs": 15,
+            "rmse_c": 0.28,
+            "ci_low_c": 0.24,
+            "ci_high_c": 0.32,
+            "diff_vs_model_c": 0.00,
+            "diff_ci_low_c": 0.00,
+            "diff_ci_high_c": 0.00,
+        },
+        {
+            "period": "val",
+            "product": "glorys12",
+            "n_floats": 3,
+            "n_obs": 15,
+            "rmse_c": 0.36,
+            "ci_low_c": 0.31,
+            "ci_high_c": 0.41,
+            "diff_vs_model_c": -0.08,
+            "diff_ci_low_c": -0.14,
+            "diff_ci_high_c": -0.02,
+        },
+        {
+            "period": "val",
+            "product": "grep",
+            "n_floats": 3,
+            "n_obs": 15,
+            "rmse_c": 0.39,
+            "ci_low_c": 0.34,
+            "ci_high_c": 0.45,
+            "diff_vs_model_c": -0.11,
+            "diff_ci_low_c": -0.17,
+            "diff_ci_high_c": -0.04,
+        },
+        {
+            "period": "val",
+            "product": "armor3d",
+            "n_floats": 3,
+            "n_obs": 15,
+            "rmse_c": 0.43,
+            "ci_low_c": 0.37,
+            "ci_high_c": 0.49,
+            "diff_vs_model_c": -0.15,
+            "diff_ci_low_c": -0.21,
+            "diff_ci_high_c": -0.06,
+        },
+    ]
+    pd.DataFrame(headline_rows).to_csv(metrics_dir / f"{run_id}_headline.csv", index=False)
 
     # 3. Write evaluation report
     report_content = (
@@ -470,8 +542,8 @@ def generate_sample_outputs(out_dir: Path) -> None:
             "end": "2020-01-10",
         },
         "splits": {
-            "train": ["2010-01-01", "2018-12-01"],
-            "val": ["2019-01-01", "2020-12-01"],
+            "train": ["1993-03-02", "2017-12-01"],
+            "val": ["2018-01-01", "2020-12-01"],
             "test": ["2021-01-01", "2021-12-31"],
         },
         "test_evaluated": False,
@@ -487,6 +559,7 @@ def generate_sample_outputs(out_dir: Path) -> None:
             ],
             "argo": f"metrics/argo_{run_id}.csv",
             "argo_matches": f"metrics/argo_matches_{run_id}.parquet",
+            "headline": f"metrics/{run_id}_headline.csv",
         },
     }
 
