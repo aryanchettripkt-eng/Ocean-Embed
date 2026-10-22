@@ -195,3 +195,94 @@ def test_propose_15_depths() -> None:
     proposed = propose_15_depths_from_native(native)
     assert len(proposed) == 15
     assert proposed == sorted(proposed)
+
+
+def test_inspect_rejects_non_glorys_depths(tmp_path: Path) -> None:
+    """Verify inspect_raw_data does NOT propose depths if only GREP/ARMOR3D is present.
+
+    (PRD_AI_ML §2).
+    """
+    config_file = tmp_path / "exp.yaml"
+    config_file.write_text("project: test\n")
+    cfg = load_config(config_file)
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write a GREP file with depth coordinates
+    ds = xr.Dataset(
+        data_vars={
+            "thetao": (
+                ("depth", "lat", "lon"),
+                np.ones((5, 2, 2), dtype=np.float32) * 20.0,
+            )
+        },
+        coords={
+            "depth": [0.5, 10.0, 50.0, 100.0, 500.0],
+            "lat": [10.0, 12.0],
+            "lon": [60.0, 62.0],
+        },
+    )
+    grep_path = raw_dir / "grep" / "grep_ensemble.nc"
+    grep_path.parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(grep_path)
+
+    inspection = inspect_raw_data(config=cfg, raw_dir=raw_dir)
+    assert inspection["glorys_status"] == "missing_glorys_file"
+    assert inspection["proposed_15_depths"] == []
+
+    report_md = generate_markdown_report(inspection, cfg)
+    assert "No GLORYS reanalysis file found" in report_md
+    assert "cannot be derived from GREP or ARMOR3D" in report_md
+
+
+def test_argo_stratified_regional_holdout(tmp_path: Path) -> None:
+    """Verify ARGO holdout stratifies by region and covers Bay of Bengal years (PRD_AI_ML §7)."""
+    import pandas as pd
+
+    from oceanscope_ml.data.inspect import build_real_argo_holdout
+
+    csv_path = tmp_path / "argo_profiles.csv"
+    # Create 15 floats: 5 BoB (years 2018, 2019, 2020), 5 Arabian Sea, 5 Equatorial
+    rows = []
+    for i in range(1, 6):
+        # BoB (lat >= 5.0, lon >= 78.0)
+        yr = 2018 + (i % 3)
+        rows.append(
+            {
+                "platform_number": f"bob_{i}",
+                "latitude": 15.0,
+                "longitude": 85.0,
+                "date": f"{yr}-06-15",
+            }
+        )
+    for i in range(1, 6):
+        # Arabian Sea (lat >= 5.0, lon < 78.0)
+        rows.append(
+            {
+                "platform_number": f"as_{i}",
+                "latitude": 15.0,
+                "longitude": 65.0,
+                "date": "2019-06-15",
+            }
+        )
+    for i in range(1, 6):
+        # Equatorial (lat < 5.0)
+        rows.append(
+            {"platform_number": f"eq_{i}", "latitude": 2.0, "longitude": 75.0, "date": "2019-06-15"}
+        )
+
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+
+    holdout = build_real_argo_holdout([csv_path], seed=42, holdout_fraction=0.20)
+
+    assert holdout["total_floats"] == 15
+    assert holdout["counts_by_region"]["bay_of_bengal"] == 5
+    assert holdout["counts_by_region"]["arabian_sea"] == 5
+    assert holdout["counts_by_region"]["equatorial"] == 5
+
+    # 20% of 5 is 1 in each region
+    assert holdout["held_out_by_region"]["bay_of_bengal"] >= 1
+    assert holdout["held_out_by_region"]["arabian_sea"] >= 1
+    assert holdout["held_out_by_region"]["equatorial"] >= 1
+    assert len(holdout["held_out_floats"]) >= 3

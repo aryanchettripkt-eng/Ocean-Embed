@@ -50,9 +50,34 @@ export function MapView({
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
+    const basemapStyle: maplibregl.StyleSpecification = {
+      version: 8,
+      sources: {
+        carto_dark: {
+          type: "raster",
+          tiles: [
+            "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+            "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+            "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+          ],
+          tileSize: 256,
+          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+        },
+      },
+      layers: [
+        {
+          id: "carto-dark-layer",
+          type: "raster",
+          source: "carto_dark",
+          minzoom: 0,
+          maxzoom: 19,
+        },
+      ],
+    };
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: "https://tiles.openfreemap.org/styles/dark",
+      style: basemapStyle,
       center: [70.0, 15.0],
       zoom: 4,
       minZoom: 2,
@@ -65,6 +90,16 @@ export function MapView({
     map.on("load", () => {
       setMapLoaded(true);
     });
+    map.on("style.load", () => {
+      setMapLoaded(true);
+    });
+    map.on("error", () => {
+      setMapLoaded(true);
+    });
+
+    if (map.isStyleLoaded()) {
+      setMapLoaded(true);
+    }
 
     mapInstanceRef.current = map;
 
@@ -117,12 +152,43 @@ export function MapView({
     }
   }, [mapLoaded, mapData, vmin, vmax]);
 
+  const mapDataRef = useRef(mapData);
+  useEffect(() => {
+    mapDataRef.current = mapData;
+  }, [mapData]);
+
+  const onSelectPointRef = useRef(onSelectPoint);
+  useEffect(() => {
+    onSelectPointRef.current = onSelectPoint;
+  }, [onSelectPoint]);
+
   // Handle hover and click inspection over grid cells
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || !mapLoaded || !mapData) return;
+    if (!map) return;
+
+    const selectAtLngLat = (lng: number, lat: number) => {
+      const data = mapDataRef.current;
+      if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
+        if (data && data.lat && data.lat.length > 0 && data.lon && data.lon.length > 0) {
+          const nLat = data.lat.length;
+          const nLon = data.lon.length;
+          const r = Math.min(nLat - 1, Math.max(0, Math.floor(lat / (30.0 / nLat))));
+          const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - 40.0) / (60.0 / nLon))));
+          const snappedLat = data.lat[r];
+          const snappedLon = data.lon[c];
+          onSelectPointRef.current(snappedLat, snappedLon);
+        } else {
+          const snappedLat = Math.round(lat * 4) / 4;
+          const snappedLon = Math.round(lng * 4) / 4;
+          onSelectPointRef.current(snappedLat, snappedLon);
+        }
+      }
+    };
 
     const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+      const data = mapDataRef.current;
+      if (!data) return;
       const { lng, lat } = e.lngLat;
       const lonMin = 40.0;
       const lonMax = 100.0;
@@ -130,18 +196,18 @@ export function MapView({
       const latMax = 30.0;
 
       if (lng >= lonMin && lng <= lonMax && lat >= latMin && lat <= latMax) {
-        const nLat = mapData.lat.length;
-        const nLon = mapData.lon.length;
+        const nLat = data.lat.length;
+        const nLon = data.lon.length;
         const latRes = (latMax - latMin) / nLat;
         const lonRes = (lonMax - lonMin) / nLon;
 
         const r = Math.min(nLat - 1, Math.max(0, Math.floor((lat - latMin) / latRes)));
         const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - lonMin) / lonRes)));
 
-        const cellLat = mapData.lat[r];
-        const cellLon = mapData.lon[c];
-        const val = mapData.values[r]?.[c] ?? null;
-        const cov = mapData.coverage[r]?.[c] ?? 0;
+        const cellLat = data.lat[r];
+        const cellLon = data.lon[c];
+        const val = data.values[r]?.[c] ?? null;
+        const cov = data.coverage[r]?.[c] ?? 0;
 
         setHoverInfo({
           x: e.point.x,
@@ -161,15 +227,20 @@ export function MapView({
     };
 
     const handleClick = (e: maplibregl.MapMouseEvent) => {
-      const { lng, lat } = e.lngLat;
-      if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
-        const nLat = mapData.lat.length;
-        const nLon = mapData.lon.length;
-        const r = Math.min(nLat - 1, Math.max(0, Math.floor(lat / (30.0 / nLat))));
-        const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - 40.0) / (60.0 / nLon))));
-        const snappedLat = mapData.lat[r];
-        const snappedLon = mapData.lon[c];
-        onSelectPoint(snappedLat, snappedLon);
+      selectAtLngLat(e.lngLat.lng, e.lngLat.lat);
+    };
+
+    const handleDomClick = (e: MouseEvent) => {
+      const container = mapContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      try {
+        const coords = map.unproject([x, y]);
+        selectAtLngLat(coords.lng, coords.lat);
+      } catch {
+        // Unproject failed
       }
     };
 
@@ -177,12 +248,16 @@ export function MapView({
     map.on("mouseout", handleMouseLeave);
     map.on("click", handleClick);
 
+    const containerEl = mapContainerRef.current;
+    containerEl?.addEventListener("click", handleDomClick, true);
+
     return () => {
       map.off("mousemove", handleMouseMove);
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
+      containerEl?.removeEventListener("click", handleDomClick, true);
     };
-  }, [mapLoaded, mapData, onSelectPoint]);
+  }, []);
 
   // Update selection marker
   useEffect(() => {
@@ -251,8 +326,8 @@ export function MapView({
       : "Model prediction";
 
   return (
-    <div className={`relative w-full h-full overflow-hidden select-none ${className}`}>
-      <div ref={mapContainerRef} className="w-full h-full" />
+    <div className={`relative w-full h-full min-h-[400px] overflow-hidden select-none ${className}`}>
+      <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
 
       {/* Hover tooltip */}
       {hoverInfo && (

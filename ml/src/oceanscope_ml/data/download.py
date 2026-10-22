@@ -368,6 +368,98 @@ def download_indices_product(raw_dir: Path, manifest: dict[str, Any]) -> None:
     print(f"  Saved indices to {indices_dir}")
 
 
+def download_copernicus(
+    key: str, item: dict[str, Any], raw_dir: Path, manifest: dict[str, Any]
+) -> None:
+    """Download Copernicus Marine product via copernicusmarine toolbox."""
+    import copernicusmarine
+
+    out_subdir = raw_dir / key
+    out_subdir.mkdir(parents=True, exist_ok=True)
+    bbox = item["bbox"]
+
+    kwargs: dict[str, Any] = {
+        "dataset_id": item["dataset_id"],
+        "variables": item["variables"],
+        "minimum_longitude": bbox["lon_min"],
+        "maximum_longitude": bbox["lon_max"],
+        "minimum_latitude": bbox["lat_min"],
+        "maximum_latitude": bbox["lat_max"],
+        "start_datetime": f"{item['start_date']}T00:00:00",
+        "end_datetime": f"{item['end_date']}T23:59:59",
+        "output_directory": str(out_subdir),
+        "force_download": False,
+    }
+    if item.get("depth_range"):
+        dr = item["depth_range"]
+        kwargs["minimum_depth"] = dr["min_depth_m"]
+        kwargs["maximum_depth"] = dr["max_depth_m"]
+
+    print(f"  Downloading {key} ({item['name']}) via copernicusmarine subset...")
+    result = copernicusmarine.subset(**kwargs)
+    if isinstance(result, list):
+        for p in result:
+            record_downloaded_file(manifest, key, Path(p), raw_dir, item["source_id"])
+    elif result:
+        record_downloaded_file(manifest, key, Path(result), raw_dir, item["source_id"])
+
+
+def download_era5(item: dict[str, Any], raw_dir: Path, manifest: dict[str, Any]) -> None:
+    """Download ERA5 surface fluxes via ECMWF CDS API."""
+    import cdsapi  # type: ignore[import-not-found]
+
+    out_subdir = raw_dir / "era5"
+    out_subdir.mkdir(parents=True, exist_ok=True)
+    out_file = out_subdir / f"era5_{item['start_date']}_{item['end_date']}.nc"
+
+    if out_file.exists() and out_file.stat().st_size > 0:
+        print(f"  ERA5 file {out_file.name} already exists. Skipping.")
+        record_downloaded_file(manifest, "era5", out_file, raw_dir, item["source_id"])
+        return
+
+    print("  Downloading ERA5 surface fluxes via cdsapi...")
+    c = cdsapi.Client()
+    bbox = item["bbox"]
+    c.retrieve(
+        "reanalysis-era5-single-levels",
+        {
+            "product_type": "reanalysis",
+            "format": "netcdf",
+            "variable": item["variables"],
+            "area": [bbox["lat_max"], bbox["lon_min"], bbox["lat_min"], bbox["lon_max"]],
+            "date": f"{item['start_date']}/{item['end_date']}",
+            "time": [f"{h:02d}:00" for h in range(24)],
+        },
+        str(out_file),
+    )
+    record_downloaded_file(manifest, "era5", out_file, raw_dir, item["source_id"])
+
+
+def download_url_file(
+    url: str,
+    out_file: Path,
+    key: str,
+    source_id: str,
+    raw_dir: Path,
+    manifest: dict[str, Any],
+) -> None:
+    """Download a file from an HTTP/HTTPS URL with size verification."""
+    import urllib.request
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    if out_file.exists() and out_file.stat().st_size > 0:
+        print(f"  File {out_file.name} already exists. Skipping.")
+        record_downloaded_file(manifest, key, out_file, raw_dir, source_id)
+        return
+
+    print(f"  Fetching {key} from {url}...")
+    req = urllib.request.Request(url, headers={"User-Agent": "OceanScope-AI/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(out_file, "wb") as out:
+        out.write(resp.read())
+
+    record_downloaded_file(manifest, key, out_file, raw_dir, source_id)
+
+
 def execute_download(
     config: ExperimentConfig,
     raw_dir: Path,
@@ -409,16 +501,79 @@ def execute_download(
             )
             sys.exit(1)
 
-    # Download indices if selected
-    if "indices" in plan:
+    # 3. Execute downloads product-by-product
+    for key, item in plan.items():
         try:
-            download_indices_product(raw_dir, manifest)
+            if key in ["glorys12", "sla", "sst", "sss", "grep", "armor3d"]:
+                download_copernicus(key, item, raw_dir, manifest)
+            elif key == "era5":
+                download_era5(item, raw_dir, manifest)
+            elif key == "ccmp":
+                # Remote Sensing Systems CCMP daily V03.0
+                out_path = (
+                    raw_dir / "ccmp" / f"ccmp_v03.0_{item['start_date']}_{item['end_date']}.nc"
+                )
+                year = item["start_date"][:4]
+                d_str = item["start_date"].replace("-", "")
+                ccmp_url = f"{item['source_url']}{year}/CCMP_RT_Wind_Analysis_{d_str}_V03.0_L4.0.nc"
+                download_url_file(
+                    url=ccmp_url,
+                    out_file=out_path,
+                    key="ccmp",
+                    source_id=item["source_id"],
+                    raw_dir=raw_dir,
+                    manifest=manifest,
+                )
+            elif key == "oscar":
+                out_path = raw_dir / "oscar" / f"oscar_{item['start_date']}_{item['end_date']}.nc"
+                download_url_file(
+                    url=f"https://podaac-opendap.jpl.nasa.gov/opendap/allData/oscar/preview/L4/oscar_third_deg/oscar_vel{item['start_date'][:4]}.nc.gz",
+                    out_file=out_path,
+                    key="oscar",
+                    source_id=item["source_id"],
+                    raw_dir=raw_dir,
+                    manifest=manifest,
+                )
+            elif key == "gebco":
+                out_path = raw_dir / "gebco" / "gebco_2023_sub_ice_topo.nc"
+                download_url_file(
+                    url="https://www.bodc.ac.uk/data/open_download/gebco/gebco_2023/geotiff/",
+                    out_file=out_path,
+                    key="gebco",
+                    source_id=item["source_id"],
+                    raw_dir=raw_dir,
+                    manifest=manifest,
+                )
+            elif key == "woa23":
+                out_path = raw_dir / "woa23" / "woa23_decav_t00_04.nc"
+                download_url_file(
+                    url="https://www.ncei.noaa.gov/data/oceans/woa/WOA23/DATA/temperature/netcdf/decav/0.25/woa23_decav_t00_04.nc",
+                    out_file=out_path,
+                    key="woa23",
+                    source_id=item["source_id"],
+                    raw_dir=raw_dir,
+                    manifest=manifest,
+                )
+            elif key == "argo":
+                out_path = raw_dir / "argo" / "argo_indian_ocean_profiles.nc"
+                download_url_file(
+                    url="https://data-argo.ifremer.fr/geo/indian_ocean/",
+                    out_file=out_path,
+                    key="argo",
+                    source_id=item["source_id"],
+                    raw_dir=raw_dir,
+                    manifest=manifest,
+                )
+            elif key == "indices":
+                download_indices_product(raw_dir, manifest)
+            else:
+                raise RuntimeError(f"No downloader implemented for product '{key}'")
         except Exception as exc:
-            print(f"[ERROR] Failed downloading indices: {exc}", file=sys.stderr)
+            print(f"\n[ERROR] Download failed for product '{key}': {exc}", file=sys.stderr)
             sys.exit(1)
 
     save_manifest(raw_dir, manifest)
-    print("\nDownload execution completed.")
+    print("\nDownload execution completed successfully.")
 
 
 def main() -> None:

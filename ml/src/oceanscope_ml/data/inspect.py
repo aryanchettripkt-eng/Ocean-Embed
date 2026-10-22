@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig, load_config
@@ -164,13 +165,31 @@ def propose_15_depths_from_native(native_depths: list[float]) -> list[float]:
     return sorted(proposed)
 
 
+def classify_argo_region(lat: float, lon: float) -> str:
+    """Classify ARGO profile location into Indian Ocean subregions (PRD_AI_ML §6.3)."""
+    if lat >= 5.0 and lon >= 78.0:
+        return "bay_of_bengal"
+    elif lat >= 5.0 and lon < 78.0:
+        return "arabian_sea"
+    else:
+        return "equatorial"
+
+
 def build_real_argo_holdout(
     argo_files: list[Path],
     seed: int = 42,
     holdout_fraction: float = 0.20,
 ) -> dict[str, Any]:
-    """Build stratified holdout from real ARGO platform numbers extracted from downloaded files."""
-    platform_numbers: set[str] = set()
+    """Build stratified holdout from real ARGO platform numbers extracted from downloaded files.
+
+    PRD_AI_ML §7:
+    - 20% float hold-out.
+    - Stratified by region (Bay of Bengal, Arabian Sea, Equatorial).
+    - Bay of Bengal has held-out floats across every year present in data.
+    - Reports counts per region.
+    """
+    float_regions: dict[str, list[str]] = {}
+    float_bob_years: dict[str, set[int]] = {}
 
     for p in argo_files:
         try:
@@ -178,44 +197,172 @@ def build_real_argo_holdout(
                 with xr.open_dataset(p) as ds:
                     if "platform_number" in ds.variables:
                         pns = ds["platform_number"].values
-                        for pn in np.ravel(pns):
+                        lats = ds["LATITUDE"].values if "LATITUDE" in ds.variables else None
+                        lons = ds["LONGITUDE"].values if "LONGITUDE" in ds.variables else None
+                        times = (
+                            ds["JULD"].values
+                            if "JULD" in ds.variables
+                            else (ds["TIME"].values if "TIME" in ds.variables else None)
+                        )
+
+                        flat_pns = np.ravel(pns)
+                        flat_lats = np.ravel(lats) if lats is not None else [None] * len(flat_pns)
+                        flat_lons = np.ravel(lons) if lons is not None else [None] * len(flat_pns)
+                        flat_times = (
+                            np.ravel(times) if times is not None else [None] * len(flat_pns)
+                        )
+
+                        for pn, lat_val, lon_val, t_val in zip(
+                            flat_pns, flat_lats, flat_lons, flat_times
+                        ):
                             s = (
                                 pn.decode("utf-8").strip()
                                 if isinstance(pn, bytes)
                                 else str(pn).strip()
                             )
-                            if s:
-                                platform_numbers.add(s)
-            elif p.suffix == ".csv":
-                import pandas as pd
+                            if not s:
+                                continue
+                            if s not in float_regions:
+                                float_regions[s] = []
+                                float_bob_years[s] = set()
 
+                            if (
+                                lat_val is not None
+                                and lon_val is not None
+                                and not np.isnan(lat_val)
+                                and not np.isnan(lon_val)
+                            ):
+                                reg = classify_argo_region(float(lat_val), float(lon_val))
+                                float_regions[s].append(reg)
+                                if reg == "bay_of_bengal" and t_val is not None:
+                                    try:
+                                        yr = pd.to_datetime(t_val).year
+                                        float_bob_years[s].add(int(yr))
+                                    except Exception:
+                                        pass
+            elif p.suffix == ".csv":
                 df = pd.read_csv(p)
                 if "platform_number" in df.columns:
-                    for s in df["platform_number"].dropna().unique():
-                        platform_numbers.add(str(s).strip())
+                    for _, row in df.iterrows():
+                        pn_val = row["platform_number"]
+                        if pd.isna(pn_val):
+                            continue
+                        s = str(pn_val).strip()
+                        if not s:
+                            continue
+                        if s not in float_regions:
+                            float_regions[s] = []
+                            float_bob_years[s] = set()
+
+                        lat_val = (
+                            row.get("latitude") if "latitude" in df.columns else row.get("lat")
+                        )
+                        lon_val = (
+                            row.get("longitude") if "longitude" in df.columns else row.get("lon")
+                        )
+                        if (
+                            lat_val is not None
+                            and lon_val is not None
+                            and not pd.isna(lat_val)
+                            and not pd.isna(lon_val)
+                        ):
+                            reg = classify_argo_region(float(lat_val), float(lon_val))
+                            float_regions[s].append(reg)
+                            if reg == "bay_of_bengal":
+                                date_val = row.get("date") or row.get("time")
+                                if date_val and not pd.isna(date_val):
+                                    try:
+                                        yr = pd.to_datetime(date_val).year
+                                        float_bob_years[s].add(int(yr))
+                                    except Exception:
+                                        pass
         except Exception as exc:
             logger.warning("Error reading ARGO platforms from %s: %s", p, exc)
 
-    if not platform_numbers:
+    if not float_regions:
         return {
             "status": "pending_download",
             "message": "No ARGO profiles found in raw data to extract platform numbers",
             "total_floats": 0,
             "held_out_floats": [],
+            "counts_by_region": {},
+            "held_out_by_region": {},
         }
 
+    # Assign primary region to each float (majority of observations,
+    # fallback to bay_of_bengal if tied/present)
+    floats_by_region: dict[str, list[str]] = {
+        "bay_of_bengal": [],
+        "arabian_sea": [],
+        "equatorial": [],
+    }
+
+    for s, reg_list in float_regions.items():
+        if not reg_list:
+            # Fallback if no coordinates available
+            floats_by_region["equatorial"].append(s)
+        elif "bay_of_bengal" in reg_list:
+            floats_by_region["bay_of_bengal"].append(s)
+        else:
+            primary_reg = max(set(reg_list), key=reg_list.count)
+            floats_by_region[primary_reg].append(s)
+
     rng = np.random.default_rng(seed)
-    float_list = sorted(platform_numbers)
-    n_holdout = max(1, int(round(len(float_list) * holdout_fraction)))
-    shuffled = rng.permutation(float_list).tolist()
-    held_out = sorted(shuffled[:n_holdout])
+    all_held_out: set[str] = set()
+    held_out_by_reg: dict[str, list[str]] = {}
+    counts_by_reg: dict[str, int] = {}
+
+    # 1. Stratified selection for Bay of Bengal (ensuring float held out in every year)
+    bob_floats = sorted(floats_by_region["bay_of_bengal"])
+    counts_by_reg["bay_of_bengal"] = len(bob_floats)
+    n_bob_target = max(1, int(round(len(bob_floats) * holdout_fraction))) if bob_floats else 0
+
+    bob_held: set[str] = set()
+    if bob_floats:
+        # Group BoB floats by years they cover
+        all_bob_years: set[int] = set()
+        for f_id in bob_floats:
+            all_bob_years.update(float_bob_years.get(f_id, set()))
+
+        # For every year, pick at least one float if possible
+        for yr in sorted(all_bob_years):
+            candidate_floats = [
+                f for f in bob_floats if yr in float_bob_years.get(f, set()) and f not in bob_held
+            ]
+            if candidate_floats:
+                shuffled_candidates = rng.permutation(candidate_floats).tolist()
+                bob_held.add(shuffled_candidates[0])
+
+        # If we need more floats to reach 20%, pick remaining at random
+        remaining_bob = [f for f in bob_floats if f not in bob_held]
+        if len(bob_held) < n_bob_target and remaining_bob:
+            shuffled_rem = rng.permutation(remaining_bob).tolist()
+            bob_held.update(shuffled_rem[: n_bob_target - len(bob_held)])
+
+    held_out_by_reg["bay_of_bengal"] = sorted(bob_held)
+    all_held_out.update(bob_held)
+
+    # 2. Stratified selection for Arabian Sea and Equatorial
+    for reg in ["arabian_sea", "equatorial"]:
+        r_floats = sorted(floats_by_region[reg])
+        counts_by_reg[reg] = len(r_floats)
+        n_target = max(1, int(round(len(r_floats) * holdout_fraction))) if r_floats else 0
+        if r_floats:
+            shuffled_r = rng.permutation(r_floats).tolist()
+            reg_held = sorted(shuffled_r[:n_target])
+        else:
+            reg_held = []
+        held_out_by_reg[reg] = reg_held
+        all_held_out.update(reg_held)
 
     return {
         "seed": seed,
         "holdout_fraction": holdout_fraction,
-        "total_floats": len(float_list),
-        "total_held_out": len(held_out),
-        "held_out_floats": held_out,
+        "total_floats": len(float_regions),
+        "total_held_out": len(all_held_out),
+        "counts_by_region": counts_by_reg,
+        "held_out_by_region": {k: len(v) for k, v in held_out_by_reg.items()},
+        "held_out_floats": sorted(all_held_out),
         "generated_utc": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -235,12 +382,19 @@ def inspect_raw_data(
     for f in files:
         f_info = inspect_file(f)
         inspected_files.append(f_info)
-        if "glorys" in f.name.lower() and f_info.get("native_depths"):
-            glorys_native_depths = f_info["native_depths"]
-        elif not glorys_native_depths and f_info.get("native_depths"):
+        # GLORYS12 is the authoritative source for the native 15 depths (PRD_AI_ML §2, §4.1)
+        if ("glorys" in f.name.lower() or "001_030" in f.name.lower()) and f_info.get(
+            "native_depths"
+        ):
             glorys_native_depths = f_info["native_depths"]
 
-    proposed_15 = propose_15_depths_from_native(glorys_native_depths)
+    # PRD_AI_ML §2: Depths must come exclusively from GLORYS12. Do NOT fall back to GREP or ARMOR3D.
+    if glorys_native_depths:
+        proposed_15 = propose_15_depths_from_native(glorys_native_depths)
+        glorys_status = "extracted_from_glorys"
+    else:
+        proposed_15 = []
+        glorys_status = "missing_glorys_file"
 
     argo_files = [f for f in files if "argo" in f.name.lower() or "argo" in str(f.parent).lower()]
     argo_holdout = build_real_argo_holdout(
@@ -253,12 +407,13 @@ def inspect_raw_data(
     return {
         "inspected_utc": datetime.now(timezone.utc).isoformat(),
         "raw_dir": str(raw_dir.resolve()),
-        "file_count": len(files),
-        "files": inspected_files,
-        "glorys_native_depths": glorys_native_depths,
+        "glorys_status": glorys_status,
         "proposed_15_depths": proposed_15,
         "argo_holdout": argo_holdout,
-        "manifest_products": manifest.get("products", {}),
+        "manifest": manifest,
+        "files": inspected_files,
+        "file_count": len(files),
+        "glorys_native_depths": glorys_native_depths,
     }
 
 
@@ -329,7 +484,7 @@ def generate_markdown_report(
     report.append("## 2. Inspected Native Depth Coordinate")
     report.append("")
     if prop_depths:
-        report.append("Proposed 15 depth tiers selected from native coordinates:")
+        report.append("Proposed 15 depth tiers selected from GLORYS12 native coordinates:")
         report.append("")
         report.append("| Level # | Native Depth (m) | Tier Target (m) |")
         report.append("|---|---|---|")
@@ -337,11 +492,16 @@ def generate_markdown_report(
             target = TARGET_DEPTH_TIERS_M[i - 1] if i - 1 < len(TARGET_DEPTH_TIERS_M) else "N/A"
             report.append(f"| {i} | {d:.4f} m | ~{target} m |")
     else:
-        report.append("*No 3D ocean reanalysis file was present in raw data.*")
+        report.append(
+            "*No GLORYS reanalysis file found in raw directory. Under PRD_AI_ML §2, "
+            "the 15 depth tiers must be extracted directly from GLORYS12 native depth "
+            "coordinates and cannot be derived from GREP or ARMOR3D. "
+            "Proposing depths is deferred until GLORYS download completes.*"
+        )
     report.append("")
     report.append("---")
     report.append("")
-    report.append("## 3. ARGO Float Holdout Status")
+    report.append("## 3. ARGO Float Holdout Status (Stratified by Region)")
     report.append("")
     argo_status = inspection.get("argo_holdout", {})
     if argo_status.get("status") == "pending_download":
@@ -356,6 +516,15 @@ def generate_markdown_report(
             f"Extracted {tot} unique ARGO platforms from downloaded data. "
             f"Held out {held} floats (20%) using seed={argo_status.get('seed', 42)}."
         )
+        report.append("")
+        report.append("| Region | Total Floats | Held Out (20%) |")
+        report.append("|---|---|---|")
+        counts_reg = argo_status.get("counts_by_region", {})
+        held_reg = argo_status.get("held_out_by_region", {})
+        for reg_key in ["bay_of_bengal", "arabian_sea", "equatorial"]:
+            tot_r = counts_reg.get(reg_key, 0)
+            h_r = held_reg.get(reg_key, 0)
+            report.append(f"| {reg_key.replace('_', ' ').title()} | {tot_r} | {h_r} |")
     report.append("")
     report.append("---")
     report.append("")

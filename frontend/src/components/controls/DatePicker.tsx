@@ -24,6 +24,7 @@ interface DatePickerProps {
     test?: string[];
   } | null;
   onChange: (date: string) => void;
+  prefetchAhead?: (date: string) => void;
   className?: string;
 }
 
@@ -60,6 +61,7 @@ export function DatePicker({
   latestLiveDate,
   splits,
   onChange,
+  prefetchAhead,
   className = "",
 }: DatePickerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -78,18 +80,18 @@ export function DatePicker({
   useEffect(() => {
     if (!isPlaying) return;
 
+    // Prefetch immediately when starting play
+    prefetchAhead?.(daysToDateStr(currentDays));
+
     const interval = setInterval(() => {
       const nextDays = currentDays + 1;
-      if (nextDays > endDays) {
-        // Loop back to start
-        onChange(daysToDateStr(startDays));
-      } else {
-        onChange(daysToDateStr(nextDays));
-      }
+      const targetStr = nextDays > endDays ? daysToDateStr(startDays) : daysToDateStr(nextDays);
+      onChange(targetStr);
+      prefetchAhead?.(targetStr);
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentDays, endDays, startDays, onChange]);
+  }, [isPlaying, currentDays, endDays, startDays, onChange, prefetchAhead]);
 
   const canStepPrev = currentDays > startDays;
   const canStepNext = currentDays < endDays;

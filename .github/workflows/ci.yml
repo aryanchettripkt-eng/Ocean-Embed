@@ -185,6 +185,14 @@ jobs:
         if: ${{ needs.filter.outputs.frontend == 'true' }}
         run: pnpm test
 
+      - name: Install Playwright Browsers
+        if: ${{ needs.filter.outputs.frontend == 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run E2E Tests
+        if: ${{ needs.filter.outputs.frontend == 'true' }}
+        run: pnpm e2e
+
       - name: Build
         if: ${{ needs.filter.outputs.frontend == 'true' }}
         run: pnpm build

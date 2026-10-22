@@ -22,19 +22,48 @@ class DataLoader:
         self.manifest: dict[str, Any] | None = None
         self._load_error: str | None = None
         self._current_hf_revision: str | None = None
+        self._current_hf_commit_sha: str | None = None
         self.load()
 
     def _get_schema_path(self) -> Path:
         return Path(__file__).resolve().parent.parent / "schemas" / "manifest.schema.json"
 
     def _maybe_download_from_hf(self) -> None:
-        """Download dataset from HF if manifest.json is absent or revision changed."""
+        """Download dataset from HF if absent, revision changed, or commit updated."""
+        if not settings.HF_DATASET_REPO:
+            return
+
         manifest_file = self.data_dir / "manifest.json"
-        needs_download = (not manifest_file.exists()) or (
+        needs_download = not manifest_file.exists()
+
+        if (
             settings.HF_DATASET_REVISION
             and self._current_hf_revision != settings.HF_DATASET_REVISION
-        )
-        if needs_download and settings.HF_DATASET_REPO:
+        ):
+            needs_download = True
+
+        remote_sha: str | None = None
+        if not needs_download:
+            try:
+                from huggingface_hub import HfApi
+
+                api = HfApi(token=settings.HF_TOKEN)
+                info = api.dataset_info(
+                    repo_id=settings.HF_DATASET_REPO,
+                    revision=settings.HF_DATASET_REVISION or "main",
+                )
+                remote_sha = getattr(info, "sha", None)
+                if remote_sha and self._current_hf_commit_sha != remote_sha:
+                    logger.info(
+                        "New HF commit detected: %s (was %s)",
+                        remote_sha,
+                        self._current_hf_commit_sha,
+                    )
+                    needs_download = True
+            except Exception as e:
+                logger.debug("Could not check remote HF commit sha: %s", e)
+
+        if needs_download:
             try:
                 from huggingface_hub import snapshot_download
 
@@ -52,6 +81,8 @@ class DataLoader:
                     token=settings.HF_TOKEN,
                 )
                 self._current_hf_revision = settings.HF_DATASET_REVISION
+                if remote_sha:
+                    self._current_hf_commit_sha = remote_sha
             except Exception as e:
                 logger.error("Failed to download dataset from HF: %s", e)
                 self._load_error = f"Failed to download dataset from HF: {e}"

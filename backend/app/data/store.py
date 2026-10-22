@@ -207,22 +207,48 @@ class OutputStore:
         return None
 
     def _compute_color_ranges(self, ds: xr.Dataset, depths: list[float]) -> list[ColorRange]:
-        """Compute 2nd/98th percentile of temp_glorys per depth over published dates."""
+        """Compute 2nd/98th percentile of temp_glorys per depth over published dates.
+
+        Avoids loading all dates across large time series (cold-start mitigation).
+        Checks precomputed ranges first, otherwise subsamples up to 30 days along time.
+        """
         if self._cached_color_ranges is not None:
             return self._cached_color_ranges
 
-        ranges: list[ColorRange] = []
+        # Check if manifest or zarr attributes carry precomputed color ranges
+        manifest_cr = self.loader.manifest.get("color_ranges") if self.loader.manifest else None
+        if manifest_cr and isinstance(manifest_cr, list):
+            try:
+                ranges = [ColorRange(**r) for r in manifest_cr]
+                self._cached_color_ranges = ranges
+                return ranges
+            except Exception:
+                pass
+
+        attrs_cr = ds.attrs.get("color_ranges")
+        if attrs_cr:
+            try:
+                raw_list = json.loads(attrs_cr) if isinstance(attrs_cr, str) else attrs_cr
+                ranges = [ColorRange(**r) for r in raw_list]
+                self._cached_color_ranges = ranges
+                return ranges
+            except Exception:
+                pass
+
+        computed_ranges: list[ColorRange] = []
         glorys_var = ds["temp_glorys"]
+        n_times = len(ds["time"])
+        time_stride = max(1, n_times // 30)
 
         for d_idx, d_m in enumerate(depths):
-            vals = glorys_var.isel(depth=d_idx).values
+            vals = glorys_var.isel(depth=d_idx, time=slice(None, None, time_stride)).values
             valid_vals = vals[~np.isnan(vals)]
             if len(valid_vals) > 0:
                 vmin = float(np.percentile(valid_vals, 2))
                 vmax = float(np.percentile(valid_vals, 98))
             else:
                 vmin, vmax = 0.0, 35.0
-            ranges.append(
+            computed_ranges.append(
                 ColorRange(
                     depth_m=float(d_m),
                     vmin=round(vmin, 2),
@@ -230,8 +256,8 @@ class OutputStore:
                 )
             )
 
-        self._cached_color_ranges = ranges
-        return ranges
+        self._cached_color_ranges = computed_ranges
+        return computed_ranges
 
     def _get_latest_live_date(self, ds: xr.Dataset) -> str | None:
         """Extract the latest live date from split_of_each_date attribute if present."""

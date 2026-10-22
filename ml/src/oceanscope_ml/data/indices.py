@@ -11,19 +11,25 @@ from typing import Any
 
 import pandas as pd
 
-# NOAA PSL weekly/monthly anomaly index
-NINO34_URL = "https://psl.noaa.gov/data/correlation/nina34.anom.data"
+# NOAA CPC weekly SST anomaly index (PRD_AI_ML §3)
+NINO34_CPC_URL = "https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices"
+# NOAA PSL monthly anomaly index (fallback)
+NINO34_PSL_URL = "https://psl.noaa.gov/data/correlation/nina34.anom.data"
+NINO34_URL = NINO34_CPC_URL
 # Australian BoM Wheeler-Hendon daily MJO index (HTTPS)
 MJO_URL = "https://www.bom.gov.au/climate/mjo/graphics/rmm.74toRealtime.txt"
 
 
 def fetch_nino34(url: str = NINO34_URL) -> pd.DataFrame:
-    """Fetch and parse Niño 3.4 SST anomaly index from NOAA PSL."""
+    """Fetch and parse Niño 3.4 SST anomaly index from NOAA CPC (weekly) or PSL."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "OceanScope-AI/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             content = resp.read().decode("utf-8")
     except Exception as exc:
+        if url != NINO34_PSL_URL:
+            # Fall back to PSL anomaly
+            return fetch_nino34(NINO34_PSL_URL)
         raise RuntimeError(f"Failed to fetch Niño 3.4 anomaly from {url}: {exc}") from exc
 
     lines = [line.strip() for line in content.splitlines() if line.strip()]
@@ -31,21 +37,39 @@ def fetch_nino34(url: str = NINO34_URL) -> pd.DataFrame:
         return pd.DataFrame(columns=["date", "nino34"])
 
     rows: list[dict[str, Any]] = []
-    # PSL table format: Header line with start/end years,
-    # then Year followed by 12 monthly anomaly values
-    for line in lines[1:]:
-        parts = line.split()
-        if len(parts) >= 13 and parts[0].isdigit():
-            year = int(parts[0])
-            for month in range(1, 13):
-                val_str = parts[month]
+
+    # Check if this is NOAA CPC weekly format (starts with WEEK or date like 03JAN1990)
+    if "sstoi" in url or any(len(parts) >= 9 for parts in [lines[0].split()]):
+        for line in lines:
+            parts = line.split()
+            if not parts:
+                continue
+            date_token = parts[0]
+            if len(date_token) >= 8 and date_token[-4:].isdigit():
                 try:
-                    val = float(val_str)
-                    if val > -90.0:  # Missing values are -99.99
-                        date_str = f"{year}-{month:02d}-15"
-                        rows.append({"date": date_str, "nino34": val})
-                except ValueError:
+                    dt = pd.to_datetime(date_token, format="%d%b%Y")
+                    # Niño 3.4 anomaly is typically the last column
+                    anom_val = float(parts[-1])
+                    if anom_val > -90.0:
+                        rows.append({"date": dt, "nino34": anom_val})
+                except Exception:
                     continue
+
+    if not rows:
+        # Fallback to PSL monthly table format
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) >= 13 and parts[0].isdigit():
+                year = int(parts[0])
+                for month in range(1, 13):
+                    val_str = parts[month]
+                    try:
+                        val = float(val_str)
+                        if val > -90.0:  # Missing values are -99.99
+                            date_str = f"{year}-{month:02d}-15"
+                            rows.append({"date": pd.to_datetime(date_str), "nino34": val})
+                    except ValueError:
+                        continue
 
     df = pd.DataFrame(rows)
     if not df.empty:

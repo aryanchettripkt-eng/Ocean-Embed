@@ -504,6 +504,30 @@ def generate_sample_outputs(out_dir: Path) -> None:
             "diff_ci_low_c": -0.21,
             "diff_ci_high_c": -0.06,
         },
+        {
+            "period": "test",
+            "product": "model",
+            "n_floats": 0,
+            "n_obs": 0,
+            "rmse_c": None,
+            "ci_low_c": None,
+            "ci_high_c": None,
+            "diff_vs_model_c": None,
+            "diff_ci_low_c": None,
+            "diff_ci_high_c": None,
+        },
+        {
+            "period": "test",
+            "product": "grep",
+            "n_floats": 0,
+            "n_obs": 0,
+            "rmse_c": None,
+            "ci_low_c": None,
+            "ci_high_c": None,
+            "diff_vs_model_c": None,
+            "diff_ci_low_c": None,
+            "diff_ci_high_c": None,
+        },
     ]
     pd.DataFrame(headline_rows).to_csv(metrics_dir / f"{run_id}_headline.csv", index=False)
 
