@@ -16,6 +16,7 @@ interface DatePickerProps {
   date: string;
   startDate: string;
   endDate: string;
+  currentSplit?: string | null;
   latestLiveDate?: string | null;
   splits?: {
     train?: string[];
@@ -37,13 +38,8 @@ function daysToDateStr(days: number): string {
 
 function getSplitForDate(
   date: string,
-  splits?: { train?: string[]; val?: string[]; test?: string[] } | null,
-  latestLiveDate?: string | null
-): string {
-  if (latestLiveDate && date >= "2020-01-09") {
-    // If date is within the live window (e.g. last 2 days of sample outputs)
-    return "live";
-  }
+  splits?: { train?: string[]; val?: string[]; test?: string[] } | null
+): string | null {
   if (splits?.test && splits.test.length >= 2 && date >= splits.test[0] && date <= splits.test[1]) {
     return "test";
   }
@@ -53,13 +49,14 @@ function getSplitForDate(
   if (splits?.train && splits.train.length >= 2 && date >= splits.train[0] && date <= splits.train[1]) {
     return "train";
   }
-  return "val";
+  return null;
 }
 
 export function DatePicker({
   date,
   startDate,
   endDate,
+  currentSplit,
   latestLiveDate,
   splits,
   onChange,
@@ -75,7 +72,7 @@ export function DatePicker({
   const currentSliderValue = Math.max(0, Math.min(totalDays, currentDays - startDays));
 
   // Determine split of current date
-  const split = getSplitForDate(date, splits, latestLiveDate);
+  const split = currentSplit ?? getSplitForDate(date, splits);
 
   // Animation player: 2 frames/sec (500ms per frame)
   useEffect(() => {

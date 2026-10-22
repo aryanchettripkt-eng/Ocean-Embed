@@ -79,7 +79,7 @@ export default function AboutPage() {
     },
     {
       name: "ERA5 Reanalysis",
-      param: "Atmospheric Heat Fluxes & 2m Temperature",
+      param: "Atmospheric Surface Heat Fluxes",
       provider: "Copernicus Climate Change Service (CDS) / ECMWF",
       link: "https://cds.climate.copernicus.eu",
       citation: "Hersbach et al. (2020). The ERA5 global reanalysis. Q.J.R. Meteorol. Soc.",
@@ -166,10 +166,10 @@ export default function AboutPage() {
               <span className="text-slate-400 block text-[10px] font-sans">Run ID</span>
               <span className="font-semibold text-slate-100">{meta.run_id}</span>
             </div>
-            <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
+            <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-855">
               <span className="text-slate-400 block text-[10px] font-sans">Spatial Grid</span>
               <span className="font-semibold text-slate-100">
-                0.25° ({meta.region.lat_min}°–{meta.region.lat_max}°N, {meta.region.lon_min}°–{meta.region.lon_max}°E)
+                {meta.grid_resolution_deg}° ({meta.region.lat_min}°–{meta.region.lat_max}°N, {meta.region.lon_min}°–{meta.region.lon_max}°E)
               </span>
             </div>
             <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
@@ -218,7 +218,7 @@ export default function AboutPage() {
                 <strong className="text-slate-100">Multi-Modal Surface Forcing:</strong> Inputs comprise sea level anomaly (SLA), sea surface temperature (SST), sea surface salinity (SSS), vector wind stress (CCMP), ocean surface currents (OSCAR), and surface heat flux anomalies (ERA5) stacked with 7-day and 60-day lag histories.
               </li>
               <li>
-                <strong className="text-slate-100">Climate Teleconnection &amp; Float Conditioning:</strong> Basin-wide climate indices (Indian Ocean Dipole DMI, ENSO Niño 3.4) and sparse ARGO profiles from the preceding 10 days are encoded into global conditioning vectors.
+                <strong className="text-slate-100">Climate Teleconnection &amp; Float Conditioning:</strong> Basin-wide climate indices (Indian Ocean Dipole DMI, ENSO Niño 3.4) are broadcast across the grid as spatial scalar channels, alongside recent ARGO profile observations.
               </li>
               <li>
                 <strong className="text-slate-100">U-Net Architecture:</strong> A small, highly regularized 2D U-Net processes multi-channel spatial fields to predict temperature anomalies relative to the World Ocean Atlas 2023 (WOA23) climatological mean across 15 depth tiers simultaneously.

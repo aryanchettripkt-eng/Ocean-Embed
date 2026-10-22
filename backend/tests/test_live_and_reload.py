@@ -131,3 +131,11 @@ def test_manifest_reload_broken_keeps_previous(tmp_path: Path, monkeypatch: Any)
     assert res2.status_code == 200
     assert res2.json()["run_id"] == "stable_run_v1"
     assert test_loader.is_loaded is True
+
+    # Manifest disappears entirely: must also keep previous valid manifest
+    manifest_file.unlink()
+    test_loader.load()
+    res3 = client.get("/api/v1/health")
+    assert res3.status_code == 200
+    assert res3.json()["run_id"] == "stable_run_v1"
+    assert test_loader.is_loaded is True

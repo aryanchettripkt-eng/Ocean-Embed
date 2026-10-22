@@ -29,6 +29,19 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Health Schemas
+# ---------------------------------------------------------------------------
+
+
+class HealthResponse(BaseModel):
+    """Response model for GET /health."""
+
+    status: str = "ok"
+    run_id: str | None = None
+    data_loaded: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Meta Schemas
 # ---------------------------------------------------------------------------
 
@@ -138,7 +151,7 @@ class MapResponse(BaseModel):
     date: str
     depth_m: float
     field: Literal["pred", "glorys", "error"]
-    split: str
+    split: str | None = None
     units: str = "degC"
     lat: list[float]
     lon: list[float]
@@ -160,7 +173,7 @@ class ProfileResponse(BaseModel):
     date: str
     lat: float
     lon: float
-    split: str
+    split: str | None = None
     coverage: int
     depths_m: list[float]
     pred: list[float | None]
@@ -184,7 +197,7 @@ class TimeseriesResponse(BaseModel):
     dates: list[str]
     pred: list[float | None]
     glorys: list[float | None]
-    split: list[str]
+    split: list[str | None]
 
 
 # ---------------------------------------------------------------------------
@@ -250,11 +263,11 @@ class ArgoMetricRow(BaseModel):
     depth_m: float
     n_profiles: int
     n_obs: int
-    mae_c: float
-    rmse_c: float
-    bias_c: float
-    glorys_mae_c: float
-    glorys_rmse_c: float
+    mae_c: float | None = None
+    rmse_c: float | None = None
+    bias_c: float | None = None
+    glorys_mae_c: float | None = None
+    glorys_rmse_c: float | None = None
     grep_mae_c: float | None = None
     grep_rmse_c: float | None = None
     armor3d_mae_c: float | None = None
@@ -301,14 +314,14 @@ class HeadlineRow(BaseModel):
 
     period: str
     product: str
-    n_floats: int
-    n_obs: int
-    rmse_c: float
-    ci_low_c: float
-    ci_high_c: float
-    diff_vs_model_c: float
-    diff_ci_low_c: float
-    diff_ci_high_c: float
+    n_floats: int | None = None
+    n_obs: int | None = None
+    rmse_c: float | None = None
+    ci_low_c: float | None = None
+    ci_high_c: float | None = None
+    diff_vs_model_c: float | None = None
+    diff_ci_low_c: float | None = None
+    diff_ci_high_c: float | None = None
 
 
 class HeadlineResponse(BaseModel):

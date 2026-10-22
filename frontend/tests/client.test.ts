@@ -36,7 +36,7 @@ describe("apiClient and MSW handlers", () => {
   it("fetches headline pre-registered criterion table", async () => {
     const headline = await apiClient.getHeadline();
     expect(headline.met).toBe(true);
-    expect(headline.rows.length).toBe(4);
+    expect(headline.rows.length).toBe(6);
     expect(headline.criterion).toContain("Bay of Bengal, 50–300 m");
   });
 

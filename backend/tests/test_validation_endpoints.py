@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+import app.api.v1.validation as validation_module
 import app.data.loader as loader_module
 from app.data.loader import DataLoader
 from app.data.store import OutputStore
@@ -147,8 +148,8 @@ def test_argo_profiles_markers_and_filters() -> None:
     assert res_inv.json()["error"]["code"] == "out_of_region"
 
 
-def test_headline_criterion_and_met() -> None:
-    """Verify /headline returns pre-registered table, exact text, and met=True (§4.8b)."""
+def test_headline_criterion_and_met(tmp_path: Path, monkeypatch: Any) -> None:
+    """Verify /headline handles n/a rows and computes met=True, met=False, and met=None (§4.8b)."""
     client = TestClient(app)
     response = client.get("/api/v1/headline")
     assert response.status_code == 200
@@ -157,16 +158,51 @@ def test_headline_criterion_and_met() -> None:
 
     data = response.json()
     assert data["criterion"] == HEADLINE_CRITERION
+    # In default fixtures, val competitors all have diff_ci_high_c < 0.0 -> met is True
     assert data["met"] is True
-    assert len(data["rows"]) == 4
+    assert len(data["rows"]) == 6
 
-    products = [r["product"] for r in data["rows"]]
-    assert products == ["model", "glorys12", "grep", "armor3d"]
+    # Test rows have null values
+    test_rows = [r for r in data["rows"] if r["period"] == "test"]
+    assert len(test_rows) == 2
+    for r in test_rows:
+        assert r["rmse_c"] is None
+        assert r["diff_ci_high_c"] is None
 
-    # In fixture, all competitors have diff_ci_high_c < 0
-    competitors = [r for r in data["rows"] if r["product"] != "model"]
-    for c in competitors:
-        assert c["diff_ci_high_c"] < 0.0
+    # Test case: met is None when evaluated period has no competitor data
+    fixture_dir = Path(__file__).resolve().parent.parent.parent / "fixtures" / "sample_outputs"
+    with open(fixture_dir / "manifest.json", "r", encoding="utf-8") as f:
+        manifest_data = json.load(f)
+    manifest_data["test_evaluated"] = True
+    custom_loader = DataLoader(data_dir=fixture_dir)
+    custom_loader.manifest = manifest_data
+    custom_store = OutputStore(custom_loader)
+    monkeypatch.setattr(loader_module, "loader", custom_loader)
+    monkeypatch.setattr(validation_module, "store", custom_store)
+
+    res_test = client.get("/api/v1/headline")
+    assert res_test.status_code == 200
+    assert res_test.json()["met"] is None
+
+    # Test case: met is False when a competitor has diff_ci_high_c >= 0.0
+    bad_headline_csv = tmp_path / "bad_headline.csv"
+    bad_headline_csv.write_text(
+        "period,product,n_floats,n_obs,rmse_c,ci_low_c,ci_high_c,diff_vs_model_c,diff_ci_low_c,diff_ci_high_c\n"
+        "val,model,3,15,0.28,0.24,0.32,0.0,0.0,0.0\n"
+        "val,glorys12,3,15,0.25,0.21,0.30,0.03,-0.01,0.05\n",
+        encoding="utf-8",
+    )
+    manifest_data["test_evaluated"] = False
+    manifest_data["files"]["headline"] = str(bad_headline_csv.name)
+    custom_loader_bad = DataLoader(data_dir=tmp_path)
+    custom_loader_bad.manifest = manifest_data
+    custom_store_bad = OutputStore(custom_loader_bad)
+    monkeypatch.setattr(loader_module, "loader", custom_loader_bad)
+    monkeypatch.setattr(validation_module, "store", custom_store_bad)
+
+    res_false = client.get("/api/v1/headline")
+    assert res_false.status_code == 200
+    assert res_false.json()["met"] is False
 
 
 def test_headline_not_available_when_missing(tmp_path: Path, monkeypatch: Any) -> None:

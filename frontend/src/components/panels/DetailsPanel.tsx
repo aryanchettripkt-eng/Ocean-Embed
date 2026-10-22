@@ -43,8 +43,8 @@ function calculateDateRange(
     return { start, end };
   } catch {
     return {
-      start: minDate ?? "2019-01-01",
-      end: maxDate ?? "2020-01-10",
+      start: minDate ?? dateStr,
+      end: maxDate ?? dateStr,
     };
   }
 }
@@ -100,13 +100,12 @@ export function DetailsPanel({
           r.depth_m !== null &&
           r.depth_m !== "all" &&
           Math.abs(Number(r.depth_m) - depth) < 0.1 &&
-          r.model !== "climatology" &&
-          r.model !== "ridge"
+          r.model?.toLowerCase() === "model"
       ) ?? null
     );
   }, [metricsData, depth]);
 
-  const split = profile?.split ?? (date >= "2020-01-09" ? "live" : "val");
+  const split = profile?.split ?? null;
 
   return (
     <div

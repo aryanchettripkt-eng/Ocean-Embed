@@ -41,8 +41,8 @@ describe("url-state.ts explorer query sync", () => {
     });
 
     const state = parseExplorerParams(invalidParams, mockMeta);
-    // Date falls back to latest val date (2020-12-01 capped or available_dates)
-    expect(state.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Date falls back to latest val date capped by available_dates (2020-01-10)
+    expect(state.date).toBe("2020-01-10");
     expect(state.field).toBe("pred");
     expect(state.depth).toBe(1000.0); // closest depth to 99999 is max depth 1000m
     expect(state.lat).toBeNull();

@@ -34,7 +34,22 @@ export const handlers = [
     const depth_m = parseFloat(url.searchParams.get("depth_m") ?? "100.0");
     const field = (url.searchParams.get("field") ?? "pred") as "pred" | "glorys" | "error";
 
-    const isLive = date >= "2020-01-09";
+    const isOutOfRange =
+      date < mockMeta.available_dates.start || date > mockMeta.available_dates.end;
+    if (isOutOfRange) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "date_unavailable",
+            message: `Requested date is outside available dates (${mockMeta.available_dates.start} to ${mockMeta.available_dates.end})`,
+            details: null,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const isLive = mockMeta.latest_live_date ? date >= "2020-01-09" : false;
     if (isLive && (field === "glorys" || field === "error")) {
       return HttpResponse.json(
         {

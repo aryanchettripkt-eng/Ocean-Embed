@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from oceanscope_ml.config import ExperimentConfig, load_config
-from oceanscope_ml.data.manifest import load_manifest, record_planned_product, save_manifest
+from oceanscope_ml.data.indices import MJO_URL, NINO34_URL, fetch_mjo, fetch_nino34, save_indices
+from oceanscope_ml.data.manifest import (
+    load_manifest,
+    record_downloaded_file,
+    record_planned_product,
+    save_manifest,
+)
 
 logger = logging.getLogger("oceanscope_ml.data.download")
 
@@ -31,8 +37,9 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["thetao"],
         "needs_lead_in": False,
         "daily_mb": 3.5,
+        "depth_subset": True,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
-        "notes": "Primary target. Subsetting 15 depths and region bbox.",
+        "notes": "Primary target. Subsetting 15 depths (+- neighbours) and region bbox.",
     },
     "sla": {
         "name": "DUACS L4 Altimetry (SLA & ADT)",
@@ -43,6 +50,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["sla", "adt"],
         "needs_lead_in": True,
         "daily_mb": 0.35,
+        "depth_subset": False,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
         "notes": "Dynamic input with 7-day and 60-day lag history.",
     },
@@ -55,6 +63,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["analysed_sst"],
         "needs_lead_in": True,
         "daily_mb": 1.2,
+        "depth_subset": False,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
         "notes": "Dynamic input. Extended south to 10°S for DMI computation.",
     },
@@ -67,6 +76,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["sos"],
         "needs_lead_in": True,
         "daily_mb": 0.4,
+        "depth_subset": False,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
         "notes": "Dynamic input capturing monsoon river runoff.",
     },
@@ -79,20 +89,22 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["u", "v"],
         "needs_lead_in": True,
         "daily_mb": 0.25,
+        "depth_subset": False,
         "env_creds": ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"],
         "notes": "Dynamic surface advection vectors.",
     },
     "ccmp": {
         "name": "CCMP Surface Wind Vector",
-        "provider": "Remote Sensing Systems / Copernicus",
-        "source_id": "CCMP_V3.0_0.25deg",
-        "dataset_id": "WIND_GLO_PHY_L4_MY_012_006",
-        "source_url": "https://www.remss.com",
+        "provider": "Remote Sensing Systems",
+        "source_id": "CCMP_V03.0_0.25deg",
+        "dataset_id": "ccmp_v03.0_daily",
+        "source_url": "https://data.remss.com/ccmp/v03.0/",
         "variables": ["uwnd", "vwnd"],
         "needs_lead_in": True,
         "daily_mb": 0.5,
-        "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
-        "notes": "Dynamic input for wind stress & curl derivation.",
+        "depth_subset": False,
+        "env_creds": ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"],
+        "notes": "Dynamic input for wind stress & curl derivation from Remote Sensing Systems.",
     },
     "era5": {
         "name": "ERA5 Surface Fluxes & Precip",
@@ -103,6 +115,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["ssr", "str", "sshf", "slhf", "tp"],
         "needs_lead_in": True,
         "daily_mb": 0.8,
+        "depth_subset": False,
         "env_creds": ["CDSAPI_URL", "CDSAPI_KEY"],
         "notes": "Atmospheric net heat flux and precipitation forcing.",
     },
@@ -115,6 +128,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["elevation"],
         "needs_lead_in": False,
         "static_mb": 15.0,
+        "depth_subset": False,
         "env_creds": [],
         "notes": "Static log-depth channel.",
     },
@@ -127,32 +141,50 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["t_an"],
         "needs_lead_in": False,
         "static_mb": 25.0,
+        "depth_subset": False,
         "env_creds": [],
         "notes": "Static monthly climatology profiles (15 channels).",
     },
     "indices": {
-        "name": "Climate Indices (Niño 3.4, MJO RMM, DMI)",
-        "provider": "NOAA CPC & Australian Bureau of Meteorology",
-        "source_id": "CLIMATE_INDICES_NINO_MJO_DMI",
-        "dataset_id": "indices_timeseries",
-        "source_url": "https://psl.noaa.gov & http://www.bom.gov.au",
-        "variables": ["nino34", "mjo_rmm1", "mjo_rmm2", "dmi"],
+        "name": "Climate Indices (Niño 3.4 Anomaly, MJO RMM)",
+        "provider": "NOAA CPC/PSL & Australian BoM",
+        "source_id": "CLIMATE_INDICES_NINO_MJO",
+        "dataset_id": "indices_nino34_anom_mjo",
+        "source_url": f"{NINO34_URL} & {MJO_URL}",
+        "variables": ["nino34", "mjo_rmm1", "mjo_rmm2"],
         "needs_lead_in": False,
         "static_mb": 1.0,
+        "depth_subset": False,
         "env_creds": [],
-        "notes": "Basin teleconnection scalars broadcast to grid.",
+        "notes": (
+            "Niño 3.4 anomaly from NOAA PSL; MJO RMM from BoM (HTTPS). DMI computed from OSTIA."
+        ),
     },
     "grep": {
         "name": "GREP Ensemble Mean Reanalysis",
         "provider": "Copernicus Marine Service",
         "source_id": "GLOBAL_MULTIYEAR_PHY_ENS_001_031",
-        "dataset_id": "cmems_mod_glo_phy-cur_my_0.25deg_P1D-m",
+        "dataset_id": "cmems_mod_glo_phy-tem_phymnstd_my_0.25deg_P1D-m",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["thetao"],
         "needs_lead_in": False,
         "daily_mb": 3.0,
+        "depth_subset": True,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
-        "notes": "Auxiliary training target and external competitor.",
+        "notes": "Auxiliary training target and external competitor. Subsetting 15 depths.",
+    },
+    "armor3d": {
+        "name": "ARMOR3D L4 Observation-based 3D Temperature",
+        "provider": "Copernicus Marine Service",
+        "source_id": "MULTIOBS_GLO_PHY_TS_REP_015_004",
+        "dataset_id": "dataset-armor-3d-rep-weekly",
+        "source_url": "https://marine.copernicus.eu",
+        "variables": ["to"],
+        "needs_lead_in": False,
+        "daily_mb": 1.5,
+        "depth_subset": True,
+        "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
+        "notes": "External baseline competitor compared at ARGO points; never an input.",
     },
     "argo": {
         "name": "ARGO Autonomous In-Situ CTD Profiles",
@@ -163,6 +195,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "variables": ["TEMP", "PRES"],
         "needs_lead_in": False,
         "monthly_mb": 2.5,
+        "depth_subset": False,
         "env_creds": ["COPERNICUSMARINE_SERVICE_USERNAME", "COPERNICUSMARINE_SERVICE_PASSWORD"],
         "notes": "Point observations for sparse input, fine-tuning, and validation.",
     },
@@ -176,7 +209,7 @@ def plan_download(
     selected_products: list[str] | None = None,
     include_lead_in: bool = True,
 ) -> tuple[dict[str, Any], float]:
-    """Compute planning parameters, coordinate subsets, dates, and sizes."""
+    """Compute planning parameters, coordinate subsets, depths, dates, and sizes."""
     start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     lead_in_days = int(config.inputs.get("long_history", {}).get("days", 60))
@@ -219,11 +252,12 @@ def plan_download(
             lat_min = -10.0
             lon_max = max(lon_max, 110.0)
 
-        plan[prod_key] = {
+        plan_item: dict[str, Any] = {
             "name": spec["name"],
             "provider": spec["provider"],
             "source_id": spec["source_id"],
             "dataset_id": spec["dataset_id"],
+            "source_url": spec["source_url"],
             "variables": spec["variables"],
             "start_date": prod_start_dt.strftime("%Y-%m-%d"),
             "end_date": end_dt.strftime("%Y-%m-%d"),
@@ -238,6 +272,12 @@ def plan_download(
             "env_creds": spec["env_creds"],
             "notes": spec["notes"],
         }
+
+        if spec.get("depth_subset"):
+            # 15 depths +- neighbours (0 to 1050 m)
+            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1050.0}
+
+        plan[prod_key] = plan_item
 
     return plan, round(total_est_mb, 2)
 
@@ -259,7 +299,7 @@ def run_dry_run(
     )
 
     print("\n" + "=" * 80)
-    print(" OceanScope AI - Data Download Planning Report (--dry-run)")
+    print(" OceanScope AI — Data Download Planning Report (--dry-run)")
     print("=" * 80)
     lead_in_dt = datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)
     print(f" Target Period:   {start_date} to {end_date}")
@@ -282,12 +322,11 @@ def run_dry_run(
         prov = p["provider"][:22]
         print(f"{key:<12} | {date_str:<23} | {p['estimated_mb']:<9.1f} | {prov:<24} | PLANNED")
 
-        # Record in manifest
         record_planned_product(
             manifest=manifest,
             product_id=key,
             source_id=p["source_id"],
-            source_url=PRODUCT_SPECS[key]["source_url"],
+            source_url=p["source_url"],
             variables=p["variables"],
             date_range={"start": p["start_date"], "end": p["end_date"]},
             estimated_size_mb=p["estimated_mb"],
@@ -308,6 +347,80 @@ def check_product_credentials(prod_key: str) -> tuple[bool, list[str]]:
     return len(missing) == 0, missing
 
 
+def download_indices_product(raw_dir: Path, manifest: dict[str, Any]) -> None:
+    """Download Niño 3.4 and MJO indices."""
+    print("  Fetching climate indices (Niño 3.4 anomaly and BoM MJO)...")
+    indices_dir = raw_dir / "indices"
+    indices_dir.mkdir(parents=True, exist_ok=True)
+
+    nino_df = fetch_nino34(NINO34_URL)
+    mjo_df = fetch_mjo(MJO_URL)
+    saved = save_indices(indices_dir, nino_df=nino_df, mjo_df=mjo_df)
+
+    for name, p_str in saved.items():
+        record_downloaded_file(
+            manifest=manifest,
+            product_id="indices",
+            file_path=Path(p_str),
+            raw_dir=raw_dir,
+            source_id="CLIMATE_INDICES_NINO_MJO",
+        )
+    print(f"  Saved indices to {indices_dir}")
+
+
+def execute_download(
+    config: ExperimentConfig,
+    raw_dir: Path,
+    start_date: str,
+    end_date: str,
+    products: list[str] | None = None,
+) -> None:
+    """Execute subsetted download of raw data."""
+    plan, _ = plan_download(config, start_date, end_date, products)
+    manifest = load_manifest(raw_dir)
+
+    # 1. Check credentials
+    missing_creds_total: dict[str, list[str]] = {}
+    for key in plan:
+        ok, missing = check_product_credentials(key)
+        if not ok:
+            missing_creds_total[key] = missing
+
+    if missing_creds_total:
+        print("\n[ERROR] Missing required credentials for real data download:")
+        for k, creds in missing_creds_total.items():
+            print(f"  - Product '{k}': missing env var(s) {', '.join(creds)}")
+        print("\nTo inspect the planned requests without credentials, run with --dry-run:")
+        print("  python -m oceanscope_ml.data.download --dry-run")
+        sys.exit(1)
+
+    # 2. Check for copernicus products
+    copernicus_prods = [
+        k for k in plan if k in ["glorys12", "sla", "sst", "sss", "grep", "armor3d", "argo"]
+    ]
+    if copernicus_prods:
+        try:
+            import copernicusmarine  # noqa: F401
+        except ImportError:
+            print(
+                "\n[ERROR] Copernicus Marine toolbox is not installed. "
+                "Install with: pip install copernicusmarine\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Download indices if selected
+    if "indices" in plan:
+        try:
+            download_indices_product(raw_dir, manifest)
+        except Exception as exc:
+            print(f"[ERROR] Failed downloading indices: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    save_manifest(raw_dir, manifest)
+    print("\nDownload execution completed.")
+
+
 def main() -> None:
     """CLI entry point for oceanscope_ml.data.download."""
     parser = argparse.ArgumentParser(description="Download input and target ocean data subsets.")
@@ -324,7 +437,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load configuration
     cfg = load_config(args.config)
     raw_dir = Path(args.out_dir) if args.out_dir else cfg.paths.raw
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -341,25 +453,14 @@ def main() -> None:
         )
         return
 
-    # Real download path
-    print(f"\nInitiating download to {raw_dir.resolve()}...")
-    missing_creds_total: dict[str, list[str]] = {}
-    plan, _ = plan_download(cfg, args.start, args.end, products)
-
-    for key in plan:
-        ok, missing = check_product_credentials(key)
-        if not ok:
-            missing_creds_total[key] = missing
-
-    if missing_creds_total:
-        print("\n[ERROR] Missing required credentials for real data download:")
-        for k, creds in missing_creds_total.items():
-            print(f"  - Product '{k}': set env var(s) {', '.join(creds)}")
-        print("\nTo inspect the planned requests without credentials, run with --dry-run:")
-        print("  python -m oceanscope_ml.data.download --dry-run")
-        sys.exit(1)
-
-    print("Credentials verified. Proceeding with subsetted download...")
+    print(f"\nInitiating subsetted download to {raw_dir.resolve()}...")
+    execute_download(
+        config=cfg,
+        raw_dir=raw_dir,
+        start_date=args.start,
+        end_date=args.end,
+        products=products,
+    )
 
 
 if __name__ == "__main__":

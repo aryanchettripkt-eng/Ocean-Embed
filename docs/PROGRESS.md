@@ -15,7 +15,9 @@
 | 2026-10-23 | frontend | P1-F2: Explorer map: MapLibre, canvas grid layer, controls, colorbar, coverage legend, URL state | Gemini | frontend/p1-f2-explorer-map | complete | pnpm typecheck, pnpm lint, pnpm test (22 passed), pnpm build |
 | 2026-10-23 | frontend | P1-F3: Details panel: profile + time-series charts, depth accuracy line | Gemini | frontend/p1-f3-details-panel | complete | pnpm typecheck, pnpm lint, pnpm test (26 passed), pnpm build |
 | 2026-10-23 | frontend | P1-F4: /validation (headline card, metrics tables, ARGO matchups) and /about pages, caveats, sealed test status | Gemini | frontend/p1-f4-validation-about | complete | pnpm typecheck, pnpm lint, pnpm test (30 passed), pnpm build |
-| 2026-10-23 | ml | P1-M1, P1-M2: download.py with --dry-run planning, inspect.py, data_inspection.md report, argo_eval_floats.json | Gemini | ml/p1-m1-m2-download-inspect | complete | ruff, mypy, pytest (8 passed), download --dry-run, inspect CLI |
+| 2026-10-23 | ml | P1-M1: download.py CLI with dry-run planning, product registry, auth checks, indices & depth subsetting | Gemini | ml/p1-m1-m2-download-inspect | in progress | ruff, mypy, pytest (9 passed), download CLI (blocked on P0-4 accounts) |
+| 2026-10-23 | ml | P1-M2: inspect.py NetCDF/Zarr coordinate, depth & variable inspector | Gemini | ml/p1-m1-m2-download-inspect | blocked on P0-4 accounts | ruff, mypy, pytest (9 passed), synthetic file inspect test |
+| 2026-10-23 | full-stack | P1 review fixes (A1-A8, B1-B6, B10-B12): remove fabricated inspection & synthetic floats, real inspect.py, product table fixes, resilient loader, 422 date validation, Starlette 404 envelope, HealthResponse, dynamic grid res & science text, HeadlineCard n/a support & period filtering, msw worker init & export_mocks, vitest component tests, Playwright E2E tests, CI checks & permissions | Gemini | p1-fixes | complete | ml (ruff, format, mypy, pytest 9 passed), backend (ruff, format, mypy, pytest 32 passed, export_openapi --check, export_mocks --check), frontend (typecheck, lint, test 39 passed, build, e2e) |
 
 
 

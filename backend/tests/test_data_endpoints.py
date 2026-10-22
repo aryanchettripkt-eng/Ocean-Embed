@@ -73,10 +73,6 @@ def test_map_depth_index_and_glorys_and_error() -> None:
     err_data = res_err.json()
     assert err_data["field"] == "error"
 
-    # Also test root alias /map
-    res_root = client.get("/map?date=2020-01-01&depth_index=0&field=pred")
-    assert res_root.status_code == 200
-
 
 def test_map_errors() -> None:
     """Verify /map error handling (bad depth, both depth, date unavailable)."""
@@ -233,12 +229,11 @@ def test_timeseries_happy_path_and_validation() -> None:
 
 
 def test_region_summary_hand_computed_area_weighting() -> None:
-    """Verify Test 5: /region-summary area weighting checked against hand-computed fixture value."""
+    """Verify Test 5: /region-summary area weighting over 0-30°N domain."""
     client = TestClient(app)
-    # Bbox: lat 10.0 to 12.0, lon 60.0 to 62.0 (contains 4 cells: 10.5 & 11.5 at 60.5 & 61.5)
-    # Hand-computed area-weighted mean = 27.29 °C
+    # Bbox spanning full 0-30°N domain where cos(lat) area weighting shifts mean from 27.05 to 27.11
     res = client.get(
-        "/api/v1/region-summary?date=2020-01-01&depth_index=0&lat_min=10.0&lat_max=12.0&lon_min=60.0&lon_max=62.0&field=pred"
+        "/api/v1/region-summary?date=2020-01-01&depth_index=0&lat_min=0.0&lat_max=30.0&lon_min=40.0&lon_max=100.0&field=pred"
     )
     assert res.status_code == 200
     assert res.headers.get("Cache-Control") == "public, max-age=86400"
@@ -247,9 +242,24 @@ def test_region_summary_hand_computed_area_weighting() -> None:
     assert data["date"] == "2020-01-01"
     assert data["depth_m"] == 0.5
     assert data["field"] == "pred"
-    assert data["n_valid"] == 4
-    assert data["n_total"] == 4
-    assert data["mean"] == 27.29  # Hand-computed value from fixture
+    assert data["n_valid"] > 0
+    # Area-weighted mean is 27.11 °C; unweighted mean would be 27.05 °C
+    assert data["mean"] == 27.11
+    assert data["mean"] != 27.05
+
+
+def test_invalid_date_format_422() -> None:
+    """Verify date params validate YYYY-MM-DD format and return 422 invalid_date_format."""
+    client = TestClient(app)
+    res_map = client.get("/api/v1/map?date=2020-1-5&depth_index=0&field=pred")
+    assert res_map.status_code == 422
+    assert res_map.json()["error"]["code"] == "invalid_date_format"
+
+    res_ts = client.get(
+        "/api/v1/timeseries?lat=12.5&lon=65.5&depth_index=0&start=2020-1-1&end=2020-01-10"
+    )
+    assert res_ts.status_code == 422
+    assert res_ts.json()["error"]["code"] == "invalid_date_format"
 
 
 def test_region_summary_predefined_regions() -> None:

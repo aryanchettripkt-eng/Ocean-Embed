@@ -22,24 +22,20 @@ from app.schemas.caveats import (
 
 
 def test_health_check_success() -> None:
-    """Verify /health and /api/v1/health return 200 OK and active run_id when data is loaded."""
+    """Verify /api/v1/health returns 200 OK and active run_id when data is loaded."""
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
     assert data["data_loaded"] is True
     assert data["run_id"] == "synthetic_v1"
 
-    response_v1 = client.get("/api/v1/health")
-    assert response_v1.status_code == 200
-    assert response_v1.json() == data
-
 
 def test_health_check_503_when_data_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify /health returns 503 Service Unavailable when data failed to load."""
+    """Verify /api/v1/health returns 503 Service Unavailable when data failed to load."""
     empty_loader = DataLoader(data_dir=tmp_path)
     empty_store = OutputStore(empty_loader)
     monkeypatch.setattr(loader_module, "loader", empty_loader)
@@ -48,22 +44,18 @@ def test_health_check_503_when_data_missing(
     monkeypatch.setattr(meta_module, "store", empty_store)
 
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 503
     data = response.json()
-    assert data["status"] == "error"
-    assert data["data_loaded"] is False
-    assert data["run_id"] is None
-    assert "Manifest not found" in (data["detail"] or "")
-
-    response_v1 = client.get("/api/v1/health")
-    assert response_v1.status_code == 503
+    assert "error" in data
+    assert data["error"]["code"] == "data_not_loaded"
+    assert "Manifest not found" in data["error"]["message"]
 
 
 def test_health_check_503_when_manifest_invalid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify /health returns 503 Service Unavailable when manifest fails schema validation."""
+    """Verify /api/v1/health returns 503 when manifest fails schema validation."""
     bad_manifest = tmp_path / "manifest.json"
     bad_manifest.write_text('{"invalid": true}', encoding="utf-8")
 
@@ -75,18 +67,18 @@ def test_health_check_503_when_manifest_invalid(
     monkeypatch.setattr(meta_module, "store", invalid_store)
 
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 503
     data = response.json()
-    assert data["status"] == "error"
-    assert data["data_loaded"] is False
-    assert "Manifest validation error" in (data["detail"] or "")
+    assert "error" in data
+    assert data["error"]["code"] == "data_not_loaded"
+    assert "Manifest validation error" in data["error"]["message"]
 
 
 def test_meta_endpoint_success() -> None:
-    """Verify /meta and /api/v1/meta return valid metadata adhering to Section 4.2."""
+    """Verify /api/v1/meta returns valid metadata adhering to Section 4.2."""
     client = TestClient(app)
-    response = client.get("/meta")
+    response = client.get("/api/v1/meta")
     assert response.status_code == 200
     assert response.headers.get("Cache-Control") == "public, max-age=300"
 
@@ -121,13 +113,9 @@ def test_meta_endpoint_success() -> None:
     assert data["caveats"]["synthetic"] == SYNTHETIC_CAVEAT
     assert data["chat"]["enabled"] is False
 
-    response_v1 = client.get("/api/v1/meta")
-    assert response_v1.status_code == 200
-    assert response_v1.json() == data
-
 
 def test_meta_503_when_data_not_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify /meta returns 503 with standardized error format when data is not loaded."""
+    """Verify /api/v1/meta returns 503 with standardized error format when data is not loaded."""
     empty_loader = DataLoader(data_dir=tmp_path)
     empty_store = OutputStore(empty_loader)
     monkeypatch.setattr(loader_module, "loader", empty_loader)
@@ -136,7 +124,7 @@ def test_meta_503_when_data_not_loaded(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(meta_module, "store", empty_store)
 
     client = TestClient(app)
-    response = client.get("/meta")
+    response = client.get("/api/v1/meta")
     assert response.status_code == 503
     err = response.json()
     assert "error" in err
@@ -147,11 +135,13 @@ def test_cors_headers() -> None:
     """Verify CORS headers for allowed vs disallowed origins (PRD_BACKEND Test 9)."""
     client = TestClient(app)
     # Allowed origin
-    res_allowed = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    res_allowed = client.get("/api/v1/health", headers={"Origin": "http://localhost:3000"})
     assert res_allowed.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
     # Disallowed origin
-    res_disallowed = client.get("/health", headers={"Origin": "http://malicious-site.example.com"})
+    res_disallowed = client.get(
+        "/api/v1/health", headers={"Origin": "http://malicious-site.example.com"}
+    )
     assert "access-control-allow-origin" not in res_disallowed.headers
 
 
@@ -163,3 +153,26 @@ def test_openapi_spec_up_to_date() -> None:
     expected_json = json.dumps(spec, indent=2, sort_keys=True) + "\n"
     actual_json = openapi_file.read_text(encoding="utf-8")
     assert actual_json == expected_json
+
+
+def test_chat_disabled_503() -> None:
+    """Verify POST /api/v1/chat returns 503 chat_disabled when LLM is not enabled."""
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/chat",
+        json={"messages": [{"role": "user", "content": "What is the temperature?"}]},
+    )
+    assert response.status_code == 503
+    data = response.json()
+    assert data["error"]["code"] == "chat_disabled"
+
+
+def test_error_envelope_for_not_found() -> None:
+    """Verify unknown route returns Starlette 404 with standardized error envelope."""
+    client = TestClient(app)
+    response = client.get("/nonexistent/endpoint")
+    assert response.status_code == 404
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "not_found"
+    assert "Not Found" in data["error"]["message"]

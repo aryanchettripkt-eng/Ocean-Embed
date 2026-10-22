@@ -82,20 +82,6 @@ export interface paths {
      */
     get: operations["get_timeseries_api_v1_timeseries_get"];
   };
-  "/health": {
-    /**
-     * Root health check
-     * @description Convenience root health check delegating to /api/v1/health.
-     */
-    get: operations["health_health_get"];
-  };
-  "/meta": {
-    /**
-     * Root metadata
-     * @description Convenience root metadata delegating to /api/v1/meta.
-     */
-    get: operations["meta_meta_get"];
-  };
 }
 
 export type webhooks = Record<string, never>;
@@ -112,25 +98,25 @@ export interface components {
       /** Armor3D Rmse C */
       armor3d_rmse_c?: number | null;
       /** Bias C */
-      bias_c: number;
+      bias_c?: number | null;
       /** Depth M */
       depth_m: number;
       /** Glorys Mae C */
-      glorys_mae_c: number;
+      glorys_mae_c?: number | null;
       /** Glorys Rmse C */
-      glorys_rmse_c: number;
+      glorys_rmse_c?: number | null;
       /** Grep Mae C */
       grep_mae_c?: number | null;
       /** Grep Rmse C */
       grep_rmse_c?: number | null;
       /** Mae C */
-      mae_c: number;
+      mae_c?: number | null;
       /** N Obs */
       n_obs: number;
       /** N Profiles */
       n_profiles: number;
       /** Rmse C */
-      rmse_c: number;
+      rmse_c?: number | null;
     };
     /**
      * ArgoProfileMatch
@@ -331,25 +317,43 @@ export interface components {
      */
     HeadlineRow: {
       /** Ci High C */
-      ci_high_c: number;
+      ci_high_c?: number | null;
       /** Ci Low C */
-      ci_low_c: number;
+      ci_low_c?: number | null;
       /** Diff Ci High C */
-      diff_ci_high_c: number;
+      diff_ci_high_c?: number | null;
       /** Diff Ci Low C */
-      diff_ci_low_c: number;
+      diff_ci_low_c?: number | null;
       /** Diff Vs Model C */
-      diff_vs_model_c: number;
+      diff_vs_model_c?: number | null;
       /** N Floats */
-      n_floats: number;
+      n_floats?: number | null;
       /** N Obs */
-      n_obs: number;
+      n_obs?: number | null;
       /** Period */
       period: string;
       /** Product */
       product: string;
       /** Rmse C */
-      rmse_c: number;
+      rmse_c?: number | null;
+    };
+    /**
+     * HealthResponse
+     * @description Response model for GET /health.
+     */
+    HealthResponse: {
+      /**
+       * Data Loaded
+       * @default false
+       */
+      data_loaded?: boolean;
+      /** Run Id */
+      run_id?: string | null;
+      /**
+       * Status
+       * @default ok
+       */
+      status?: string;
     };
     /**
      * MapResponse
@@ -374,7 +378,7 @@ export interface components {
       /** Run Id */
       run_id: string;
       /** Split */
-      split: string;
+      split?: string | null;
       stats: components["schemas"]["MapStats"];
       /** Synthetic */
       synthetic: boolean;
@@ -501,7 +505,7 @@ export interface components {
       /** Run Id */
       run_id: string;
       /** Split */
-      split: string;
+      split?: string | null;
       /** Synthetic */
       synthetic: boolean;
     };
@@ -582,7 +586,7 @@ export interface components {
       /** Run Id */
       run_id: string;
       /** Split */
-      split: string[];
+      split: (string | null)[];
       /** Synthetic */
       synthetic: boolean;
     };
@@ -725,7 +729,7 @@ export interface operations {
       /** @description Successful Response */
       200: {
         content: {
-          "application/json": unknown;
+          "application/json": components["schemas"]["HealthResponse"];
         };
       };
     };
@@ -908,34 +912,6 @@ export interface operations {
       422: {
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  /**
-   * Root health check
-   * @description Convenience root health check delegating to /api/v1/health.
-   */
-  health_health_get: {
-    responses: {
-      /** @description Successful Response */
-      200: {
-        content: {
-          "application/json": unknown;
-        };
-      };
-    };
-  };
-  /**
-   * Root metadata
-   * @description Convenience root metadata delegating to /api/v1/meta.
-   */
-  meta_meta_get: {
-    responses: {
-      /** @description Successful Response */
-      200: {
-        content: {
-          "application/json": components["schemas"]["MetaResponse"];
         };
       };
     };

@@ -1,0 +1,145 @@
+{
+  "available_dates": {
+    "end": "2020-01-10",
+    "start": "2020-01-01"
+  },
+  "caveats": {
+    "argo": "ARGO profiles are also assimilated into GLORYS, so this comparison is not fully independent.",
+    "glorys": "Predictions are trained to reproduce the GLORYS reanalysis. GLORYS assimilates satellite altimetry and ARGO profiles, so agreement with GLORYS is not the same as agreement with the real ocean.",
+    "live": "Live maps are made about 3 days behind real time from near-real-time inputs. There is no GLORYS reference for these dates yet, so they have not been checked the way validation dates have.",
+    "synthetic": "This deployment is serving synthetic demo data, not model results."
+  },
+  "chat": {
+    "enabled": false,
+    "provider_label": null
+  },
+  "color_ranges": [
+    {
+      "depth_m": 0.5,
+      "vmax": 28.99,
+      "vmin": 23.9
+    },
+    {
+      "depth_m": 5.0,
+      "vmax": 28.48,
+      "vmin": 23.5
+    },
+    {
+      "depth_m": 10.0,
+      "vmax": 27.93,
+      "vmin": 23.06
+    },
+    {
+      "depth_m": 20.0,
+      "vmax": 26.87,
+      "vmin": 22.21
+    },
+    {
+      "depth_m": 30.0,
+      "vmax": 25.85,
+      "vmin": 21.4
+    },
+    {
+      "depth_m": 50.0,
+      "vmax": 23.95,
+      "vmin": 19.89
+    },
+    {
+      "depth_m": 75.0,
+      "vmax": 21.81,
+      "vmin": 18.18
+    },
+    {
+      "depth_m": 100.0,
+      "vmax": 19.9,
+      "vmin": 16.66
+    },
+    {
+      "depth_m": 125.0,
+      "vmax": 18.19,
+      "vmin": 15.3
+    },
+    {
+      "depth_m": 150.0,
+      "vmax": 16.67,
+      "vmin": 14.09
+    },
+    {
+      "depth_m": 200.0,
+      "vmax": 14.09,
+      "vmin": 12.04
+    },
+    {
+      "depth_m": 300.0,
+      "vmax": 10.4,
+      "vmin": 9.1
+    },
+    {
+      "depth_m": 500.0,
+      "vmax": 6.58,
+      "vmin": 6.05
+    },
+    {
+      "depth_m": 750.0,
+      "vmax": 4.83,
+      "vmin": 4.66
+    },
+    {
+      "depth_m": 1000.0,
+      "vmax": 4.27,
+      "vmin": 4.21
+    }
+  ],
+  "dataset_version": "v1",
+  "depths_m": [
+    0.5,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    50.0,
+    75.0,
+    100.0,
+    125.0,
+    150.0,
+    200.0,
+    300.0,
+    500.0,
+    750.0,
+    1000.0
+  ],
+  "error_range": {
+    "vmax": 2.0,
+    "vmin": -2.0
+  },
+  "grid_resolution_deg": 1.0,
+  "grid_shape": {
+    "lat": 30,
+    "lon": 60
+  },
+  "latest_live_date": "2020-01-10",
+  "model_name": "SYNTHETIC_DEMO",
+  "region": {
+    "lat_max": 30.0,
+    "lat_min": 0.0,
+    "lon_max": 100.0,
+    "lon_min": 40.0
+  },
+  "run_id": "synthetic_v1",
+  "splits": {
+    "test": [
+      "2021-01-01",
+      "2021-12-31"
+    ],
+    "train": [
+      "1993-03-02",
+      "2017-12-01"
+    ],
+    "val": [
+      "2018-01-01",
+      "2020-12-01"
+    ]
+  },
+  "synthetic": true,
+  "test_evaluated": false
+}

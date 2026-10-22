@@ -1,0 +1,80 @@
+{
+  "criterion": "Bay of Bengal, 50\u2013300 m: model RMSE vs held-out ARGO floats lower than GLORYS12, the GREP ensemble mean and ARMOR3D (95% float-bootstrap interval of the difference below zero).",
+  "met": true,
+  "rows": [
+    {
+      "ci_high_c": 0.32,
+      "ci_low_c": 0.24,
+      "diff_ci_high_c": 0.0,
+      "diff_ci_low_c": 0.0,
+      "diff_vs_model_c": 0.0,
+      "n_floats": 3,
+      "n_obs": 15,
+      "period": "val",
+      "product": "model",
+      "rmse_c": 0.28
+    },
+    {
+      "ci_high_c": 0.41,
+      "ci_low_c": 0.31,
+      "diff_ci_high_c": -0.02,
+      "diff_ci_low_c": -0.14,
+      "diff_vs_model_c": -0.08,
+      "n_floats": 3,
+      "n_obs": 15,
+      "period": "val",
+      "product": "glorys12",
+      "rmse_c": 0.36
+    },
+    {
+      "ci_high_c": 0.45,
+      "ci_low_c": 0.34,
+      "diff_ci_high_c": -0.04,
+      "diff_ci_low_c": -0.17,
+      "diff_vs_model_c": -0.11,
+      "n_floats": 3,
+      "n_obs": 15,
+      "period": "val",
+      "product": "grep",
+      "rmse_c": 0.39
+    },
+    {
+      "ci_high_c": 0.49,
+      "ci_low_c": 0.37,
+      "diff_ci_high_c": -0.06,
+      "diff_ci_low_c": -0.21,
+      "diff_vs_model_c": -0.15,
+      "n_floats": 3,
+      "n_obs": 15,
+      "period": "val",
+      "product": "armor3d",
+      "rmse_c": 0.43
+    },
+    {
+      "ci_high_c": null,
+      "ci_low_c": null,
+      "diff_ci_high_c": null,
+      "diff_ci_low_c": null,
+      "diff_vs_model_c": null,
+      "n_floats": 0,
+      "n_obs": 0,
+      "period": "test",
+      "product": "model",
+      "rmse_c": null
+    },
+    {
+      "ci_high_c": null,
+      "ci_low_c": null,
+      "diff_ci_high_c": null,
+      "diff_ci_low_c": null,
+      "diff_vs_model_c": null,
+      "n_floats": 0,
+      "n_obs": 0,
+      "period": "test",
+      "product": "grep",
+      "rmse_c": null
+    }
+  ],
+  "run_id": "synthetic_v1",
+  "synthetic": true
+}

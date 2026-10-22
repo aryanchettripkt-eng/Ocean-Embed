@@ -4,12 +4,7 @@
 
 import type { components } from "./types";
 
-export interface HealthResponse {
-  status: "ok" | "error";
-  data_loaded: boolean;
-  run_id: string | null;
-  detail?: string | null;
-}
+export type HealthResponse = components["schemas"]["HealthResponse"];
 export type MetaResponse = components["schemas"]["MetaResponse"];
 export type MapResponse = components["schemas"]["MapResponse"];
 export type ProfileResponse = components["schemas"]["ProfileResponse"];

@@ -117,7 +117,7 @@ export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
             Validation RMSE vs Depth (0–1500 m)
           </h3>
           <p className="text-slate-400 text-[11px]">
-            Lower error is better. Note model improvement through the thermocline (50–300 m).
+            Lower error is better.
           </p>
         </div>
         <div className="text-[11px] font-mono text-cyan-400">

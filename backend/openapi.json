@@ -27,20 +27,41 @@
             "title": "Armor3D Rmse C"
           },
           "bias_c": {
-            "title": "Bias C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bias C"
           },
           "depth_m": {
             "title": "Depth M",
             "type": "number"
           },
           "glorys_mae_c": {
-            "title": "Glorys Mae C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glorys Mae C"
           },
           "glorys_rmse_c": {
-            "title": "Glorys Rmse C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glorys Rmse C"
           },
           "grep_mae_c": {
             "anyOf": [
@@ -65,8 +86,15 @@
             "title": "Grep Rmse C"
           },
           "mae_c": {
-            "title": "Mae C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mae C"
           },
           "n_obs": {
             "title": "N Obs",
@@ -77,19 +105,21 @@
             "type": "integer"
           },
           "rmse_c": {
-            "title": "Rmse C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rmse C"
           }
         },
         "required": [
           "depth_m",
           "n_profiles",
-          "n_obs",
-          "mae_c",
-          "rmse_c",
-          "bias_c",
-          "glorys_mae_c",
-          "glorys_rmse_c"
+          "n_obs"
         ],
         "title": "ArgoMetricRow",
         "type": "object"
@@ -540,32 +570,81 @@
         "description": "Single competitor row in the pre-registered Bay of Bengal 50-300m evaluation.",
         "properties": {
           "ci_high_c": {
-            "title": "Ci High C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci High C"
           },
           "ci_low_c": {
-            "title": "Ci Low C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Low C"
           },
           "diff_ci_high_c": {
-            "title": "Diff Ci High C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Ci High C"
           },
           "diff_ci_low_c": {
-            "title": "Diff Ci Low C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Ci Low C"
           },
           "diff_vs_model_c": {
-            "title": "Diff Vs Model C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff Vs Model C"
           },
           "n_floats": {
-            "title": "N Floats",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Floats"
           },
           "n_obs": {
-            "title": "N Obs",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Obs"
           },
           "period": {
             "title": "Period",
@@ -576,23 +655,50 @@
             "type": "string"
           },
           "rmse_c": {
-            "title": "Rmse C",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rmse C"
           }
         },
         "required": [
           "period",
-          "product",
-          "n_floats",
-          "n_obs",
-          "rmse_c",
-          "ci_low_c",
-          "ci_high_c",
-          "diff_vs_model_c",
-          "diff_ci_low_c",
-          "diff_ci_high_c"
+          "product"
         ],
         "title": "HeadlineRow",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "description": "Response model for GET /health.",
+        "properties": {
+          "data_loaded": {
+            "default": false,
+            "title": "Data Loaded",
+            "type": "boolean"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "HealthResponse",
         "type": "object"
       },
       "MapResponse": {
@@ -644,8 +750,15 @@
             "type": "string"
           },
           "split": {
-            "title": "Split",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
           },
           "stats": {
             "$ref": "#/components/schemas/MapStats"
@@ -683,7 +796,6 @@
           "date",
           "depth_m",
           "field",
-          "split",
           "lat",
           "lon",
           "values",
@@ -1020,8 +1132,15 @@
             "type": "string"
           },
           "split": {
-            "title": "Split",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
           },
           "synthetic": {
             "title": "Synthetic",
@@ -1034,7 +1153,6 @@
           "date",
           "lat",
           "lon",
-          "split",
           "coverage",
           "depths_m",
           "pred",
@@ -1261,7 +1379,14 @@
           },
           "split": {
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "title": "Split",
             "type": "array"
@@ -1578,7 +1703,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2148,48 +2275,6 @@
         "summary": "Time series of temperature at a point and depth",
         "tags": [
           "data"
-        ]
-      }
-    },
-    "/health": {
-      "get": {
-        "description": "Convenience root health check delegating to /api/v1/health.",
-        "operationId": "health_health_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Root health check",
-        "tags": [
-          "system"
-        ]
-      }
-    },
-    "/meta": {
-      "get": {
-        "description": "Convenience root metadata delegating to /api/v1/meta.",
-        "operationId": "meta_meta_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MetaResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Root metadata",
-        "tags": [
-          "metadata"
         ]
       }
     }

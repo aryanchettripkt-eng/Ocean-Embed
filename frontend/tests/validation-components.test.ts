@@ -5,7 +5,7 @@ describe("Validation and Benchmark logic", () => {
   it("processes headline pre-registered criterion table correctly", () => {
     expect(mockHeadline.met).toBe(true);
     expect(mockHeadline.criterion).toContain("Bay of Bengal, 50–300 m");
-    expect(mockHeadline.rows.length).toBe(4);
+    expect(mockHeadline.rows.length).toBe(6);
 
     const modelRow = mockHeadline.rows.find((r) => r.product === "model");
     expect(modelRow).toBeDefined();
@@ -46,7 +46,7 @@ describe("Validation and Benchmark logic", () => {
     expect(mockArgo.n_profiles_total).toBe(3);
     expect(mockArgo.n_obs_total).toBe(45);
     expect(mockArgo.caveat).toContain("assimilated into GLORYS");
-    expect(mockArgo.rows.length).toBe(5);
+    expect(mockArgo.rows.length).toBe(15);
 
     const surfaceRow = mockArgo.rows.find((r) => r.depth_m === 0.5);
     expect(surfaceRow).toBeDefined();

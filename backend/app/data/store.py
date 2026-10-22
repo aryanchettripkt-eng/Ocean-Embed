@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Literal
+import re
+from datetime import date as dt_date
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -19,6 +21,7 @@ from app.errors import (
     DataNotLoadedError,
     DateUnavailableError,
     HeadlineNotAvailableError,
+    InvalidDateFormatError,
     OutOfRegionError,
     RangeTooLargeError,
     ReferenceUnavailableError,
@@ -60,6 +63,19 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 
+DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def validate_date(date_str: str) -> dt_date:
+    """Validate date format as strict YYYY-MM-DD and return parsed date object."""
+    if not isinstance(date_str, str) or not DATE_REGEX.match(date_str):
+        raise InvalidDateFormatError(f"Invalid date format '{date_str}'. Expected YYYY-MM-DD.")
+    try:
+        return dt_date.fromisoformat(date_str)
+    except ValueError:
+        raise InvalidDateFormatError(f"Invalid date '{date_str}'. Expected valid calendar date.")
+
+
 class OutputStore:
     """Read-only access to published prediction store and evaluation metrics."""
 
@@ -74,6 +90,17 @@ class OutputStore:
         self._cached_headline: pd.DataFrame | None = None
         self._last_loader_id: int | None = None
         self._last_manifest_id: int | None = None
+
+    def clear_caches(self) -> None:
+        """Explicitly clear cached metadata, metrics, and dataset handles."""
+        self._ds = None
+        self._cached_meta = None
+        self._cached_color_ranges = None
+        self._cached_metrics.clear()
+        self._cached_argo = None
+        self._cached_argo_matches = None
+        self._cached_headline = None
+        self._last_manifest_id = None
 
     @property
     def loader(self) -> DataLoader:
@@ -145,10 +172,11 @@ class OutputStore:
 
         raise BadDepthError(f"depth_m {depth_m} does not match any valid model depth")
 
-    def get_date_split(self, date_str: str) -> str:
-        """Verify date availability and return its split label (train, val, test, live)."""
+    def get_date_split(self, date_str: str) -> str | None:
+        """Verify date availability and return its split label (train, val, test, live) or None."""
         self._ensure_loaded()
         assert self.loader.manifest is not None
+        validate_date(date_str)
         available = self.loader.manifest["available_dates"]
         start_date = available["start"]
         end_date = available["end"]
@@ -176,7 +204,7 @@ class OutputStore:
             if len(s_range) == 2 and s_range[0] <= date_str <= s_range[1]:
                 return str(s_name)
 
-        return "val"
+        return None
 
     def _compute_color_ranges(self, ds: xr.Dataset, depths: list[float]) -> list[ColorRange]:
         """Compute 2nd/98th percentile of temp_glorys per depth over published dates."""
@@ -415,12 +443,8 @@ class OutputStore:
     ) -> TimeseriesResponse:
         """Return daily temperature time series for a location and depth (PRD_BACKEND §4.5)."""
         d_idx, target_depth = self.resolve_depth(depth_m, depth_index)
-
-        try:
-            start_dt = pd.to_datetime(start)
-            end_dt = pd.to_datetime(end)
-        except Exception:
-            raise APIError(422, "invalid_date_format", "Dates must be formatted as YYYY-MM-DD")
+        start_dt = validate_date(start)
+        end_dt = validate_date(end)
 
         if start_dt > end_dt:
             raise APIError(422, "invalid_time_range", "start date cannot be after end date")
@@ -441,8 +465,10 @@ class OutputStore:
         available = self.loader.manifest["available_dates"]
         avail_start = available["start"]
         avail_end = available["end"]
+        avail_start_dt = validate_date(avail_start)
+        avail_end_dt = validate_date(avail_end)
 
-        if end < avail_start or start > avail_end:
+        if end_dt < avail_start_dt or start_dt > avail_end_dt:
             raise DateUnavailableError(
                 f"Requested range [{start}, {end}] does not overlap "
                 f"available dates [{avail_start}, {avail_end}]"
@@ -680,10 +706,14 @@ class OutputStore:
             df = pd.read_csv(csv_path)
             self._cached_argo = df
 
-        def _opt_float(val: float | str | None) -> float | None:
+        def _opt_float(val: Any) -> float | None:
             if pd.isna(val) or val is None or val == "":
                 return None
-            return round(float(val), 4)
+            try:
+                f = float(val)
+                return None if np.isnan(f) else round(f, 4)
+            except (ValueError, TypeError):
+                return None
 
         rows: list[ArgoMetricRow] = []
         for _, r in df.iterrows():
@@ -692,11 +722,11 @@ class OutputStore:
                     depth_m=round(float(r["depth_m"]), 2),
                     n_profiles=int(r["n_profiles"]),
                     n_obs=int(r["n_obs"]),
-                    mae_c=round(float(r["mae_c"]), 4),
-                    rmse_c=round(float(r["rmse_c"]), 4),
-                    bias_c=round(float(r["bias_c"]), 4),
-                    glorys_mae_c=round(float(r["glorys_mae_c"]), 4),
-                    glorys_rmse_c=round(float(r["glorys_rmse_c"]), 4),
+                    mae_c=_opt_float(r.get("mae_c")),
+                    rmse_c=_opt_float(r.get("rmse_c")),
+                    bias_c=_opt_float(r.get("bias_c")),
+                    glorys_mae_c=_opt_float(r.get("glorys_mae_c")),
+                    glorys_rmse_c=_opt_float(r.get("glorys_rmse_c")),
                     grep_mae_c=_opt_float(r.get("grep_mae_c")),
                     grep_rmse_c=_opt_float(r.get("grep_rmse_c")),
                     armor3d_mae_c=_opt_float(r.get("armor3d_mae_c")),
@@ -759,6 +789,7 @@ class OutputStore:
 
         filtered = df
         if date is not None:
+            validate_date(date)
             filtered = filtered[filtered["time"].astype(str).str.startswith(date)]
         if lat_min is not None:
             filtered = filtered[filtered["lat"] >= lat_min]
@@ -822,29 +853,53 @@ class OutputStore:
             df = pd.read_csv(csv_path)
             self._cached_headline = df
 
+        def _safe_float(val: Any) -> float | None:
+            if val is None or pd.isna(val) or val == "":
+                return None
+            try:
+                f = float(val)
+                return None if np.isnan(f) else round(f, 4)
+            except (ValueError, TypeError):
+                return None
+
+        def _safe_int(val: Any) -> int | None:
+            if val is None or pd.isna(val) or val == "":
+                return None
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return None
+
         rows: list[HeadlineRow] = []
         for _, r in df.iterrows():
             rows.append(
                 HeadlineRow(
                     period=str(r["period"]),
                     product=str(r["product"]),
-                    n_floats=int(r["n_floats"]),
-                    n_obs=int(r["n_obs"]),
-                    rmse_c=round(float(r["rmse_c"]), 4),
-                    ci_low_c=round(float(r["ci_low_c"]), 4),
-                    ci_high_c=round(float(r["ci_high_c"]), 4),
-                    diff_vs_model_c=round(float(r["diff_vs_model_c"]), 4),
-                    diff_ci_low_c=round(float(r["diff_ci_low_c"]), 4),
-                    diff_ci_high_c=round(float(r["diff_ci_high_c"]), 4),
+                    n_floats=_safe_int(r.get("n_floats")),
+                    n_obs=_safe_int(r.get("n_obs")),
+                    rmse_c=_safe_float(r.get("rmse_c")),
+                    ci_low_c=_safe_float(r.get("ci_low_c")),
+                    ci_high_c=_safe_float(r.get("ci_high_c")),
+                    diff_vs_model_c=_safe_float(r.get("diff_vs_model_c")),
+                    diff_ci_low_c=_safe_float(r.get("diff_ci_low_c")),
+                    diff_ci_high_c=_safe_float(r.get("diff_ci_high_c")),
                 )
             )
 
         reported_period = "test" if manifest.get("test_evaluated", False) else "val"
-        competitors = [
-            r for r in rows if r.period == reported_period and r.product.lower() != "model"
+        competitors_with_data = [
+            r
+            for r in rows
+            if r.period == reported_period
+            and r.product.lower() != "model"
+            and r.diff_ci_high_c is not None
         ]
-        if competitors:
-            met: bool | None = all(c.diff_ci_high_c < 0.0 for c in competitors)
+        if competitors_with_data:
+            met: bool | None = all(
+                c.diff_ci_high_c is not None and c.diff_ci_high_c < 0.0
+                for c in competitors_with_data
+            )
         else:
             met = None
 

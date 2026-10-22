@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 class APIError(HTTPException):
@@ -120,6 +121,15 @@ class RangeTooLargeError(APIError):
         )
 
 
+class InvalidDateFormatError(APIError):
+    def __init__(self, message: str = "Date must be formatted as YYYY-MM-DD") -> None:
+        super().__init__(
+            status_code=422,
+            code="invalid_date_format",
+            message=message,
+        )
+
+
 class ChatDisabledError(APIError):
     def __init__(self, message: str = "Chat assistant is disabled") -> None:
         super().__init__(
@@ -137,13 +147,20 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
     )
 
 
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """Handle standard FastAPI HTTPException instances."""
+async def http_exception_handler(
+    request: Request, exc: HTTPException | StarletteHTTPException
+) -> JSONResponse:
+    """Handle standard FastAPI and Starlette HTTPException instances."""
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    code = (
+        "not_found"
+        if exc.status_code == 404
+        else ("method_not_allowed" if exc.status_code == 405 else "http_error")
+    )
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": "http_error", "message": str(exc.detail), "details": None}},
+        content={"error": {"code": code, "message": str(exc.detail), "details": None}},
     )
 
 

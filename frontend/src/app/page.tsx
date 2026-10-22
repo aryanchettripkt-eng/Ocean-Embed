@@ -74,14 +74,18 @@ function ExplorerContent() {
     return cr ?? { vmin: 15.0, vmax: 30.0 };
   }, [meta, state.depth, state.field]);
 
-  const isLive = state.date >= "2020-01-09";
+  // Split and live status derived directly from API response
+  const isLive = mapData?.split === "live";
+
+  // Automatically fall back to 'pred' field on live dates where GLORYS is unavailable
+  useEffect(() => {
+    if (mapData?.split === "live" && state.field !== "pred") {
+      setState((prev) => ({ ...prev, field: "pred" }));
+    }
+  }, [mapData?.split, state.field]);
 
   const handleDateChange = useCallback((newDate: string) => {
-    setState((prev) => {
-      const willBeLive = newDate >= "2020-01-09";
-      const field = willBeLive && prev.field !== "pred" ? "pred" : prev.field;
-      return { ...prev, date: newDate, field };
-    });
+    setState((prev) => ({ ...prev, date: newDate }));
   }, []);
 
   const handleDepthChange = useCallback((newDepth: number) => {
@@ -245,6 +249,7 @@ function ExplorerContent() {
             date={state.date}
             startDate={meta.available_dates.start}
             endDate={meta.available_dates.end}
+            currentSplit={mapData?.split}
             latestLiveDate={meta.latest_live_date}
             splits={meta.splits}
             onChange={handleDateChange}

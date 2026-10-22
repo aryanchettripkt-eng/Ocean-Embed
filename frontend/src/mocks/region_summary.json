@@ -1,0 +1,13 @@
+{
+  "date": "2020-01-05",
+  "depth_m": 100.0,
+  "field": "pred",
+  "max": 19.13,
+  "mean": 19.07,
+  "min": 19.01,
+  "n_total": 4,
+  "n_valid": 4,
+  "run_id": "synthetic_v1",
+  "std": 0.06,
+  "synthetic": true
+}

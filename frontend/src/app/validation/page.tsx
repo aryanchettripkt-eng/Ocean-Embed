@@ -72,7 +72,11 @@ export default function ValidationPage() {
         )}
 
         {/* 1. Pre-Registered Primary Headline Criterion */}
-        <HeadlineCard headline={headline} isLoading={isHeadlineLoading} />
+        <HeadlineCard
+          headline={headline}
+          isLoading={isHeadlineLoading}
+          reportedPeriod={meta.test_evaluated ? "test" : "val"}
+        />
 
         {/* 2. Overall Validation Summary Metric Cards */}
         <MetricCards metrics={depthMetrics} isLoading={isDepthMetricsLoading} />

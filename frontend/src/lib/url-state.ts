@@ -63,13 +63,19 @@ export function parseExplorerParams(
   // Default depth: closest to 100m from meta.depths_m
   const defaultDepth = meta?.depths_m ? findClosestDepth(100.0, meta.depths_m) : DEFAULT_FALLBACK_STATE.depth;
 
-  // Default date: latest validation date or available_dates.end
+  // Default date: latest available date that lies in the val split (min of val end and available end)
   let defaultDate = DEFAULT_FALLBACK_STATE.date;
   if (meta?.available_dates) {
-    if (meta.splits?.val && meta.splits.val.length > 0) {
-      defaultDate = meta.splits.val[meta.splits.val.length - 1];
+    const availStart = meta.available_dates.start;
+    const availEnd = meta.available_dates.end;
+    if (meta.splits?.val && meta.splits.val.length >= 2) {
+      const valStart = meta.splits.val[0];
+      const valEnd = meta.splits.val[1];
+      const candidate = valEnd < availEnd ? valEnd : availEnd;
+      const earliest = valStart > availStart ? valStart : availStart;
+      defaultDate = candidate >= earliest ? candidate : availEnd;
     } else {
-      defaultDate = meta.available_dates.end;
+      defaultDate = availEnd;
     }
   }
 

@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   filter:
     name: Detect Changes
@@ -130,6 +134,10 @@ jobs:
         if: ${{ needs.filter.outputs.backend == 'true' }}
         run: python -m app.export_openapi --check
 
+      - name: Verify Frontend Mocks Derived from Fixtures Up-to-Date
+        if: ${{ needs.filter.outputs.backend == 'true' }}
+        run: python -m app.export_mocks --check
+
   frontend:
     name: Frontend Checks
     needs: filter
@@ -158,6 +166,12 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.filter.outputs.frontend == 'true' }}
         run: pnpm install --frozen-lockfile
+
+      - name: Verify Generated Types Up-to-Date
+        if: ${{ needs.filter.outputs.frontend == 'true' }}
+        run: |
+          pnpm generate-types
+          git diff --exit-code src/lib/api/types.ts
 
       - name: Typecheck
         if: ${{ needs.filter.outputs.frontend == 'true' }}

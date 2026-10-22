@@ -21,15 +21,20 @@ class DataLoader:
         self.data_dir = Path(data_dir or settings.DATA_DIR)
         self.manifest: dict[str, Any] | None = None
         self._load_error: str | None = None
+        self._current_hf_revision: str | None = None
         self.load()
 
     def _get_schema_path(self) -> Path:
         return Path(__file__).resolve().parent.parent / "schemas" / "manifest.schema.json"
 
     def _maybe_download_from_hf(self) -> None:
-        """Download dataset from HF Hub if configured and manifest.json is absent."""
+        """Download dataset from HF if manifest.json is absent or revision changed."""
         manifest_file = self.data_dir / "manifest.json"
-        if not manifest_file.exists() and settings.HF_DATASET_REPO:
+        needs_download = (not manifest_file.exists()) or (
+            settings.HF_DATASET_REVISION
+            and self._current_hf_revision != settings.HF_DATASET_REVISION
+        )
+        if needs_download and settings.HF_DATASET_REPO:
             try:
                 from huggingface_hub import snapshot_download
 
@@ -46,6 +51,7 @@ class DataLoader:
                     local_dir=str(self.data_dir),
                     token=settings.HF_TOKEN,
                 )
+                self._current_hf_revision = settings.HF_DATASET_REVISION
             except Exception as e:
                 logger.error("Failed to download dataset from HF: %s", e)
                 self._load_error = f"Failed to download dataset from HF: {e}"
@@ -59,8 +65,11 @@ class DataLoader:
 
         manifest_file = self.data_dir / "manifest.json"
         if not manifest_file.exists():
-            self._load_error = f"Manifest not found in {self.data_dir}"
-            self.manifest = None
+            if self.manifest is not None:
+                logger.error("Manifest disappeared on reload, keeping current valid manifest")
+            else:
+                self._load_error = f"Manifest not found in {self.data_dir}"
+                self.manifest = None
             return
 
         try:
@@ -76,8 +85,17 @@ class DataLoader:
                 schema=schema,
                 format_checker=jsonschema.Draft7Validator.FORMAT_CHECKER,
             )
+            old_manifest = self.manifest
             self.manifest = raw_manifest
             self._load_error = None
+
+            if old_manifest is not None:
+                try:
+                    from app.data.store import store
+
+                    store.clear_caches()
+                except Exception:
+                    pass
         except Exception as e:
             # If we already had a valid manifest, keep serving it and log error (PRD §9 test 12)
             if self.manifest is not None:

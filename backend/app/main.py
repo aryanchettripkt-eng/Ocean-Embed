@@ -3,15 +3,13 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1 import api_v1_router
-from app.api.v1.data import router as data_router
-from app.api.v1.meta import get_health, get_meta
 from app.data.loader import loader
 from app.errors import (
     APIError,
@@ -19,7 +17,6 @@ from app.errors import (
     http_exception_handler,
     validation_exception_handler,
 )
-from app.schemas.models import MetaResponse
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -64,6 +61,7 @@ app = FastAPI(
 # Exception handlers enforcing PRD_BACKEND Section 4 JSON error envelope
 app.add_exception_handler(APIError, api_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 
 # CORS middleware
@@ -81,19 +79,3 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Mount API v1 router
 app.include_router(api_v1_router)
-
-# Mount root aliases for data endpoints without duplicating in schema
-app.include_router(data_router, include_in_schema=False)
-
-
-# Root level endpoints for health and meta
-@app.get("/health", tags=["system"], summary="Root health check")
-def health() -> JSONResponse:
-    """Convenience root health check delegating to /api/v1/health."""
-    return get_health()
-
-
-@app.get("/meta", response_model=MetaResponse, tags=["metadata"], summary="Root metadata")
-def meta(response: Response) -> MetaResponse:
-    """Convenience root metadata delegating to /api/v1/meta."""
-    return get_meta(response)
