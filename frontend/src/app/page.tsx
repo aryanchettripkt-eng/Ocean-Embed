@@ -12,6 +12,7 @@ import { FieldToggle, type FieldType } from "../components/controls/FieldToggle"
 import { MapView } from "../components/map/MapView";
 import { Colorbar } from "../components/map/Colorbar";
 import { CoverageLegend } from "../components/map/CoverageLegend";
+import { DetailsPanel } from "../components/panels/DetailsPanel";
 import { Banner } from "../components/common/Banner";
 import { Loading } from "../components/common/Loading";
 import { ErrorState } from "../components/common/ErrorState";
@@ -173,6 +174,22 @@ function ExplorerContent() {
             <CoverageLegend />
           </div>
         </div>
+
+        {/* Details Panel overlay when lat/lon selected */}
+        {state.lat !== null && state.lon !== null && (
+          <div className="absolute top-4 right-4 z-30 w-[calc(100%-2rem)] sm:w-96 md:w-[420px] pointer-events-auto">
+            <DetailsPanel
+              lat={state.lat}
+              lon={state.lon}
+              date={state.date}
+              depth={state.depth}
+              minDate={meta.available_dates.start}
+              maxDate={meta.available_dates.end}
+              onClose={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
+              onSelectDepth={handleDepthChange}
+            />
+          </div>
+        )}
       </div>
 
       {/* Control Panel (Sidebar on desktop, bottom sheet / drawer on mobile) */}
