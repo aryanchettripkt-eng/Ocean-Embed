@@ -12,32 +12,43 @@ import xarray as xr
 
 from app.data.grid import compute_area_weights, get_region_mask, snap_coordinate
 from app.data.loader import DataLoader
-from app.data.loader import loader as default_loader
 from app.errors import (
     APIError,
     BadDepthError,
     BothDepthParamsError,
     DataNotLoadedError,
     DateUnavailableError,
+    HeadlineNotAvailableError,
+    OutOfRegionError,
     RangeTooLargeError,
     ReferenceUnavailableError,
+    TestNotEvaluatedError,
 )
 from app.schemas.caveats import (
     ARGO_CAVEAT,
     GLORYS_CAVEAT,
+    HEADLINE_CRITERION,
     LIVE_CAVEAT,
     SYNTHETIC_CAVEAT,
 )
 from app.schemas.models import (
+    ArgoMetricRow,
+    ArgoProfileMatch,
+    ArgoProfilesResponse,
+    ArgoResponse,
     AvailableDates,
     Caveats,
     ChatInfo,
     ColorRange,
     ErrorRange,
     GridShape,
+    HeadlineResponse,
+    HeadlineRow,
     MapResponse,
     MapStats,
     MetaResponse,
+    MetricRow,
+    MetricsResponse,
     ProfileResponse,
     Region,
     RegionSummaryResponse,
@@ -57,6 +68,10 @@ class OutputStore:
         self._ds: xr.Dataset | None = None
         self._cached_meta: MetaResponse | None = None
         self._cached_color_ranges: list[ColorRange] | None = None
+        self._cached_metrics: dict[str, pd.DataFrame] = {}
+        self._cached_argo: pd.DataFrame | None = None
+        self._cached_argo_matches: pd.DataFrame | None = None
+        self._cached_headline: pd.DataFrame | None = None
         self._last_loader_id: int | None = None
 
     @property
@@ -74,6 +89,10 @@ class OutputStore:
             self._ds = None
             self._cached_meta = None
             self._cached_color_ranges = None
+            self._cached_metrics.clear()
+            self._cached_argo = None
+            self._cached_argo_matches = None
+            self._cached_headline = None
             self._last_loader_id = id(active_loader)
 
         if not active_loader.is_loaded or active_loader.manifest is None:
@@ -554,5 +573,285 @@ class OutputStore:
             n_total=n_total,
         )
 
+    def get_metrics(
+        self,
+        split: Literal["val", "test"] = "val",
+        group_by: Literal["depth", "season", "region"] = "depth",
+    ) -> MetricsResponse:
+        """Query evaluation metrics grouped by depth, season, or region."""
+        self._ensure_loaded()
+        assert self.loader.manifest is not None
+        manifest = self.loader.manifest
+        data_dir = self.loader.data_dir
 
-store = OutputStore(default_loader)
+        if split == "test":
+            if not manifest.get("test_evaluated", False):
+                raise TestNotEvaluatedError("Test split has not been evaluated")
+            test_file = manifest.get("files", {}).get("metrics_test")
+            if not test_file:
+                raise TestNotEvaluatedError("Test metrics file is not available")
+            files_to_read: list[tuple[str, str | None]] = [(test_file, None)]
+        else:
+            files_to_read = []
+            files_dict = manifest.get("files", {})
+            if group_by == "depth":
+                active_f = files_dict.get("metrics_val")
+                if active_f:
+                    files_to_read.append((active_f, None))
+                for bf in files_dict.get("baselines_val", []):
+                    files_to_read.append((bf, None))
+            elif group_by == "season":
+                active_f = files_dict.get("metrics_val_by_season")
+                if active_f:
+                    files_to_read.append((active_f, "season"))
+            elif group_by == "region":
+                active_f = files_dict.get("metrics_val_by_region")
+                if active_f:
+                    files_to_read.append((active_f, "region"))
+
+        rows: list[MetricRow] = []
+        for rel_path, group_col in files_to_read:
+            csv_path = data_dir / rel_path
+            if not csv_path.exists():
+                logger.warning("Metrics file %s does not exist", csv_path)
+                continue
+
+            cache_key = str(csv_path)
+            if cache_key in self._cached_metrics:
+                df = self._cached_metrics[cache_key]
+            else:
+                df = pd.read_csv(csv_path)
+                self._cached_metrics[cache_key] = df
+
+            for _, r in df.iterrows():
+                depth_raw = r["depth_m"]
+                try:
+                    depth_m_val: float | str = float(depth_raw)
+                except (ValueError, TypeError):
+                    depth_m_val = str(depth_raw)
+
+                group_val: str | None = None
+                if group_col and group_col in r and pd.notna(r[group_col]):
+                    group_val = str(r[group_col])
+
+                rows.append(
+                    MetricRow(
+                        model=str(r["model"]),
+                        split=str(r["split"]),
+                        depth_m=depth_m_val,
+                        group=group_val,
+                        n=int(r["n"]),
+                        mae_c=round(float(r["mae_c"]), 4),
+                        rmse_c=round(float(r["rmse_c"]), 4),
+                        bias_c=round(float(r["bias_c"]), 4),
+                        skill_vs_clim_pct=round(float(r["skill_vs_clim_pct"]), 2),
+                    )
+                )
+
+        return MetricsResponse(
+            run_id=manifest["active_run_id"],
+            synthetic=manifest["synthetic"],
+            split=split,
+            group_by=group_by,
+            rows=rows,
+        )
+
+    def get_argo(self) -> ArgoResponse:
+        """Query ARGO validation metrics table."""
+        self._ensure_loaded()
+        assert self.loader.manifest is not None
+        manifest = self.loader.manifest
+        data_dir = self.loader.data_dir
+
+        argo_rel = manifest.get("files", {}).get("argo")
+        if not argo_rel:
+            raise APIError(404, "argo_not_available", "ARGO validation metrics not available")
+
+        csv_path = data_dir / argo_rel
+        if not csv_path.exists():
+            raise APIError(404, "argo_not_available", f"ARGO file {argo_rel} not found")
+
+        if self._cached_argo is not None:
+            df = self._cached_argo
+        else:
+            df = pd.read_csv(csv_path)
+            self._cached_argo = df
+
+        def _opt_float(val: float | str | None) -> float | None:
+            if pd.isna(val) or val is None or val == "":
+                return None
+            return round(float(val), 4)
+
+        rows: list[ArgoMetricRow] = []
+        for _, r in df.iterrows():
+            rows.append(
+                ArgoMetricRow(
+                    depth_m=round(float(r["depth_m"]), 2),
+                    n_profiles=int(r["n_profiles"]),
+                    n_obs=int(r["n_obs"]),
+                    mae_c=round(float(r["mae_c"]), 4),
+                    rmse_c=round(float(r["rmse_c"]), 4),
+                    bias_c=round(float(r["bias_c"]), 4),
+                    glorys_mae_c=round(float(r["glorys_mae_c"]), 4),
+                    glorys_rmse_c=round(float(r["glorys_rmse_c"]), 4),
+                    grep_mae_c=_opt_float(r.get("grep_mae_c")),
+                    grep_rmse_c=_opt_float(r.get("grep_rmse_c")),
+                    armor3d_mae_c=_opt_float(r.get("armor3d_mae_c")),
+                    armor3d_rmse_c=_opt_float(r.get("armor3d_rmse_c")),
+                )
+            )
+
+        n_profiles_total = int(df["n_profiles"].max()) if not df.empty else 0
+        n_obs_total = int(df["n_obs"].sum()) if not df.empty else 0
+
+        return ArgoResponse(
+            run_id=manifest["active_run_id"],
+            synthetic=manifest["synthetic"],
+            n_profiles_total=n_profiles_total,
+            n_obs_total=n_obs_total,
+            caveat=ARGO_CAVEAT,
+            rows=rows,
+        )
+
+    def get_argo_profiles(
+        self,
+        date: str | None = None,
+        lat_min: float | None = None,
+        lat_max: float | None = None,
+        lon_min: float | None = None,
+        lon_max: float | None = None,
+    ) -> ArgoProfilesResponse:
+        """Query matched ARGO profiles for map markers."""
+        self._ensure_loaded()
+        assert self.loader.manifest is not None
+        manifest = self.loader.manifest
+        data_dir = self.loader.data_dir
+
+        if lat_min is not None and lat_max is not None and lat_min > lat_max:
+            raise OutOfRegionError("Invalid bounding box: lat_min exceeds lat_max")
+        if lon_min is not None and lon_max is not None and lon_min > lon_max:
+            raise OutOfRegionError("Invalid bounding box: lon_min exceeds lon_max")
+
+        matches_rel = manifest.get("files", {}).get("argo_matches")
+        if not matches_rel:
+            return ArgoProfilesResponse(
+                run_id=manifest["active_run_id"],
+                synthetic=manifest["synthetic"],
+                profiles=[],
+            )
+
+        parquet_path = data_dir / matches_rel
+        if not parquet_path.exists():
+            return ArgoProfilesResponse(
+                run_id=manifest["active_run_id"],
+                synthetic=manifest["synthetic"],
+                profiles=[],
+            )
+
+        if self._cached_argo_matches is not None:
+            df = self._cached_argo_matches
+        else:
+            df = pd.read_parquet(parquet_path)
+            self._cached_argo_matches = df
+
+        filtered = df
+        if date is not None:
+            filtered = filtered[filtered["time"].astype(str).str.startswith(date)]
+        if lat_min is not None:
+            filtered = filtered[filtered["lat"] >= lat_min]
+        if lat_max is not None:
+            filtered = filtered[filtered["lat"] <= lat_max]
+        if lon_min is not None:
+            filtered = filtered[filtered["lon"] >= lon_min]
+        if lon_max is not None:
+            filtered = filtered[filtered["lon"] <= lon_max]
+
+        if filtered.empty:
+            return ArgoProfilesResponse(
+                run_id=manifest["active_run_id"],
+                synthetic=manifest["synthetic"],
+                profiles=[],
+            )
+
+        grouped = (
+            filtered.groupby(["platform_number", "cycle", "time", "lat", "lon"], as_index=False)
+            .size()
+            .rename(columns={"size": "n_obs"})
+        )
+        grouped = grouped.iloc[:500]
+
+        profiles = [
+            ArgoProfileMatch(
+                platform_number=str(r["platform_number"]),
+                cycle=int(r["cycle"]),
+                time=str(r["time"]),
+                lat=round(float(r["lat"]), 4),
+                lon=round(float(r["lon"]), 4),
+                n_obs=int(r["n_obs"]),
+            )
+            for _, r in grouped.iterrows()
+        ]
+
+        return ArgoProfilesResponse(
+            run_id=manifest["active_run_id"],
+            synthetic=manifest["synthetic"],
+            profiles=profiles,
+        )
+
+    def get_headline(self) -> HeadlineResponse:
+        """Query headline success criterion table."""
+        self._ensure_loaded()
+        assert self.loader.manifest is not None
+        manifest = self.loader.manifest
+        data_dir = self.loader.data_dir
+
+        headline_rel = manifest.get("files", {}).get("headline")
+        if not headline_rel:
+            raise HeadlineNotAvailableError("Headline evaluation metrics are not available")
+
+        csv_path = data_dir / headline_rel
+        if not csv_path.exists():
+            raise HeadlineNotAvailableError(f"Headline file {headline_rel} not found")
+
+        if self._cached_headline is not None:
+            df = self._cached_headline
+        else:
+            df = pd.read_csv(csv_path)
+            self._cached_headline = df
+
+        rows: list[HeadlineRow] = []
+        for _, r in df.iterrows():
+            rows.append(
+                HeadlineRow(
+                    period=str(r["period"]),
+                    product=str(r["product"]),
+                    n_floats=int(r["n_floats"]),
+                    n_obs=int(r["n_obs"]),
+                    rmse_c=round(float(r["rmse_c"]), 4),
+                    ci_low_c=round(float(r["ci_low_c"]), 4),
+                    ci_high_c=round(float(r["ci_high_c"]), 4),
+                    diff_vs_model_c=round(float(r["diff_vs_model_c"]), 4),
+                    diff_ci_low_c=round(float(r["diff_ci_low_c"]), 4),
+                    diff_ci_high_c=round(float(r["diff_ci_high_c"]), 4),
+                )
+            )
+
+        reported_period = "test" if manifest.get("test_evaluated", False) else "val"
+        competitors = [
+            r for r in rows if r.period == reported_period and r.product.lower() != "model"
+        ]
+        if competitors:
+            met: bool | None = all(c.diff_ci_high_c < 0.0 for c in competitors)
+        else:
+            met = None
+
+        return HeadlineResponse(
+            run_id=manifest["active_run_id"],
+            synthetic=manifest["synthetic"],
+            criterion=HEADLINE_CRITERION,
+            met=met,
+            rows=rows,
+        )
+
+
+store = OutputStore()
