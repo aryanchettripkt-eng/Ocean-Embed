@@ -54,7 +54,12 @@ export function ViewSwitch({
   }, []);
 
   return (
-    <div className="flex flex-col gap-2 pointer-events-auto">
+    <div
+      className="flex flex-col gap-2 pointer-events-auto"
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       {/* Primary View Segmented Toggle */}
       <div className="flex items-center p-1 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg">
         <button

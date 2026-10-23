@@ -11,6 +11,7 @@ import {
   getDepthTicks,
   getVisibleWalls,
   getWallColorRange,
+  screenPointToGridCell,
   type WallId,
 } from "./depthScale";
 import {
@@ -89,6 +90,7 @@ export class CutawayLayer implements CustomLayerInterface {
 
   // Section data caches
   private sectionResponses: Partial<Record<WallId, SectionResponse>> = {};
+  private latestMatrix: number[] | null = null;
 
   constructor(options: CutawayLayerOptions) {
     this.region = options.region;
@@ -204,8 +206,30 @@ export class CutawayLayer implements CustomLayerInterface {
     this.map?.triggerRepaint();
   }
 
+  getSnappedCellAtScreenPoint(
+    screenX: number,
+    screenY: number,
+    lats: number[],
+    lons: number[],
+    viewportWidth: number,
+    viewportHeight: number
+  ): { lat: number; lon: number } | null {
+    if (!this.latestMatrix) return null;
+    return screenPointToGridCell(
+      screenX,
+      screenY,
+      this.latestMatrix,
+      this.currentZ,
+      lats,
+      lons,
+      viewportWidth,
+      viewportHeight
+    );
+  }
+
   render: CustomRenderMethod = (gl, matrix) => {
     if (!this.gl || !(gl instanceof WebGL2RenderingContext) || !this.map) return;
+    this.latestMatrix = Array.from(matrix as unknown as ArrayLike<number>);
 
     // Update dive easing
     if (this.animating) {
@@ -365,6 +389,7 @@ export class CutawayLayer implements CustomLayerInterface {
     // Wall coordinates: from current sunk depth currentZ down to floor (-heightMercator)
     const zTop = this.currentZ;
     const zBottom = -this.heightMercator;
+    const topRatio = Math.sqrt(Math.max(0, this.currentDepth_m)) / Math.sqrt(this.maxDepth_m);
 
     let wx0 = x0, wy0 = y0, wx1 = x1, wy1 = y1;
     let normal = [0, -1, 0]; // default south normal
@@ -375,29 +400,32 @@ export class CutawayLayer implements CustomLayerInterface {
       wx1 = x1; wy1 = y1;
       normal = [0, 1, 0]; // facing south (+Y in Mercator screen space)
     } else if (wallId === "north") {
+      // Along top latitude: from west to east at lat_max (y0)
       wx0 = x1; wy0 = y0;
       wx1 = x0; wy1 = y0;
       normal = [0, -1, 0];
     } else if (wallId === "west") {
-      wx0 = x0; wy0 = y0;
-      wx1 = x0; wy1 = y1;
+      // Along west longitude: from south (y1) to north (y0)
+      wx0 = x0; wy0 = y1;
+      wx1 = x0; wy1 = y0;
       normal = [-1, 0, 0];
     } else if (wallId === "east") {
+      // Along east longitude: from south (y1) to north (y0)
       wx0 = x1; wy0 = y1;
       wx1 = x1; wy1 = y0;
       normal = [1, 0, 0];
     }
 
-    // Quad vertices: 2 triangles
+    // Quad vertices: 2 triangles with top UV sliced to topRatio
     const verts = new Float32Array([
       // pos (x, y, z), uv (u, v), normal
-      wx0, wy0, zTop,    0.0, 0.0, normal[0], normal[1], normal[2],
-      wx1, wy1, zTop,    1.0, 0.0, normal[0], normal[1], normal[2],
-      wx0, wy0, zBottom, 0.0, 1.0, normal[0], normal[1], normal[2],
+      wx0, wy0, zTop,    0.0, topRatio, normal[0], normal[1], normal[2],
+      wx1, wy1, zTop,    1.0, topRatio, normal[0], normal[1], normal[2],
+      wx0, wy0, zBottom, 0.0, 1.0,      normal[0], normal[1], normal[2],
 
-      wx0, wy0, zBottom, 0.0, 1.0, normal[0], normal[1], normal[2],
-      wx1, wy1, zTop,    1.0, 0.0, normal[0], normal[1], normal[2],
-      wx1, wy1, zBottom, 1.0, 1.0, normal[0], normal[1], normal[2],
+      wx0, wy0, zBottom, 0.0, 1.0,      normal[0], normal[1], normal[2],
+      wx1, wy1, zTop,    1.0, topRatio, normal[0], normal[1], normal[2],
+      wx1, wy1, zBottom, 1.0, 1.0,      normal[0], normal[1], normal[2],
     ]);
 
     this.gl.bindVertexArray(this.wallVAO);

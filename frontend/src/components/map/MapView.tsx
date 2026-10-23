@@ -275,8 +275,8 @@ export function MapView({
           window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         layer.setDepth(depth_m, reducedMotion);
 
-        if (mapDataRef.current) {
-          layer.setMapData(mapDataRef.current, vmin, vmax);
+        if (mapData) {
+          layer.setMapData(mapData, vmin, vmax);
         }
 
         if (sections) {
@@ -305,6 +305,7 @@ export function MapView({
     depth_m,
     vmin,
     vmax,
+    mapData,
     sections,
   ]);
 
@@ -436,8 +437,19 @@ export function MapView({
 
     tourRaf = requestAnimationFrame(rotateStep);
 
-    // Cancel tour on user interaction
-    const handleUserInteract = () => {
+    // Cancel tour on user interaction with map canvas
+    const handleUserInteract = (e: any) => {
+      const target = e?.originalEvent?.target as HTMLElement | null;
+      if (
+        target &&
+        (target.closest("button") ||
+          target.closest("input") ||
+          target.closest("select") ||
+          target.closest(".pointer-events-auto") ||
+          target.closest(".maplibregl-ctrl"))
+      ) {
+        return;
+      }
       if (onStopTour) onStopTour();
     };
 
@@ -485,7 +497,12 @@ export function MapView({
     const colormap = mapData.field === "error" ? "balance" : "thermal";
     renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap, 4, canvasRef.current);
     syncGridLayer();
-  }, [mapData, vmin, vmax, syncGridLayer]);
+
+    if (view === "3d" && cutawayLayerRef.current) {
+      cutawayLayerRef.current.setMapData(mapData, vmin, vmax);
+      mapInstanceRef.current?.triggerRepaint();
+    }
+  }, [mapData, vmin, vmax, syncGridLayer, view]);
 
   // Throttled hover handler and single click path
   const hoverRafRef = useRef<number | null>(null);
@@ -524,22 +541,63 @@ export function MapView({
           return;
         }
 
-        const { lng, lat } = evt.lngLat;
-        if (
-          lng < rgn.lon_min ||
-          lng > rgn.lon_max ||
-          lat < rgn.lat_min ||
-          lat > rgn.lat_max
-        ) {
-          if (lastHoverCellRef.current !== null) {
-            lastHoverCellRef.current = null;
-            setHoverInfo(null);
-          }
-          return;
-        }
+        let cellLat: number;
+        let cellLon: number;
+        let r: number;
+        let c: number;
 
-        const r = findNearestIndex(data.lat, lat);
-        const c = findNearestIndex(data.lon, lng);
+        if (view === "3d" && cutawayLayerRef.current) {
+          const canvas = map.getCanvas();
+          const snapped = cutawayLayerRef.current.getSnappedCellAtScreenPoint(
+            evt.point.x,
+            evt.point.y,
+            data.lat,
+            data.lon,
+            canvas.clientWidth || canvas.width,
+            canvas.clientHeight || canvas.height
+          );
+          if (!snapped) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          if (
+            snapped.lon < rgn.lon_min ||
+            snapped.lon > rgn.lon_max ||
+            snapped.lat < rgn.lat_min ||
+            snapped.lat > rgn.lat_max
+          ) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          cellLat = snapped.lat;
+          cellLon = snapped.lon;
+          r = findNearestIndex(data.lat, cellLat);
+          c = findNearestIndex(data.lon, cellLon);
+        } else {
+          const { lng, lat } = evt.lngLat;
+          if (
+            lng < rgn.lon_min ||
+            lng > rgn.lon_max ||
+            lat < rgn.lat_min ||
+            lat > rgn.lat_max
+          ) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          r = findNearestIndex(data.lat, lat);
+          c = findNearestIndex(data.lon, lng);
+          cellLat = data.lat[r];
+          cellLon = data.lon[c];
+        }
 
         // Skip state update if mouse is still in the same grid cell
         if (
@@ -552,8 +610,6 @@ export function MapView({
 
         lastHoverCellRef.current = { r, c };
 
-        const cellLat = data.lat[r];
-        const cellLon = data.lon[c];
         const val = data.values[r]?.[c] ?? null;
         const cov = data.coverage[r]?.[c] ?? 0;
 
@@ -583,20 +639,37 @@ export function MapView({
     const handleClick = (e: maplibregl.MapMouseEvent) => {
       const data = mapDataRef.current;
       const rgn = regionRef.current;
-      const { lng, lat } = e.lngLat;
+      let targetLat = e.lngLat.lat;
+      let targetLon = e.lngLat.lng;
+
+      if (view === "3d" && cutawayLayerRef.current && data?.lat && data?.lon) {
+        const canvas = map.getCanvas();
+        const snapped = cutawayLayerRef.current.getSnappedCellAtScreenPoint(
+          e.point.x,
+          e.point.y,
+          data.lat,
+          data.lon,
+          canvas.clientWidth || canvas.width,
+          canvas.clientHeight || canvas.height
+        );
+        if (snapped) {
+          targetLat = snapped.lat;
+          targetLon = snapped.lon;
+        }
+      }
 
       if (
-        lng >= rgn.lon_min &&
-        lng <= rgn.lon_max &&
-        lat >= rgn.lat_min &&
-        lat <= rgn.lat_max
+        targetLon >= rgn.lon_min &&
+        targetLon <= rgn.lon_max &&
+        targetLat >= rgn.lat_min &&
+        targetLat <= rgn.lat_max
       ) {
         if (data?.lat && data?.lon && data.lat.length > 0 && data.lon.length > 0) {
-          const r = findNearestIndex(data.lat, lat);
-          const c = findNearestIndex(data.lon, lng);
+          const r = findNearestIndex(data.lat, targetLat);
+          const c = findNearestIndex(data.lon, targetLon);
           onSelectPointRef.current(data.lat[r], data.lon[c]);
         } else {
-          onSelectPointRef.current(lat, lng);
+          onSelectPointRef.current(targetLat, targetLon);
         }
       }
     };
@@ -614,7 +687,7 @@ export function MapView({
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
     };
-  }, [depth_m]);
+  }, [depth_m, view]);
 
   // Update selection marker
   useEffect(() => {
