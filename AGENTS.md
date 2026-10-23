@@ -47,10 +47,11 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 7. **No new dependencies** without saying why in the commit message; no paid services.
 8. **Never force-push `main`, never rewrite shared history, never commit directly to `main`.**
 9. **Ask instead of guessing** when requirements are unclear: add a dated entry to `docs/OPEN_QUESTIONS.md` and stop that task.
+10. **No new branches and no pushing without the owner's permission.** Do not create, rename or delete any git branch, and do not `git push` (or open, update or merge a pull request) unless Aryan has explicitly said so for that specific action. Approval for one push or branch does not carry over to the next. Work and commit locally on the branch you were told to use, then report and wait.
 
 ## 6. Workflow for every task
 1. Read this file, the relevant PRD section, and `docs/PROGRESS.md`.
-2. Create a branch `<area>/<short-task>` (e.g. `backend/map-endpoint`).
+2. Work on the branch the owner tells you to use. Only create a new branch (named `<area>/<short-task>`, e.g. `backend/map-endpoint`) if the owner has explicitly asked for it (hard rule 10).
 3. Implement the smallest change that meets the task's acceptance criteria in the PRD.
 4. Run the area's checks locally and make them pass:
    - `ml/`: `ruff check . && ruff format --check . && mypy src && pytest -q`
@@ -58,7 +59,7 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
    - `frontend/`: `pnpm typecheck && pnpm lint && pnpm test && pnpm build`
 5. Commit with a message: `<area>: <what> (<PRD section>)`, body lists any decisions or deviations.
 6. Update `docs/PROGRESS.md`: task, status, branch, what's verified, what's left.
-7. Report to the owner: what changed, how it was verified (the command output), and anything uncertain. Never say "done" if a check failed or was not run.
+7. Report to the owner: what changed, how it was verified (the command output), and anything uncertain. Never say "done" if a check failed or was not run. Do not push; ask the owner whether to push (hard rule 10).
 
 ## 7. Division of labour between agents
 - **Claude** writes plans, PRD updates, task breakdowns and reviews; it may also implement.

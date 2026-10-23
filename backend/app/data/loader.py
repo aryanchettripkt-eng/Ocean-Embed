@@ -43,11 +43,14 @@ class DataLoader:
             needs_download = True
 
         remote_sha: str | None = None
+        hf_token = (
+            settings.HF_TOKEN.strip() if (settings.HF_TOKEN and settings.HF_TOKEN.strip()) else None
+        )
         if not needs_download:
             try:
                 from huggingface_hub import HfApi
 
-                api = HfApi(token=settings.HF_TOKEN)
+                api = HfApi(token=hf_token)
                 info = api.dataset_info(
                     repo_id=settings.HF_DATASET_REPO,
                     revision=settings.HF_DATASET_REVISION or "main",
@@ -78,7 +81,7 @@ class DataLoader:
                     repo_type="dataset",
                     revision=settings.HF_DATASET_REVISION,
                     local_dir=str(self.data_dir),
-                    token=settings.HF_TOKEN,
+                    token=hf_token,
                 )
                 self._current_hf_revision = settings.HF_DATASET_REVISION
                 if remote_sha:

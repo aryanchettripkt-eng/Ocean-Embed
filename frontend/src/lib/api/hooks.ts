@@ -17,15 +17,15 @@ import {
 } from "./client";
 
 /**
- * Metadata hook with cold-backend retry backoff.
+ * Metadata hook with cold-backend retry backoff (PRD_FRONTEND §4, up to 90 s).
  */
 export function useMeta() {
   return useQuery<MetaResponse>({
     queryKey: ["meta"],
     queryFn: () => apiClient.getMeta(),
     staleTime: Infinity,
-    retry: 5,
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 15000),
+    retry: 12,
+    retryDelay: (attemptIndex) => Math.min(1000 * 1.5 ** attemptIndex, 10000),
   });
 }
 
