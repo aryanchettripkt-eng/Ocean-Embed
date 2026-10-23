@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: oceanscope-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    region: oregon
+    envVars:
+      - key: HF_DATASET_REPO
+        value: zenzone3/oceanscope-outputs
+      - key: DATA_DIR
+        value: /app/data
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: RELOAD_INTERVAL_MIN
+        value: "60"
