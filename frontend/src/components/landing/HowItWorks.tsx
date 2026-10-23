@@ -26,7 +26,7 @@ export function HowItWorks() {
           <span className={styles.stepNumber}>02</span>
           <h3 className={styles.stepHeading}>An AI model learns the ocean below</h3>
           <p className={styles.stepBody}>
-            Physics-informed deep learning models reconstruct 3D subsurface temperature
+            Deep learning models reconstruct 3D subsurface temperature
             structures from satellite surface observations and multi-decadal reanalysis.
           </p>
         </article>

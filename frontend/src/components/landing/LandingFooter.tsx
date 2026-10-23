@@ -14,7 +14,7 @@ export function LandingFooter() {
             (WOA23 climatology, climate indices), and GEBCO bathymetry.
           </p>
           <p style={{ marginTop: "0.5rem", opacity: 0.8 }}>
-            Built for Hackathon 2026 · North Indian Ocean Subsurface Reconstruction
+            OceanScope AI • Created by Aryan Chettri & AI Pair Programming Team
           </p>
         </div>
 

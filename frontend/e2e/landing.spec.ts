@@ -55,4 +55,17 @@ test.describe("OceanScope AI Landing Page Flow (§10)", () => {
 
     expect(isHorizontalScrollable).toBe(false);
   });
+  test("with JS disabled the CTA is a real link and navigates", async ({ browser }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    await page.goto("/welcome");
+
+    const cta = page.getByRole("link", { name: /EXPLORE THE OCEAN/i });
+    await expect(cta).toBeVisible();
+    await cta.click();
+
+    // Explorer route is reached
+    await expect(page).toHaveURL(/\/(.*)?$/);
+    await context.close();
+  });
 });

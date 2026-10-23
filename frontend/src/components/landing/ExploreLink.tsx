@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "../../lib/api/client";
@@ -13,12 +13,22 @@ interface ExploreLinkProps {
 }
 
 export function ExploreLink({
-  href = "/",
+  href,
   className = "",
   children,
 }: ExploreLinkProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [targetHref, setTargetHref] = useState(href ?? "/?view=3d");
+
+  // Determine target href based on desktop vs mobile (defaults to /?view=3d on desktop, / on mobile)
+  useEffect(() => {
+    if (href) {
+      setTargetHref(href);
+    } else if (typeof window !== "undefined") {
+      setTargetHref(window.innerWidth < 768 ? "/" : "/?view=3d");
+    }
+  }, [href]);
 
   // 1. Warm backend on load: requestIdleCallback (fallback 1500ms)
   useEffect(() => {
@@ -51,12 +61,9 @@ export function ExploreLink({
 
   // 2. Warm cache on hover/focus/touch: prefetch route + maplibre-gl
   const handleWarm = useCallback(() => {
-    router.prefetch(href);
-    // Lazily cache maplibre-gl in background
-    import("maplibre-gl").catch(() => {
-      // Safe fallback if not found or bundle isolated
-    });
-  }, [router, href]);
+    router.prefetch(targetHref);
+    import("maplibre-gl").catch(() => {});
+  }, [router, targetHref]);
 
   // 3. On click: check reduced-motion / startViewTransition
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
@@ -75,19 +82,19 @@ export function ExploreLink({
       typeof document !== "undefined" && "startViewTransition" in document;
 
     if (prefersReducedMotion || !hasViewTransition) {
-      router.push(href);
+      router.push(targetHref);
       return;
     }
 
     // Trigger dive overlay animation
     window.dispatchEvent(
-      new CustomEvent("oceanscope:dive", { detail: { href } })
+      new CustomEvent("oceanscope:dive", { detail: { href: targetHref } })
     );
   };
 
   return (
     <a
-      href={href}
+      href={targetHref}
       className={`${styles.ctaButton} ${className}`}
       onClick={handleClick}
       onMouseEnter={handleWarm}
