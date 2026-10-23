@@ -1,6 +1,6 @@
 # PRD: AI / ML Pipeline — OceanScope AI
 
-**Status:** Draft v5 (2026-10-22): v4 + primary success criterion (§1.1), ARGO profiles as input, ARGO fine-tuning in core, GREP ensemble as auxiliary target, 1993 start, depth-weighted loss, physics checks, live mode (§12)  
+**Status:** Draft v6 (2026-10-23): v5 + streaming full-period build with no raw archive (§4.2), dataset IDs corrected to the live Copernicus catalogue (§3, §4.1). v5 (2026-10-22): primary success criterion (§1.1), ARGO profiles as input, ARGO fine-tuning in core, GREP ensemble as auxiliary target, 1993 start, depth-weighted loss, physics checks, live mode (§12)  
 **Lives in:** `ml/` of the monorepo (see `AGENTS.md`). Python package `oceanscope_ml` at `ml/src/oceanscope_ml/`.  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
@@ -166,13 +166,13 @@ publish:
 
 | Key | Product | Role | Native res. (verify) | Notes |
 |---|---|---|---|---|
-| `sla` | DUACS L4 SLA | input | 0.25° daily | Use `sla` variable; record reference period. |
+| `sla` | DUACS L4 SLA (`SEALEVEL_GLO_PHY_L4_MY_008_047`, dataset `cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`) | input | 0.125° daily | Use `sla` variable; area-mean to 0.25°; record reference period. |
 | `u_current`, `v_current` | OSCAR | input | 0.25° or 1/3° (version-dependent) | Bilinear to grid if coarser. |
 | `u_wind`, `v_wind` | CCMP | input | 0.25°, 6-hourly | Daily mean of the 4 timesteps; require ≥3 valid. |
 | `thetao` | GLORYS12 reanalysis | target | 1/12°, 50 depths | Area-mean of valid ocean sub-cells to 0.25°; cell valid if ≥50% sub-cells valid. |
-| `sst` | OSTIA L4 SST (Copernicus) | input | 0.05° daily | Area-mean to 0.25°; convert K → °C. |
-| `sss` | Copernicus MULTIOBS SSS (or SMAP L4) | input | 0.125°–0.25°, daily/weekly | If weekly, linear-interpolate in time and document it. |
-| `adt` | DUACS L4 ADT | input | 0.25° daily | Same product as SLA. |
+| `sst` | OSTIA L4 SST (`SST_GLO_SST_L4_REP_OBSERVATIONS_010_011`, dataset `METOFFICE-GLO-SST-L4-REP-OBS-SST`, variable `analysed_sst`) | input | 0.05° daily | Area-mean to 0.25°; convert K → °C. |
+| `sss` | Copernicus MULTIOBS SSS (`MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013`, dataset `cmems_obs-mob_glo_phy-sss_my_multi_P1D`, variable `sos`) | input | 0.125° daily | Area-mean to 0.25°. |
+| `adt` | DUACS L4 ADT | input | 0.125° daily | Same dataset as SLA. |
 | `wind_stress_curl` | derived from CCMP | input | 0.25° | Compute stress with a bulk formula (ρ_air=1.22, Cd per Large & Pond), then curl with centred differences, NaN at coast. |
 | `net_heat_flux`, `precip` | ERA5 single levels (Copernicus CDS) | input | 0.25° hourly | Daily mean/sum. Needs CDS account. |
 | `bathymetry` | GEBCO | static input | 15″ | Area-mean to 0.25°; use log(1+depth). |
@@ -180,9 +180,9 @@ publish:
 | `nino34` | NOAA CPC/PSL Niño 3.4 SST anomaly index | input (scalar, broadcast) | daily (or weekly, linearly interpolated) | ENSO state. Its source region is in the Pacific, **outside our box**, so this is information the model can't otherwise see (atmospheric bridge + Indonesian Throughflow). |
 | `dmi` | Dipole Mode Index (IOD), computed by us from OSTIA | input (scalar, broadcast) | daily | West box 50–70°E 10°S–10°N minus east box 90–110°E 10°S–0°, SST anomaly vs the **train-period** OSTIA climatology. Needs a small extra OSTIA download covering 10°S–0° (outside the main bbox). The IOD strongly tilts the Indian Ocean thermocline. |
 | `mjo_rmm1`, `mjo_rmm2` | BoM Real-time Multivariate MJO index (Wheeler & Hendon) | input (scalar, broadcast) | daily | Intraseasonal convection/wind bursts that drive equatorial Kelvin waves. Public text file, no account. |
-| `grep_mean` | GREP ensemble mean (Copernicus `GLOBAL_MULTIYEAR_PHY_ENS_001_031`, daily 0.25°, 75 levels) | auxiliary target | 0.25° daily | Members per current docs: GLORYS2V4, ORAS5, C-GLORS. **End date to be confirmed at M1** (catalogue metadata says 15 Dec 2020; documentation says "regularly updated"). Never an input. Also a competitor in §1.1. Interpolate to the 15 GLORYS depths. |
+| `grep_mean` | GREP ensemble mean (Copernicus `GLOBAL_MULTIYEAR_PHY_ENS_001_031`, dataset `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m`, variable `thetao_mean`, daily 0.25°, 75 levels) | auxiliary target | 0.25° daily | Members per current docs: GLORYS2V4, ORAS5, C-GLORS. **End date to be confirmed at M1** (catalogue metadata says 15 Dec 2020; documentation says "regularly updated"). Never an input. Also a competitor in §1.1. Interpolate to the 15 GLORYS depths. |
 | `argo_t_<d>`, `argo_mask` | ARGO profiles (same source as evaluation) | input (sparse) | point profiles | Only floats **not** in `argo_eval_floats.json`. Profile interpolated to the 15 depths (no extrapolation), placed in its nearest cell; if several in a cell within the window, keep the most recent. Value = anomaly vs `clim` for that cell/day/depth. `argo_mask` = 1 where a profile exists, `argo_age` = (t − profile day)/window_days. |
-| ARMOR3D | Copernicus multi-observation 3D T | external baseline only | 0.25° weekly/daily | Compared at ARGO points; never an input. |
+| ARMOR3D | Copernicus multi-observation 3D T (`MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012`, dataset `cmems_obs-mob_glo_phy_my_0.125deg_P1D-m`, variable `to`) | external baseline only | 0.125° daily | Compared at ARGO points; never an input. |
 | ARGO | QC'd profiles (e.g. Argo GDAC / Copernicus INSITU) | evaluation; input channels and fine-tuning targets (§5.1, §5.9) | point profiles | Use QC flags 1–2 only. Held-out evaluation floats are never used as input or fine-tuning target. |
 
 **Rejected inputs (do not add):** atmospheric CO₂ or any other "global warming" scalar, and a calendar-year/trend channel. They are near-linear in time, carry no information that SST/SLA don't already contain, and let the model extrapolate a trend into the sealed test year instead of reading it from observations. Warming is handled by the observed inputs plus the per-year bias check in §5.8.
@@ -201,7 +201,8 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
 |---|---|---|---|
 | 0 | `oceanscope_ml.data.download` | credentials (env), config | `data/raw/<product>/...` + `data/raw/MANIFEST.json` (file list, sizes, checksums, product IDs/versions) |
 | 1 | `oceanscope_ml.data.inspect` | `data/raw/**` | `outputs/reports/data_inspection.md` + `.json` |
-| 2 | `oceanscope_ml.data.preprocess` | raw files, config | `data/processed/oceanscope_<dataset_version>.zarr` (Section 6.1) |
+| 2 | `oceanscope_ml.data.preprocess` | raw files, config | `data/processed/oceanscope_<dataset_version>.zarr` (Section 6.1) — one-month sample and tests only |
+| 2b | `oceanscope_ml.data.build_store` | remote datasets (streamed), credentials, config | the same processed store for the full period (§4.2); never writes a raw archive |
 | 3 | `oceanscope_ml.models.baselines` | processed store (train+val) | `outputs/metrics/baseline_<name>_val.csv`, baseline model files |
 | 4 | `oceanscope_ml.training.train` | processed store (train+val) | checkpoints, `outputs/metrics/runs.csv`, `outputs/metrics/<run_id>_val.csv` |
 | 5 | `oceanscope_ml.evaluation.evaluate` | processed store (val), checkpoint | per-depth/season/region metrics CSVs (Section 6.3) |
@@ -219,12 +220,31 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
   - ERA5 (and optional GloFAS): Copernicus CDS (`cdsapi`, key in env `CDSAPI_URL`/`CDSAPI_KEY`), area-subset requests, one month per request.
   - GEBCO (bbox subset), WOA23 monthly 0.25° temperature: one-off files.
   - Climate indices: Niño 3.4 from NOAA CPC/PSL, MJO RMM from the Australian Bureau of Meteorology; plain text files, no account. DMI is computed from OSTIA (§3). Record the exact URLs in `MANIFEST.json`.
-  - GREP: same toolbox, daily ensemble-mean dataset (`..._phymnstd_my_0.25deg_P1D-m`), temperature only, 15 depths ± neighbours.
+  - GREP: same toolbox, daily ensemble-mean dataset `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m`, variable `thetao_mean` only, 15 depths ± neighbours.
   - ARGO: Argo GDAC (or Copernicus INSITU), profiles inside the bbox for the **whole** period (input channels and fine-tuning need training years too, from 2004).
 - Server-side subsetting is mandatory where the service supports it; never download global files when a subset is possible.
 - Resumable: skip files already present with matching size/checksum.
 - `--dry-run` prints planned requests and estimated sizes without downloading.
 - Start with **one month** (`--start 2019-01-01 --end 2019-01-31`) for M1 development before the full period.
+- `download.py` is for the one-month sample (and live mode). It is **not** used for the full period; that is `build_store` (§4.2).
+- Every product must fail loudly (non-zero exit, nothing recorded in the manifest) when it gets no file or a file that is not valid NetCDF. Write to `<name>.tmp` and rename only when complete, so a cut-off download is retried.
+
+### 4.2 Full-period build: stream → reduce → store (no raw archive)
+The full period must never be stored as raw files. Downloading raw files for 1993–2020 would need roughly 1 TB as the code stands today, or 150–200 GB even with cropping. Instead, `oceanscope_ml.data.build_store` reads each product remotely, reduces it straight away to the model grid, and writes only the processed store (§6.1). Target footprint: processed store **≤ 20 GB** (float16 copy ≤ 12 GB), scratch disk **≤ 20 GB** at any time.
+
+- **Where it runs:** Colab or Kaggle (fast network, disposable disk), never required on the owner's laptop. Credentials come from notebook secrets (§0 rule 12). Output goes to a private Kaggle Dataset (primary) or Drive.
+- **Unit of work: one calendar year** (plus the 60-day lead-in before the first year). For each year: stream every product → reduce → append to the store with a zarr region write → record the year as done in the store attributes (`built_years`) → delete scratch. Re-running skips finished years, so a session that is cut off resumes at the next year.
+- **Shared reduce functions:** `preprocess.py` and `build_store` call the same per-product functions (`reduce_<product>(ds) -> ds_on_grid`): area-mean to the 0.25° grid with the ≥ 50% valid rule, select exactly the 15 configured depths, unit conversion, daily aggregation. The one-month sample and the full build must therefore produce identical values for the same day (test 13).
+- **Per product (preference order; record what was used in the store's `source_files`):**
+  - GLORYS12, GREP, ARMOR3D, DUACS, OSTIA, SSS: `copernicusmarine.open_dataset(...)` (lazy, ARCO), subset to bbox + 1° margin, the year's dates and (3D products) only the 15 configured depths, then reduce in memory. Nothing is written before reduction. For GLORYS this also drops the 1/12° detail we never use (about 20× smaller than raw).
+  - ERA5: CDS dataset `derived-era5-single-levels-daily-statistics` (server-side daily means, one request per month, area subset). Precipitation daily sum = daily mean rate × 24 h. Never request hourly data for the full period.
+  - OSCAR: server-side spatial subset through NASA Harmony (`earthaccess`) if the collection supports it. Otherwise fetch one granule, crop it to bbox + 1°, reduce, then delete the original before the next one.
+  - CCMP winds: an OPeNDAP/THREDDS subset if available. Otherwise fetch one file, crop, reduce, delete. The RSS HTTPS server measured about 30 KB/s from the owner's connection, which is too slow for the full period; the source choice is in `docs/OPEN_QUESTIONS.md`.
+  - WOA23 and GEBCO: static, fetched once. Subset WOA23 over OPeNDAP (bbox + 1°, all 12 months, depths needed for interpolation); GEBCO via a regional request or crop-then-delete. Already-downloaded one-month files may be reused.
+  - ARGO: ERDDAP queries chunked by year (bbox, `pres ≤ 1100`, with `temp_qc`, `pres_qc`, `temp_adjusted` and data mode), stored as a small Parquet table rather than NetCDF.
+- **Storage:** zarr with compression (e.g. Blosc/zstd), chunks of (time = 32, depth = all, lat = all, lon = all) or similar, float32 master. The float16 copy (§6.1) is the one uploaded for training.
+- **Dry run:** `build_store --dry-run --years 2019` prints each remote request, its estimated transfer size and the estimated store growth, without reading data.
+- **Acceptance:** for January 2019, `build_store` output equals `preprocess` output from the one-month raw files (max abs difference ≤ 1e-4 in float32); peak scratch disk during one year stays ≤ 20 GB; an interrupted run resumes without redoing finished years.
 
 ---
 
@@ -382,8 +402,10 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 11. `test_depth_weights`: with all weights 1 the loss equals plain masked MSE.
 9. `test_manifest_schema`: generated `manifest.json` validates against the Section 6.3 schema (`ml/src/oceanscope_ml/schemas/manifest.schema.json`, JSON Schema, shared with the backend by copy at `backend/app/schemas/manifest.schema.json`; a CI check diffs the two).
 
+13. **Build/preprocess parity:** on a tiny synthetic remote-like dataset (no network), `build_store`'s reduce path and `preprocess` give identical values for the same day; a second run after a simulated interruption skips finished years.
+
 ### 8.1 Shared sample outputs (for backend and frontend development)
-`python -m oceanscope_ml.fixtures.make_sample_outputs --out ../fixtures/sample_outputs` writes a tiny but contract-exact output tree (Section 6.4 layout: 10 days, real region bbox at 1° spacing, 15 plausible depths, synthetic but physically plausible temperatures decreasing with depth, a land mask, some `coverage = 2` cells, metrics CSVs with an obvious `SYNTHETIC` model name, a synthetic `_headline.csv`, the competitor columns in the ARGO files, and the last 2 of the 10 days labelled `live` with NaN `temp_glorys`). It must not import torch. The output is committed to git (< 5 MB) so the backend and frontend can be built before any real data exists. **Synthetic values must never be presented as real results:** `manifest.json` carries `"synthetic": true`, and the backend/frontend show a banner when it is set.
+`python -m oceanscope_ml.fixtures.make_sample_outputs --out ../fixtures/sample_outputs` writes a tiny but contract-exact output tree (Section 6.4 layout: 10 days, real region bbox at 1° spacing, 15 plausible depths, synthetic but physically plausible temperatures decreasing with depth, a land mask that follows the real coastline (derived once from GEBCO or another real source and committed as a small array, so the frontend never needs its own mask; PRD_FRONTEND §10), some `coverage = 2` cells, metrics CSVs with an obvious `SYNTHETIC` model name, a synthetic `_headline.csv`, the competitor columns in the ARGO files, and the last 2 of the 10 days labelled `live` with NaN `temp_glorys`). It must not import torch. The output is committed to git (< 5 MB) so the backend and frontend can be built before any real data exists. **Synthetic values must never be presented as real results:** `manifest.json` carries `"synthetic": true`, and the backend/frontend show a banner when it is set.
 
 ---
 
@@ -408,6 +430,9 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 ---
 
 ## 11. Colab / Kaggle runbook (the notebooks must implement exactly this)
+**Data build notebook (P3-2):** set the credentials as notebook secrets → `pip install` the package → `python -m oceanscope_ml.data.build_store --config configs/experiment.yaml --years <start>-<end>` → the store is written under `OCEANSCOPE_DATA_DIR` and versioned to a Kaggle Dataset at the end of each finished year. Safe to re-run after a disconnect.
+
+**Training notebooks:**
 1. Set env vars: `OCEANSCOPE_DATA_DIR`, `OCEANSCOPE_OUT_DIR`, `OCEANSCOPE_CKPT_DIR` (Drive path on Colab; `/kaggle/input/...` read-only data and `/kaggle/working/...` outputs on Kaggle).
 2. `pip install -q "git+<repo_url>@<branch>#subdirectory=ml"` (or `pip install -e` from Drive).
 3. Print `torch.__version__`, GPU name, git commit.

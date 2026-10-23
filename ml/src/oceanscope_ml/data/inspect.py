@@ -373,13 +373,16 @@ def is_glorys_file(path: Path) -> bool:
     Copernicus Marine typically names files like:
     `cmems_mod_glo_phy_my_0.083deg_P1D-m_...nc` or stores them in a folder
     named `glorys` or `glorys12` or `001_030`.
-    Must strictly exclude competitor products (GREP 001_031 and ARMOR3D 015_004).
+    Must strictly exclude competitor products (GREP 001_031 and ARMOR3D 015_012, formerly 015_004).
     """
     name = path.name.lower()
     folder = str(path.parent).lower()
 
     # Strictly reject competitor products
-    if any(k in name or k in folder for k in ["grep", "001_031", "armor3d", "015_004", "armor-3d"]):
+    if any(
+        k in name or k in folder
+        for k in ["grep", "001_031", "mnstd", "armor3d", "015_004", "015_012", "armor-3d"]
+    ):
         return False
 
     # Check filename and folder hierarchy

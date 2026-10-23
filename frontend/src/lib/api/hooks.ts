@@ -2,7 +2,7 @@
  * React Query hooks for OceanScope AI API endpoints (PRD_FRONTEND §2, §4, §5).
  */
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   apiClient,
   type ArgoProfilesResponse,
@@ -44,7 +44,6 @@ export function useMap(
   return useQuery<MapResponse>({
     queryKey: ["map", params.date, params.depth_m, params.depth_index, params.field ?? "pred"],
     queryFn: () => apiClient.getMap(params),
-    placeholderData: keepPreviousData,
     staleTime: Infinity,
     enabled: options?.enabled !== false && !!params.date,
   });

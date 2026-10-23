@@ -1,6 +1,6 @@
 # PRD: Frontend Web App — OceanScope AI
 
-**Status:** Draft v2 (2026-10-22): headline card, live dates, competitor ARGO columns, updated sources  
+**Status:** Draft v3 (2026-10-24): 3D cutaway view (§3.1b), map code fixes (§10). v2 (2026-10-22): headline card, live dates, competitor ARGO columns, updated sources  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
 **Lives in:** `frontend/` of the monorepo (see `AGENTS.md`).  
@@ -31,7 +31,7 @@ A public, fast, mobile-friendly web app where anyone can explore predicted subsu
 - Ocean scientists checking the method and validation.
 
 ### Non-goals
-Accounts, saving user data, uploads, editing, offline mode, 3D globe rendering.
+Accounts, saving user data, uploads, editing, offline mode, 3D globe rendering, true volume rendering (ray-marched clouds). The regional 3D cutaway block in §3.1b is in scope.
 
 ---
 
@@ -44,6 +44,7 @@ Accounts, saving user data, uploads, editing, offline mode, 3D globe rendering.
 | Data fetching | TanStack Query (React Query) |
 | Map | MapLibre GL JS with a free, token-less basemap (e.g. OpenFreeMap or CARTO Positron/Dark Matter tiles; check terms) |
 | Grid rendering | Client-side: draw the `/map` grid to a `<canvas>`, add it as a MapLibre `image` source over the region bbox; hover/click reads values from the in-memory array |
+| 3D view | MapLibre `CustomLayerInterface` with raw WebGL2 (no three.js, deck.gl or other 3D library), in its own lazily loaded module (§3.1b) |
 | Charts | Recharts (profile and time series) |
 | Colormaps | cmocean `thermal` (temperature), `balance` (error), as precomputed 256-step lookup tables in `src/lib/colormaps.ts` |
 | API types | `openapi-typescript` from `../backend/openapi.json` |
@@ -82,6 +83,42 @@ Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 102
 
 **Defaults:** latest available validation date, depth closest to 100 m, field = prediction, no selection.
 
+### 3.1b 3D cutaway view (Explorer, desktop and tablet)
+The Explorer gains a **View** switch: *Map* (the 2D map above, unchanged) | *3D* (a rotatable block of ocean). Reference mockup: the "OceanScope 3D map concept" artifact (illustrative data only; it shows the look and the interactions, not the code).
+
+**What the user sees in *3D***
+- The map tilts (pitch 50°, bearing −20°) and the region becomes a solid block hanging below the basemap. The **top face** shows the selected depth; the **side walls** show temperature from that depth down to the deepest level, along the region's edges.
+- **Diving:** changing the depth (depth rail, slider, scroll over the rail, or `PageUp`/`PageDown` while the rail has focus) eases the top face down to the new depth over ~300 ms and slices the water above it away. A faint dashed outline marks the sea surface above the cut.
+- **Contours** every 2 °C on the top face and the walls, and the **20 °C isotherm** drawn as a bright line labelled "20 °C isotherm (thermocline marker)". Both are drawn from the API values only; they are a way of drawing the field, not new data.
+- **Same colour scale** as 2D: `meta.color_ranges` per depth and the `thermal` LUT for the top face. The walls span many depths, so they use one fixed range for the whole column: `vmin` = min of all `color_ranges[].vmin`, `vmax` = max of all `color_ranges[].vmax`. The colorbar shows both ranges ("Top face" / "Walls") when they differ.
+- **Lighting:** walls shaded by angle to the camera, darkening slightly with depth, a soft shadow under the block and a thin light edge on the top face. Land cells (coverage 0) on the top face are drawn in the basemap land colour so the sunk face does not show the basemap through it.
+- **Exploded layers** (secondary mode, toggle inside *3D*): 4 depths (0.5 m, ~100 m, ~300 m, deepest; picked as the nearest levels in `meta.depths_m`, plus the selected depth) floating as stacked sheets; the selected one is opaque and outlined, the rest at 60% opacity.
+- Hover and click work as in 2D on the top face: tooltip with lat, lon, depth, value and source label; click selects the cell and opens the details panel. Values always come from the snapped grid cell, even when the drawing is smoothed.
+- Pan, zoom and rotate as usual; the **vertical exaggeration** is fixed so the block is about one third as tall as it is wide.
+
+**Data (no client-side science, §0 rule 1)**
+- Top face: the existing `/map` for the selected depth (already cached and prefetched for adjacent depths).
+- Walls: the new `/section` endpoint (PRD_BACKEND §4.11), one call per edge (south `lat = region.lat_min`, north `lat_max`, west `lon = region.lon_min`, east `lon_max`), fetched once per date and field and cached like `/map`. Only the two walls facing the camera are drawn.
+- Exploded layers: `/map` for each shown depth.
+- Do **not** build walls from 15 `/map` calls (about 15× the bytes and requests on a free-tier backend).
+
+**Rendering rules**
+- One MapLibre custom layer (`components/map3d/CutawayLayer.ts`) drawing the top face, walls, shadow and outlines with WebGL2: each face is a textured quad; field values go into a float texture and the colormap LUT into a 256×1 texture, so a depth or colour-range change is a uniform update, not a re-upload. Contours and the 20 °C line are computed in the fragment shader from the same texture.
+- Display smoothing: linear texture filtering is allowed in 3D (labelled "Smoothed display" with a toggle to "Exact cells"); hatch for coverage 2 and transparency rules stay as in 2D.
+- Vertical axis: depth is drawn on a square-root scale (`z ∝ √depth`) so the upper 300 m gets room; tick labels in metres from `meta.depths_m`.
+- The 3D module is loaded with `import()` only when the user switches to *3D*; it must not grow the initial `/` bundle.
+- After a theme switch (`map.setStyle`), re-add the custom layer on `styledata`, the same way the grid layer is re-added today.
+- `prefers-reduced-motion`: no easing on dive and no auto-rotation.
+- Auto-rotation: off by default; a "Tour" button (for the demo) slowly rotates until the user touches the map.
+
+**Fallbacks**
+- Width < 768 px, no WebGL2, or the 3D module fails to load: the *3D* option is hidden or disabled with a tooltip, and the 2D map is used. No blank map.
+- `/section` error or 404: draw the top face only and show "Side walls unavailable for this date" in the map corner.
+- Live dates: `field = glorys|error` is disabled exactly as in 2D.
+
+**Section slice (optional, after the above works)**
+- A "Slice" tool: click the map to place an east–west or north–south line; the block shows that section as an inner wall, and the details panel shows a depth × distance section chart (canvas, same colormap) from `/section`.
+
 ### 3.2 `/validation`
 - **Headline card (top of page):** the pre-registered criterion text from `/headline.criterion`, then model vs GLORYS12 / GREP / ARMOR3D RMSE with 95% intervals as a small dot-and-whisker chart, and a plain verdict from `/headline.met`: "Met", "Not met" or "Not yet evaluated" (null or 404). Show the verdict exactly as returned, including "Not met". Label the period (validation or test).
 - Summary cards: overall val RMSE, MAE, bias, skill vs climatology (from `/metrics?group_by=depth`, row `depth_m = all`).
@@ -119,6 +156,7 @@ Static content (MDX allowed) explaining: the problem, data sources (DUACS SLA/AD
 | Units/formatting | °C with 1 decimal on the map and tooltips, 2 decimals in tables; depths "123 m" (≥ 10 m rounded to the nearest metre, < 10 m one decimal); coordinates "12.375°N, 65.125°E" |
 | Security | No `dangerouslySetInnerHTML` except sanitized MDX; chat text rendered as plain text/markdown with HTML disabled |
 | SEO/sharing | Title, description, Open Graph image (static) for link previews |
+| 3D view | ≥ 45 fps while rotating on a mid-range laptop (integrated GPU) at 1080p; dive animation never blocks input; 3D module ≤ 25 KB gzipped and lazily loaded (not counted in the 350 KB `/` budget); switching Map ↔ 3D keeps date, depth, field and selection; URL state gains `view=map|3d` |
 
 ---
 
@@ -130,6 +168,7 @@ frontend/
 │   ├── app/                 # routes: page.tsx (explorer), validation/, about/, layout.tsx
 │   ├── components/
 │   │   ├── map/             # MapView, GridLayer (canvas), Colorbar, CoverageLegend, ArgoMarkers
+│   │   ├── map3d/           # CutawayLayer (custom WebGL2 layer), shaders, ViewSwitch, DepthRail (lazily loaded)
 │   │   ├── controls/        # DatePicker, DepthSelector, FieldToggle, PlayButton
 │   │   ├── panels/          # DetailsPanel, ProfileChart, TimeSeriesChart
 │   │   ├── validation/      # MetricCards, DepthErrorChart, MetricsTable, ArgoSection
@@ -152,7 +191,7 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 ## 6. Environment variables
 | Variable | Purpose |
 |---|---|
-| `NEXT_PUBLIC_API_BASE_URL` | e.g. `https://<hf-user>-oceanscope-api.hf.space/api/v1` |
+| `NEXT_PUBLIC_API_BASE_URL` | e.g. `https://oceanscope-backend.onrender.com/api/v1` (backend is on Render, DECISIONS 2026-10-24) |
 | `NEXT_PUBLIC_USE_MOCKS` | `true` to run fully on MSW mocks (default `false`) |
 
 ---
@@ -160,7 +199,8 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 ## 7. Tests (required)
 - Unit: `format.ts`, `colormaps.ts` (endpoints and NaN handling), `url-state.ts` (round-trip, invalid input), API error parsing.
 - Component: GridLayer renders correct pixel colour for a known value and transparent for null; DetailsPanel shows source labels; synthetic banner appears when `synthetic: true`; chat button absent when chat disabled; on a `live` date the GLORYS and Difference controls are disabled and `LIVE_CAVEAT` shows; the headline card renders "Met", "Not met" and "Not yet evaluated" correctly.
-- E2E (Playwright, mocks on): load `/`, change depth and date, click a cell, see profile chart; open `/validation`, see tables; shareable URL restores state.
+- 3D (unit, no GPU needed): the depth → √depth z mapping and its tick labels; wall colour range from `meta.color_ranges`; which two walls face the camera for bearings 0°, 90°, 180°, 270°; screen point → grid cell on the sunk top face (round trip); fallback to 2D when WebGL2 is missing (mock `getContext` returning null).
+- E2E (Playwright, mocks on): load `/`, change depth and date, click a cell, see profile chart; open `/validation`, see tables; shareable URL restores state; switch to *3D* (`?view=3d`), change depth, hover the top face and see a tooltip; a screenshot of the 3D view is saved as a CI artifact (not a pixel-exact assertion).
 - CI: `pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm e2e` all green; generated types up to date with `backend/openapi.json`.
 
 ---
@@ -175,6 +215,7 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 | F4 Validation + About | `/validation`, `/about`, caveats | Pages render all metric groups from mocks |
 | F5 Live backend | Point at the HF Space; cold-start UX | Production Vercel URL works against the live API with synthetic data, then real data |
 | F6 Assistant | Chat drawer | Works against the backend with a mocked/real provider; hidden when disabled |
+| F7 3D cutaway | §3.1b: view switch, custom layer (top face, walls, contours, 20 °C line, lighting), dive animation, depth rail, exploded layers, fallbacks; then the optional slice tool | 3D tests pass; fps and bundle targets met; works on the deployed site with synthetic data; Aryan signs off the look |
 
 F1–F4 must be built against mocks and must not wait for the backend or the model.
 
@@ -184,3 +225,14 @@ F1–F4 must be built against mocks and must not wait for the backend or the mod
 - Project name/branding on the site (keep "OceanScope AI"?), and any logo.
 - Team/credits text for `/about`.
 - Custom domain on Vercel, or the default `*.vercel.app`.
+
+---
+
+## 10. Required fixes to the current map code (review 2026-10-24, before F7)
+These are breaches of §0 found in `components/map/MapView.tsx` and `lib/oceanMask.ts`. Fix them first (PHASES P2b-F0); the 3D layer builds on the same code.
+1. **Region bounds are hardcoded** (`40, 100, 0, 30` in the image-source coordinates, hover and click handlers). Read them from `meta.region` and `meta.grid_resolution_deg`, and snap with the returned `lat`/`lon` arrays only (§0 rule 1).
+2. **`isNorthIndianOcean` invents a land mask** and overrides the API's `coverage`. Land comes from `coverage = 0` in the API response, nothing else. Delete `lib/oceanMask.ts` and its uses. If the synthetic fixture's land mask looks wrong, fix the fixture generator (PRD_AI_ML §8.1), not the frontend.
+3. **`canvas.toDataURL()` on every change** encodes a PNG on the main thread. Use a MapLibre `canvas` source (or `updateImage` with an object URL from `canvas.toBlob`) so redraws meet the 150 ms target.
+4. **Hover handler sets React state on every mouse move.** Throttle to one update per animation frame and skip it when the cell has not changed.
+5. **Two click paths:** a capture-phase DOM click listener and the MapLibre `click` handler both call `selectAtLngLat`, so one click selects twice. Keep one (the MapLibre handler) unless a test shows why both are needed.
+6. **Pitch and rotation:** in *Map* view keep pitch 0 and disable drag-rotate so the 2D view stays flat; enable both only in *3D*.

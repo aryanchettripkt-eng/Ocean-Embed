@@ -66,7 +66,7 @@ inputs:
     assert plan["sst"]["bbox"]["lat_min"] == -10.0
 
     # GREP uses ensemble-mean dataset_id
-    assert "phymnstd" in plan["grep"]["dataset_id"]
+    assert "mnstd" in plan["grep"]["dataset_id"]
 
     # CCMP provider is Remote Sensing Systems
     assert "Remote Sensing Systems" in plan["ccmp"]["provider"]
@@ -305,11 +305,11 @@ def test_is_glorys_file() -> None:
     assert is_glorys_file(p3) is True
 
     # 4. Competitor GREP (001_031) must be rejected
-    p4 = Path("/data/raw/grep/cmems_mod_glo_phy-tem_phymnstd_my_0.25deg_P1D-m.nc")
+    p4 = Path("/data/raw/grep/cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m.nc")
     assert is_glorys_file(p4) is False
 
-    # 5. Competitor ARMOR3D (015_004) must be rejected
-    p5 = Path("/data/raw/armor3d/dataset-armor-3d-rep-weekly.nc")
+    # 5. Competitor ARMOR3D (015_012) must be rejected
+    p5 = Path("/data/raw/armor3d/cmems_obs-mob_glo_phy_my_0.125deg_P1D-m.nc")
     assert is_glorys_file(p5) is False
 
 

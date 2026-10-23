@@ -1,6 +1,6 @@
 # PRD: Backend API — OceanScope AI
 
-**Status:** Draft v2 (2026-10-22): live dates, `/headline`, competitor ARGO columns, periodic reload  
+**Status:** Draft v3 (2026-10-24): `/section` for the 3D view (§4.11); hosting moved to Render (§8). v2 (2026-10-22): live dates, `/headline`, competitor ARGO columns, periodic reload  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
 **Lives in:** `backend/` of the monorepo (see `AGENTS.md`).  
@@ -158,6 +158,21 @@ See Section 6. Request `{"messages":[{"role":"user"|"assistant","content":"..."}
 ```
 Returns 503 `chat_disabled` when `CHAT_ENABLED=false` or the LLM env vars are missing; 429 `rate_limited` / `daily_cap_reached`; 502 `llm_error` on upstream failure (no upstream body leaked).
 
+### 4.11 `GET /section?date=&field=pred|glorys|error&lat=|lon=` (added v3, DECISIONS 2026-10-24)
+A vertical slice through all 15 depths along one grid row or column, for the 3D view's side walls and slice tool (PRD_FRONTEND §3.1b). Give exactly one of `lat` (east–west section along that row) or `lon` (north–south section along that column); both or neither → 422 `invalid_section`. The value snaps to the nearest grid cell centre like other endpoints; outside the region → 422 `out_of_region`.
+```json
+{
+  "run_id":"...","synthetic":false,"date":"2020-06-01","field":"pred","split":"val","units":"degC",
+  "axis":"lon",                       // the varying coordinate: "lon" when lat was given, "lat" when lon was given
+  "fixed":{"lat":15.125},             // the snapped fixed coordinate ({"lon": ...} for a north–south section)
+  "positions":[40.125, ...],          // lon (or lat) of each column, same values as /map's lon (or lat)
+  "depths_m":[ ...15 floats... ],
+  "values":[[...], ...],              // [depth][position], null where unavailable
+  "coverage":[...]                    // [position], same codes as /map
+}
+```
+Values are read from the prediction store as-is (no interpolation, §0 rule 2), rounded like `/map`. On `live` dates `field=glorys|error` → 404 `reference_unavailable`. Same cache headers and GZip as `/map`; warm p95 < 300 ms (one row or column across 15 depths; chunking of the prediction store must not make this a full-day read; if it does, raise it in OPEN_QUESTIONS before changing the store).
+
 OpenAPI: FastAPI's schema exported to `backend/openapi.json` by `python -m app.export_openapi`; CI fails if it is stale. The frontend generates its TypeScript types from this file.
 
 ---
@@ -231,6 +246,8 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 
 ## 8. Hosting
 
+> **Superseded (DECISIONS 2026-10-24):** the backend runs on **Render** (Docker web service, free tier, 512 MB RAM) because Spaces now needs a paid plan for Docker. The notes below are kept for reference; port, user and data-download rules still apply.
+
 **Backend: Hugging Face Spaces, Docker SDK** (free CPU tier, ~16 GB RAM, public HTTPS URL). Reason: the API needs xarray/zarr, a GB-scale data store and a warm process; Vercel's Python functions have bundle-size limits, no persistent disk and cold starts that make this a poor fit.
 - Dockerfile: `python:3.11-slim`, non-root user, listens on port `7860`, `uvicorn app.main:app --host 0.0.0.0 --port 7860 --workers 1`.
 - Data: `snapshot_download` from `HF_DATASET_REPO` into `DATA_DIR` at startup (Spaces storage is ephemeral; re-download on restart is acceptable at ≤ 3 GB).
@@ -254,6 +271,7 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 10. Live dates: fixture `live` days return `split: "live"`, `/map?field=glorys` → 404 `reference_unavailable`, `/profile` has `glorys: null` values.
 11. `/headline`: rows pass through unchanged; `met` follows the rule in 4.8b; 404 when the manifest has no headline file.
 12. Reload: replacing `manifest.json` in `DATA_DIR` (or a new HF revision) is picked up within `RELOAD_INTERVAL_MIN` without restart; a broken new manifest keeps serving the old one and logs an error.
+13. `/section`: shapes are 15 × `grid_shape.lon` (for `lat`) and 15 × `grid_shape.lat` (for `lon`); values equal the raw zarr values and match `/map` at the same depth along that row or column; nulls and coverage pass through; 422 for both/neither of `lat`/`lon`; 404 `reference_unavailable` on live dates for glorys/error.
 
 ---
 
@@ -267,6 +285,7 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 | B4 Deploy | HF Space live serving sample outputs; then real outputs once ML M4 is done | Public URL `/api/v1/health` is 200; Vercel frontend can call it (CORS) |
 | B6 Live support | `live` dates, `LIVE_CAVEAT`, periodic manifest reload (`RELOAD_INTERVAL_MIN`, default 60) | Tests 10, 12 pass |
 | B5 Chat | provider, tools, prompt, guard, limits | Test 7 passes; enabled in prod only after the owner tests it |
+| B7 Section | `/section` (§4.11), `openapi.json` regenerated, frontend types and MSW mocks regenerated | Test 13 passes; warm p95 < 300 ms locally |
 
 B1–B4 must not wait for the real model: they are built and deployed against the synthetic sample outputs.
 

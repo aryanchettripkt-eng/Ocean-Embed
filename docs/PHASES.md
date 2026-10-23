@@ -1,6 +1,6 @@
 # Project phases — OceanScope AI
 
-**Status:** v1 (2026-10-22). This is the execution order for the whole project. Each phase has an **exit gate**; do not start a phase whose "Needs" are not met. Task IDs (e.g. `P1-B2`) are used in branch names, commits and `docs/PROGRESS.md`.
+**Status:** v1 (2026-10-22); P2b 3D explorer added 2026-10-24. This is the execution order for the whole project. Each phase has an **exit gate**; do not start a phase whose "Needs" are not met. Task IDs (e.g. `P1-B2`) are used in branch names, commits and `docs/PROGRESS.md`.
 
 Who: **Aryan** = owner (accounts, decisions, Colab/Kaggle runs, approvals) · **Gemini** = implementer · **Claude** = planning, task breakdown, review (can implement).
 
@@ -75,15 +75,35 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 
 ---
 
+## P2b — 3D cutaway explorer (the demo's centrepiece)
+**Needs:** P2. Runs in parallel with P3–P5 (it works on synthetic data, so it never waits for the model). Spec: PRD_FRONTEND §3.1b and §10, PRD_BACKEND §4.11.
+
+| ID | Task | Who | Ref |
+|---|---|---|---|
+| P2b-F0 | Fix the current map code first: region from `/meta`, delete `oceanMask.ts` (land from `coverage`), canvas source instead of `toDataURL`, throttled hover, single click path, flat 2D view | Gemini | PRD_FRONTEND §10 |
+| P2b-B1 | `GET /section` + test 13, regenerate `openapi.json`, frontend types and MSW mocks | Gemini | PRD_BACKEND §4.11, M B7 |
+| P2b-F1 | View switch (*Map* / *3D*, `?view=`), lazily loaded `CutawayLayer`: top face from `/map`, two visible walls from `/section`, √depth axis and ticks, fallbacks | Gemini | §3.1b |
+| P2b-F2 | Look: contours, 20 °C isotherm line, lighting, shadow, edge highlight; dive animation and depth rail (scroll, keys), reduced-motion; hover/click on the top face | Gemini | §3.1b |
+| P2b-F3 | Exploded layers mode; "Tour" button for the demo | Gemini | §3.1b |
+| P2b-R | Claude reviews the diff against §3.1b, §0 and the fps/bundle targets; Aryan signs off the look on the deployed site | Claude, Aryan | §4 |
+| P2b-F4 | Optional: slice tool (inner wall + section chart in the details panel) | Gemini | §3.1b |
+
+Order: F0 and B1 can run in parallel; F1 needs both; F2 and F3 need F1. One agent per branch (AGENTS §7); branches and pushes only with Aryan's permission (AGENTS rule 10).
+
+**Exit gate:** on the deployed site (synthetic data), *3D* works on a laptop in Chrome, Firefox and Safari; phones fall back to 2D; 3D tests pass; ≥ 45 fps while rotating; initial `/` bundle still ≤ 350 KB gzipped; Aryan approves the look.
+
+---
+
 ## P3 — Real data and baselines
 **Needs:** P1-M3 (decisions confirmed). Runs in parallel with P2.
 
 | ID | Task | Ref |
 |---|---|---|
-| P3-1 | `preprocess.py` + climatology on the one-month sample; sample-day figure; tests 3–5 | M1 |
-| P3-2 | Full-period download (server-side subset); full preprocessing; upload processed store to Kaggle Dataset / Drive | §4.1, §11 |
+| P3-1 | `preprocess.py` with shared per-product reduce functions + climatology on the one-month sample; sample-day figure; tests 3–5 | M1 |
+| P3-2a | `build_store.py`: stream → reduce → store, one year at a time, resumable, no raw archive; dry run; test 13; parity with P3-1 on Jan 2019 | §4.2 |
+| P3-2b | Run `build_store` for the full period on Colab/Kaggle; float16 copy to a Kaggle Dataset | §4.2, §11 |
 | P3-3 | Baselines: climatology + ridge (LightGBM optional) → `baseline_*_val.csv` | §5.6 |
-| P3-4 | Download ARMOR3D and GREP ensemble mean for the validation and test periods (competitors in §1.1); GREP for the full period as auxiliary target | §3, §7 |
+| P3-4 | ARMOR3D and GREP ensemble mean for the validation and test periods (competitors in §1.1), and GREP for the full period as auxiliary target, through `build_store` (streamed, no raw files) | §3, §4.2, §7 |
 
 **Exit gate:** processed store passes schema check and loads in a Colab and a Kaggle notebook; baseline validation metrics exist.
 
@@ -186,4 +206,4 @@ Ensemble of 3–5 models + uncertainty (`temp_pred_std`, contract change) → hy
 ## Critical path and owner checkpoints
 Critical path: **P0 → P1-M → P3 → P4 → P5 → P6 → P8**. Data download and training are the slowest and riskiest steps, so start P1-M on day one.
 
-Aryan must act at: P0-1, P0-4, P1-M3 (confirm config, incl. GREP end date and the §1.1 criterion), P2 tokens, P3/P4 notebook runs, P4 exit gate review, P7-0, P7-3, P8-1, P8-5, P9-1, P9-3 secrets.
+Aryan must act at: P0-1, P0-4, P1-M3 (confirm config, incl. GREP end date and the §1.1 criterion), P2 tokens, P2b-R (3D look sign-off), P3/P4 notebook runs, P4 exit gate review, P7-0, P7-3, P8-1, P8-5, P9-1, P9-3 secrets.

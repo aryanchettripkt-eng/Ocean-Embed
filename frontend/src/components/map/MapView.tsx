@@ -1,10 +1,9 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { formatCoord, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
-import { isNorthIndianOcean } from "../../lib/oceanMask";
 import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
 
 interface MapViewProps {
@@ -37,19 +36,6 @@ function getBasemapStyle(isLight: boolean): string {
   return isLight ? OPENFREEMAP_STYLES.light : OPENFREEMAP_STYLES.dark;
 }
 
-function getInitialThemeIsLight(): boolean {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("theme");
-    if (saved === "light") return true;
-    if (saved === "dark") return false;
-  }
-  if (typeof document !== "undefined") {
-    if (document.documentElement.classList.contains("light")) return true;
-    if (document.documentElement.classList.contains("dark")) return false;
-  }
-  return false;
-}
-
 export function MapView({
   mapData,
   vmin,
@@ -67,22 +53,17 @@ export function MapView({
   const argoMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [styleEpoch, setStyleEpoch] = useState(0);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
-  const [isLightMode, setIsLightMode] = useState<boolean>(getInitialThemeIsLight);
+  const [isLightMode, setIsLightMode] = useState<boolean>(false);
   const currentStyleRef = useRef<string | null>(null);
-
-  const lastDataUrlRef = useRef<string | null>(null);
-  const lastAppliedUrlRef = useRef<string | null>(null);
 
   // Monitor documentElement class changes to switch between light and dark basemap
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const checkLight = () => {
-      const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
-      if (saved === "light") return true;
-      if (saved === "dark") return false;
-      return document.documentElement.classList.contains("light");
-    };
+    const checkLight = () =>
+      document.documentElement.classList.contains("light") ||
+      !document.documentElement.classList.contains("dark");
     setIsLightMode(checkLight());
 
     const observer = new MutationObserver(() => {
@@ -95,78 +76,15 @@ export function MapView({
     return () => observer.disconnect();
   }, []);
 
-  const syncGridLayer = useCallback(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !map.isStyleLoaded()) return;
-
-    const dataUrl = lastDataUrlRef.current;
-    const sourceId = "ocean-grid-source";
-    const layerId = "ocean-grid-layer";
-
-    if (!dataUrl) {
-      if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
-      }
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId);
-      }
-      lastAppliedUrlRef.current = null;
-      return;
-    }
-
-    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
-      [40.0, 30.0], // Top-left [lon, lat]
-      [100.0, 30.0], // Top-right
-      [100.0, 0.0], // Bottom-right
-      [40.0, 0.0], // Bottom-left
-    ];
-
-    try {
-      const existingSource = map.getSource(sourceId) as maplibregl.ImageSource | undefined;
-      const existingLayer = map.getLayer(layerId);
-
-      if (existingSource && existingLayer) {
-        if (lastAppliedUrlRef.current !== dataUrl) {
-          existingSource.updateImage({ url: dataUrl });
-          lastAppliedUrlRef.current = dataUrl;
-        }
-      } else {
-        if (existingLayer) {
-          map.removeLayer(layerId);
-        }
-        if (existingSource) {
-          map.removeSource(sourceId);
-        }
-
-        map.addSource(sourceId, {
-          type: "image",
-          url: dataUrl,
-          coordinates,
-        });
-
-        map.addLayer({
-          id: layerId,
-          type: "raster",
-          source: sourceId,
-          paint: {
-            "raster-opacity": 0.9,
-            "raster-fade-duration": 0,
-            "raster-resampling": "nearest",
-          },
-        });
-
-        lastAppliedUrlRef.current = dataUrl;
-      }
-    } catch (err) {
-      console.warn("Could not sync ocean grid layer:", err);
-    }
-  }, []);
-
   // Initialize MapLibre Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
-    const initialLight = getInitialThemeIsLight();
+    const initialLight =
+      typeof document !== "undefined" &&
+      (document.documentElement.classList.contains("light") ||
+        !document.documentElement.classList.contains("dark"));
+
     const initialStyle = getBasemapStyle(initialLight);
     currentStyleRef.current = initialStyle;
 
@@ -182,27 +100,21 @@ export function MapView({
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
 
-    const handleStyleReady = () => {
-      if (map.isStyleLoaded()) {
-        syncGridLayer();
-      }
-    };
-
     map.on("load", () => {
       setMapLoaded(true);
-      handleStyleReady();
+      setStyleEpoch((e) => e + 1);
     });
-
-    map.on("styledata", handleStyleReady);
-    map.on("idle", handleStyleReady);
-
+    map.on("style.load", () => {
+      setMapLoaded(true);
+      setStyleEpoch((e) => e + 1);
+    });
     map.on("error", () => {
       setMapLoaded(true);
     });
 
     if (map.isStyleLoaded()) {
       setMapLoaded(true);
-      handleStyleReady();
+      setStyleEpoch((e) => e + 1);
     }
 
     mapInstanceRef.current = map;
@@ -211,7 +123,7 @@ export function MapView({
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, [syncGridLayer]);
+  }, []);
 
   // Dynamically update basemap style when theme toggles
   useEffect(() => {
@@ -221,31 +133,52 @@ export function MapView({
     const nextStyle = getBasemapStyle(isLightMode);
     if (currentStyleRef.current !== nextStyle) {
       currentStyleRef.current = nextStyle;
-      lastAppliedUrlRef.current = null;
       map.setStyle(nextStyle);
     }
   }, [isLightMode, mapLoaded]);
 
   // Update canvas grid layer when mapData, vmin, or vmax change
   useEffect(() => {
-    if (!mapData) {
-      lastDataUrlRef.current = null;
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !mapData) return;
+
+    const colormap = mapData.field === "error" ? "balance" : "thermal";
+    const canvas = renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap);
+    const dataUrl = canvas.toDataURL();
+
+    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
+      [40.0, 30.0], // Top-left [lon, lat]
+      [100.0, 30.0], // Top-right
+      [100.0, 0.0], // Bottom-right
+      [40.0, 0.0], // Bottom-left
+    ];
+
+    const sourceId = "ocean-grid-source";
+    const layerId = "ocean-grid-layer";
+
+    const existingSource = map.getSource(sourceId) as maplibregl.ImageSource | undefined;
+
+    if (existingSource) {
+      existingSource.updateImage({ url: dataUrl });
     } else {
-      const colormap = mapData.field === "error" ? "balance" : "thermal";
-      const nLat = mapData.lat?.length ?? mapData.values.length;
-      const nLon = mapData.lon?.length ?? (mapData.values[0]?.length ?? 0);
-      const maskedCoverage = mapData.coverage.map((row, r) =>
-        row.map((cov, c) => {
-          const lat = mapData.lat?.[r] ?? (30.0 / nLat) * (r + 0.5);
-          const lon = mapData.lon?.[c] ?? 40.0 + (60.0 / nLon) * (c + 0.5);
-          return isNorthIndianOcean(lat, lon) ? cov : 0;
-        })
-      );
-      const canvas = renderGridToCanvas(mapData.values, maskedCoverage, vmin, vmax, colormap);
-      lastDataUrlRef.current = canvas.toDataURL();
+      map.addSource(sourceId, {
+        type: "image",
+        url: dataUrl,
+        coordinates,
+      });
+
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0.9,
+          "raster-fade-duration": 150,
+          "raster-resampling": "nearest",
+        },
+      });
     }
-    syncGridLayer();
-  }, [mapData, vmin, vmax, syncGridLayer]);
+  }, [mapLoaded, mapData, vmin, vmax, styleEpoch]);
 
   const mapDataRef = useRef(mapData);
   useEffect(() => {
@@ -263,9 +196,6 @@ export function MapView({
     if (!map) return;
 
     const selectAtLngLat = (lng: number, lat: number) => {
-      if (!isNorthIndianOcean(lat, lng)) {
-        return;
-      }
       const data = mapDataRef.current;
       if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
         if (data && data.lat && data.lat.length > 0 && data.lon && data.lon.length > 0) {
@@ -304,9 +234,8 @@ export function MapView({
 
         const cellLat = data.lat[r];
         const cellLon = data.lon[c];
-        const isOcean = isNorthIndianOcean(cellLat, cellLon);
-        const val = isOcean ? (data.values[r]?.[c] ?? null) : null;
-        const cov = isOcean ? (data.coverage[r]?.[c] ?? 0) : 0;
+        const val = data.values[r]?.[c] ?? null;
+        const cov = data.coverage[r]?.[c] ?? 0;
 
         setHoverInfo({
           x: e.point.x,

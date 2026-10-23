@@ -46,3 +46,17 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Synthetic banner**: Embedded `<Banner type="synthetic" />` directly inside the sticky `<Header />` component to ensure it cannot be scrolled out of view and remains visible on every page.
 - Approved by Aryan.
 
+## 2026-10-23 — Full-period data: stream and reduce, no raw archive (PRD_AI_ML v6)
+- The one-month sample showed raw downloads scale to about 1 TB for 1993–2020 with the current downloader (OSCAR, CCMP and WOA23 only come as global files; GLORYS at 1/12° is 640 MB per month). Even with cropping it would be 150–200 GB.
+- Decision: the full period is built by a new `build_store` stage that streams each product (Copernicus ARCO via `open_dataset`, ERA5 daily statistics, server-side or crop-then-delete for OSCAR/CCMP, OPeNDAP for WOA23), reduces it to the 0.25° grid and 15 depths at once, and writes only the processed store. It runs one year at a time on Colab/Kaggle and is resumable. Targets: store ≤ 20 GB (float16 ≤ 12 GB), scratch ≤ 20 GB.
+- `download.py` stays for the one-month sample and live mode only.
+- Dataset IDs corrected to the live catalogue (checked by Aryan with `copernicusmarine describe`): DUACS `…allsat-l4-duacs-0.125deg_P1D`, OSTIA product `…_010_011`, SSS `cmems_obs-mob_glo_phy-sss_my_multi_P1D`, GREP `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m` (variable `thetao_mean`), ARMOR3D `MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012` / `cmems_obs-mob_glo_phy_my_0.125deg_P1D-m` (now daily).
+- No contract change: the processed store schema (§6.1) is unchanged.
+- Approved by Aryan ("let's do that then").
+
+## 2026-10-24 — 3D cutaway explorer (PRD_FRONTEND v3, PRD_BACKEND v3)
+- The Explorer gets a *3D* view: the region drawn as a rotatable block hanging below the basemap, the top face at the selected depth, side walls showing the column below, contours every 2 °C and the 20 °C isotherm, and an animated "dive" when the depth changes. An "exploded layers" mode and an optional slice tool come after. The 2D map stays as the default on phones and the fallback everywhere.
+- Built as one MapLibre custom layer in raw WebGL2, lazily loaded. No three.js, deck.gl or other 3D library, because the `/` bundle is already near its 350 KB budget.
+- **Contract addition (additive, nothing existing changes):** `GET /section` returns one row or column of the prediction store across all 15 depths (PRD_BACKEND §4.11). Reason: building the walls from 15 `/map` calls would move about 15× the data from a free-tier backend. `manifest.json` and the prediction store are unchanged.
+- Review of the current map code found two breaches of PRD_FRONTEND §0 (hardcoded region bounds and a hand-drawn land mask in `lib/oceanMask.ts`); both are to be fixed first (PHASES P2b-F0).
+- Proposed by Claude after Aryan liked the concept mockup; Aryan asked for it to be written into the PRDs, rules and phases ("how do you reckon we can implement it… put it into the respective PRDs"), 2026-10-24.

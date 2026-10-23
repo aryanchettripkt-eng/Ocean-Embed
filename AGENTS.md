@@ -3,7 +3,7 @@
 This file is mandatory reading before any change. It applies to every agent (Gemini, Claude, or any other) and overrides anything an agent "thinks is better". If a rule blocks you, stop and ask; do not work around it.
 
 ## 1. What this project is
-OceanScope AI reconstructs daily subsurface ocean temperature (15 depths, 0.25° grid, North Indian Ocean) from surface data with a small U-Net, and publishes the results through a FastAPI backend and a Next.js website.
+OceanScope AI reconstructs daily subsurface ocean temperature (15 depths, 0.25° grid, North Indian Ocean) from surface data with a small U-Net, and publishes the results through a FastAPI backend and a Next.js website, whose Explorer shows the ocean as a 2D map and as a 3D cutaway block (`PRD_FRONTEND.md` §3.1b).
 
 ## 2. Documents and their authority (highest first)
 1. The owner's latest explicit instruction (Aryan).
@@ -69,5 +69,5 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 
 ## 8. Environments
 - ML training runs on Google Colab / Kaggle (see `PRD_AI_ML.md` §4.1, §11). Code must run there unchanged: paths from env vars, resumable checkpoints.
-- Backend deploys to Hugging Face Spaces (Docker). Frontend deploys to Vercel.
+- Backend deploys to Render (Docker web service, free tier; see DECISIONS "Phase 2 hosting"). Frontend deploys to Vercel.
 - Python 3.11. Node 22 LTS with pnpm.
