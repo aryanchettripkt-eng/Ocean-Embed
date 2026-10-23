@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Waves, BarChart3, Info, ExternalLink, Sun, Moon } from "lucide-react";
 import { useMeta } from "../../lib/api/hooks";
+import { Banner } from "./Banner";
 
 export function Header() {
   const pathname = usePathname();
@@ -45,6 +46,7 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md transition-colors">
+      <Banner type="synthetic" />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
         {/* Brand */}
         <div className="flex items-center gap-6">

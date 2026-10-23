@@ -27,13 +27,13 @@ interface HoverInfo {
   coverage: number;
 }
 
-function getCartoTiles(isLight: boolean): string[] {
-  const variant = isLight ? "light_all" : "dark_all";
-  return [
-    `https://a.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
-    `https://b.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
-    `https://c.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
-  ];
+const OPENFREEMAP_STYLES = {
+  light: "https://tiles.openfreemap.org/styles/positron",
+  dark: "https://tiles.openfreemap.org/styles/dark",
+};
+
+function getBasemapStyle(isLight: boolean): string {
+  return isLight ? OPENFREEMAP_STYLES.light : OPENFREEMAP_STYLES.dark;
 }
 
 export function MapView({
@@ -53,8 +53,10 @@ export function MapView({
   const argoMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [styleEpoch, setStyleEpoch] = useState(0);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isLightMode, setIsLightMode] = useState<boolean>(false);
+  const currentStyleRef = useRef<string | null>(null);
 
   // Monitor documentElement class changes to switch between light and dark basemap
   useEffect(() => {
@@ -83,30 +85,12 @@ export function MapView({
       (document.documentElement.classList.contains("light") ||
         !document.documentElement.classList.contains("dark"));
 
-    const basemapStyle: maplibregl.StyleSpecification = {
-      version: 8,
-      sources: {
-        carto_basemap: {
-          type: "raster",
-          tiles: getCartoTiles(initialLight),
-          tileSize: 256,
-          attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-        },
-      },
-      layers: [
-        {
-          id: "carto-basemap-layer",
-          type: "raster",
-          source: "carto_basemap",
-          minzoom: 0,
-          maxzoom: 19,
-        },
-      ],
-    };
+    const initialStyle = getBasemapStyle(initialLight);
+    currentStyleRef.current = initialStyle;
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: basemapStyle,
+      style: initialStyle,
       center: [70.0, 15.0],
       zoom: 4,
       minZoom: 2,
@@ -118,9 +102,11 @@ export function MapView({
 
     map.on("load", () => {
       setMapLoaded(true);
+      setStyleEpoch((e) => e + 1);
     });
     map.on("style.load", () => {
       setMapLoaded(true);
+      setStyleEpoch((e) => e + 1);
     });
     map.on("error", () => {
       setMapLoaded(true);
@@ -128,6 +114,7 @@ export function MapView({
 
     if (map.isStyleLoaded()) {
       setMapLoaded(true);
+      setStyleEpoch((e) => e + 1);
     }
 
     mapInstanceRef.current = map;
@@ -138,42 +125,15 @@ export function MapView({
     };
   }, []);
 
-  // Dynamically update basemap raster tiles when theme toggles
+  // Dynamically update basemap style when theme toggles
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded) return;
 
-    const tiles = getCartoTiles(isLightMode);
-    const sourceId = "carto_basemap";
-    const layerId = "carto-basemap-layer";
-
-    const source = map.getSource(sourceId) as maplibregl.RasterTileSource | undefined;
-    if (source && "setTiles" in source && typeof source.setTiles === "function") {
-      source.setTiles(tiles);
-    } else {
-      if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
-      }
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId);
-      }
-      map.addSource(sourceId, {
-        type: "raster",
-        tiles,
-        tileSize: 256,
-        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      });
-      const beforeLayer = map.getLayer("ocean-grid-layer") ? "ocean-grid-layer" : undefined;
-      map.addLayer(
-        {
-          id: layerId,
-          type: "raster",
-          source: sourceId,
-          minzoom: 0,
-          maxzoom: 19,
-        },
-        beforeLayer
-      );
+    const nextStyle = getBasemapStyle(isLightMode);
+    if (currentStyleRef.current !== nextStyle) {
+      currentStyleRef.current = nextStyle;
+      map.setStyle(nextStyle);
     }
   }, [isLightMode, mapLoaded]);
 
@@ -218,7 +178,7 @@ export function MapView({
         },
       });
     }
-  }, [mapLoaded, mapData, vmin, vmax]);
+  }, [mapLoaded, mapData, vmin, vmax, styleEpoch]);
 
   const mapDataRef = useRef(mapData);
   useEffect(() => {

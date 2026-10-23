@@ -12,6 +12,6 @@ services:
       - key: DATA_DIR
         value: /app/data
       - key: CORS_ORIGINS
-        value: "*"
+        value: "https://ocean-embed.vercel.app,http://localhost:3000"
       - key: RELOAD_INTERVAL_MIN
         value: "60"
