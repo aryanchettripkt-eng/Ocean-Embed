@@ -5,17 +5,20 @@ Covers Niño 3.4 SST anomaly (NOAA PSL), MJO RMM1/RMM2 (BoM), and DMI (Dipole Mo
 
 from __future__ import annotations
 
+import re
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-# NOAA CPC weekly SST anomaly index (PRD_AI_ML §3)
-NINO34_CPC_URL = "https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices"
+# NOAA CPC weekly SST anomaly index (wksst9120.for is the official weekly file, PRD_AI_ML §3)
+NINO34_CPC_WEEKLY_URL = "https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for"
+# NOAA CPC monthly SST anomaly file (fallback)
+NINO34_CPC_MONTHLY_URL = "https://www.cpc.ncep.noaa.gov/data/indices/sstoi.indices"
 # NOAA PSL monthly anomaly index (fallback)
 NINO34_PSL_URL = "https://psl.noaa.gov/data/correlation/nina34.anom.data"
-NINO34_URL = NINO34_CPC_URL
+NINO34_URL = NINO34_CPC_WEEKLY_URL
 # Australian BoM Wheeler-Hendon daily MJO index (HTTPS)
 MJO_URL = "https://www.bom.gov.au/climate/mjo/graphics/rmm.74toRealtime.txt"
 
@@ -27,8 +30,13 @@ def fetch_nino34(url: str = NINO34_URL) -> pd.DataFrame:
         with urllib.request.urlopen(req, timeout=15) as resp:
             content = resp.read().decode("utf-8")
     except Exception as exc:
-        if url != NINO34_PSL_URL:
-            # Fall back to PSL anomaly
+        if url == NINO34_CPC_WEEKLY_URL:
+            # Fall back to monthly CPC or PSL anomaly
+            try:
+                return fetch_nino34(NINO34_CPC_MONTHLY_URL)
+            except Exception:
+                return fetch_nino34(NINO34_PSL_URL)
+        elif url != NINO34_PSL_URL:
             return fetch_nino34(NINO34_PSL_URL)
         raise RuntimeError(f"Failed to fetch Niño 3.4 anomaly from {url}: {exc}") from exc
 
@@ -38,8 +46,26 @@ def fetch_nino34(url: str = NINO34_URL) -> pd.DataFrame:
 
     rows: list[dict[str, Any]] = []
 
-    # Check if this is NOAA CPC weekly format (starts with WEEK or date like 03JAN1990)
-    if "sstoi" in url or any(len(parts) >= 9 for parts in [lines[0].split()]):
+    # 1. Check for NOAA CPC weekly format (wksst9120.for)
+    # Header format: Week Nino1+2 SST SSTA Nino3 SST SSTA Nino34 SST SSTA Nino4 SST SSTA
+    wksst_regex = re.compile(
+        r"^\s*(\d{2}[A-Za-z]{3}\d{4})\s+([0-9.]+)\s*([+-]?[0-9.]+)\s+([0-9.]+)\s*([+-]?[0-9.]+)\s+([0-9.]+)\s*([+-]?[0-9.]+)"
+    )
+    for line in lines:
+        m = wksst_regex.match(line)
+        if m:
+            date_str = m.group(1)
+            nino34_anom_str = m.group(7)
+            try:
+                dt = pd.to_datetime(date_str, format="%d%b%Y")
+                anom_val = float(nino34_anom_str)
+                if anom_val > -90.0:
+                    rows.append({"date": dt, "nino34": anom_val})
+            except Exception:
+                continue
+
+    # 2. Check for NOAA CPC monthly format (sstoi.indices)
+    if not rows and ("sstoi" in url or any(len(parts) >= 9 for parts in [lines[0].split()])):
         for line in lines:
             parts = line.split()
             if not parts:
@@ -48,15 +74,14 @@ def fetch_nino34(url: str = NINO34_URL) -> pd.DataFrame:
             if len(date_token) >= 8 and date_token[-4:].isdigit():
                 try:
                     dt = pd.to_datetime(date_token, format="%d%b%Y")
-                    # Niño 3.4 anomaly is typically the last column
                     anom_val = float(parts[-1])
                     if anom_val > -90.0:
                         rows.append({"date": dt, "nino34": anom_val})
                 except Exception:
                     continue
 
+    # 3. Fallback to PSL monthly table format
     if not rows:
-        # Fallback to PSL monthly table format
         for line in lines[1:]:
             parts = line.split()
             if len(parts) >= 13 and parts[0].isdigit():

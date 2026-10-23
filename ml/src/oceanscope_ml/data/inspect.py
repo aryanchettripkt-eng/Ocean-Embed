@@ -367,6 +367,31 @@ def build_real_argo_holdout(
     }
 
 
+def is_glorys_file(path: Path) -> bool:
+    """Identify if a file belongs to the GLORYS12 physical reanalysis.
+
+    Copernicus Marine typically names files like:
+    `cmems_mod_glo_phy_my_0.083deg_P1D-m_...nc` or stores them in a folder
+    named `glorys` or `glorys12` or `001_030`.
+    Must strictly exclude competitor products (GREP 001_031 and ARMOR3D 015_004).
+    """
+    name = path.name.lower()
+    folder = str(path.parent).lower()
+
+    # Strictly reject competitor products
+    if any(k in name or k in folder for k in ["grep", "001_031", "armor3d", "015_004", "armor-3d"]):
+        return False
+
+    # Check filename and folder hierarchy
+    if "glorys" in name or "glorys" in folder or "001_030" in name or "001_030" in folder:
+        return True
+    if "cmems_mod_glo_phy" in name and "0.083" in name:
+        return True
+    if "cmems_mod_glo_phy_my" in name and "p1d-m" in name:
+        return True
+    return False
+
+
 def inspect_raw_data(
     config: ExperimentConfig,
     raw_dir: Path,
@@ -383,9 +408,7 @@ def inspect_raw_data(
         f_info = inspect_file(f)
         inspected_files.append(f_info)
         # GLORYS12 is the authoritative source for the native 15 depths (PRD_AI_ML §2, §4.1)
-        if ("glorys" in f.name.lower() or "001_030" in f.name.lower()) and f_info.get(
-            "native_depths"
-        ):
+        if is_glorys_file(f) and f_info.get("native_depths"):
             glorys_native_depths = f_info["native_depths"]
 
     # PRD_AI_ML §2: Depths must come exclusively from GLORYS12. Do NOT fall back to GREP or ARMOR3D.

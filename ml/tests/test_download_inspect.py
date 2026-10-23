@@ -286,3 +286,28 @@ def test_argo_stratified_regional_holdout(tmp_path: Path) -> None:
     assert holdout["held_out_by_region"]["arabian_sea"] >= 1
     assert holdout["held_out_by_region"]["equatorial"] >= 1
     assert len(holdout["held_out_floats"]) >= 3
+
+
+def test_is_glorys_file() -> None:
+    """Verify is_glorys_file recognizes Copernicus GLORYS names and folders."""
+    from oceanscope_ml.data.inspect import is_glorys_file
+
+    # 1. Copernicus official filename without 'glorys' in name
+    p1 = Path("/data/raw/cmems_mod_glo_phy_my_0.083deg_P1D-m_2019-01-01.nc")
+    assert is_glorys_file(p1) is True
+
+    # 2. Generic filename inside a glorys12 folder
+    p2 = Path("/data/raw/glorys12/data_20190101.nc")
+    assert is_glorys_file(p2) is True
+
+    # 3. Product code 001_030
+    p3 = Path("/data/raw/GLOBAL_MULTIYEAR_PHY_001_030_daily.nc")
+    assert is_glorys_file(p3) is True
+
+    # 4. Competitor GREP (001_031) must be rejected
+    p4 = Path("/data/raw/grep/cmems_mod_glo_phy-tem_phymnstd_my_0.25deg_P1D-m.nc")
+    assert is_glorys_file(p4) is False
+
+    # 5. Competitor ARMOR3D (015_004) must be rejected
+    p5 = Path("/data/raw/armor3d/dataset-armor-3d-rep-weekly.nc")
+    assert is_glorys_file(p5) is False

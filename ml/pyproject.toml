@@ -17,6 +17,9 @@ dependencies = [
     "pyarrow>=12.0.0",
     "pyyaml>=6.0",
     "jsonschema>=4.17.0",
+    "copernicusmarine>=1.0.0",
+    "cdsapi>=0.7.0",
+    "earthaccess>=0.9.0",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +55,7 @@ module = [
     "pandas.*",
     "pyarrow.*",
     "copernicusmarine.*",
+    "cdsapi.*",
     "earthaccess.*",
     "sklearn.*",
     "torch.*",

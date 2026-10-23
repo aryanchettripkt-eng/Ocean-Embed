@@ -20,15 +20,10 @@ import { ErrorState } from "../components/common/ErrorState";
 import { ErrorBoundary } from "../components/common/ErrorBoundary";
 import { formatCoord } from "../lib/format";
 
-// Dynamically import heavy WebGL and Chart modules to keep initial bundle size well below 350 kB
-const MapView = dynamic(
-  () => import("../components/map/MapView").then((mod) => mod.MapView),
-  {
-    ssr: false,
-    loading: () => <Loading label="Loading interactive map..." />,
-  }
-);
+// MapView is statically included so MapLibre is counted directly in the initial / budget (PRD_FRONTEND §4)
+import { MapView } from "../components/map/MapView";
 
+// DetailsPanel is displayed only when a point is clicked; charts (Recharts) load on-demand
 const DetailsPanel = dynamic(
   () => import("../components/panels/DetailsPanel").then((mod) => mod.DetailsPanel),
   {

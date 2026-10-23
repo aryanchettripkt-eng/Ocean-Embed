@@ -509,61 +509,233 @@ def execute_download(
             elif key == "era5":
                 download_era5(item, raw_dir, manifest)
             elif key == "ccmp":
-                # Remote Sensing Systems CCMP daily V03.0
-                out_path = (
-                    raw_dir / "ccmp" / f"ccmp_v03.0_{item['start_date']}_{item['end_date']}.nc"
-                )
-                year = item["start_date"][:4]
-                d_str = item["start_date"].replace("-", "")
-                ccmp_url = f"{item['source_url']}{year}/CCMP_RT_Wind_Analysis_{d_str}_V03.0_L4.0.nc"
-                download_url_file(
-                    url=ccmp_url,
-                    out_file=out_path,
-                    key="ccmp",
-                    source_id=item["source_id"],
-                    raw_dir=raw_dir,
-                    manifest=manifest,
-                )
+                # Remote Sensing Systems CCMP daily V03.0 across all dates in range
+                import urllib.request
+
+                ccmp_dir = raw_dir / "ccmp"
+                ccmp_dir.mkdir(parents=True, exist_ok=True)
+                cur_dt = datetime.strptime(item["start_date"], "%Y-%m-%d")
+                end_dt = datetime.strptime(item["end_date"], "%Y-%m-%d")
+
+                d_range_ccmp = f"{item['start_date']} to {item['end_date']}"
+                print(f"  Downloading CCMP daily wind vectors ({d_range_ccmp})...")
+                while cur_dt <= end_dt:
+                    d_str = cur_dt.strftime("%Y%m%d")
+                    year = cur_dt.strftime("%Y")
+                    month = cur_dt.strftime("%m")
+                    day_file = ccmp_dir / f"CCMP_Wind_Analysis_{d_str}_V03.0_L4.0.nc"
+
+                    if not (day_file.exists() and day_file.stat().st_size > 0):
+                        # Primary: Remote Sensing Systems monthly directory
+                        ccmp_url = (
+                            f"{item['source_url']}Y{year}/M{month}/"
+                            f"CCMP_Wind_Analysis_{d_str}_V03.0_L4.0.nc"
+                        )
+                        try:
+                            req = urllib.request.Request(
+                                ccmp_url, headers={"User-Agent": "OceanScope-AI/1.0"}
+                            )
+                            with urllib.request.urlopen(req, timeout=30) as resp:
+                                day_file.write_bytes(resp.read())
+                        except Exception:
+                            # Fallback: Earthdata PO.DAAC / direct annual path
+                            alt_url = (
+                                f"{item['source_url']}{year}/"
+                                f"CCMP_Wind_Analysis_{d_str}_V03.0_L4.0.nc"
+                            )
+                            req = urllib.request.Request(
+                                alt_url, headers={"User-Agent": "OceanScope-AI/1.0"}
+                            )
+                            with urllib.request.urlopen(req, timeout=30) as resp:
+                                day_file.write_bytes(resp.read())
+
+                    record_downloaded_file(manifest, "ccmp", day_file, raw_dir, item["source_id"])
+                    cur_dt += timedelta(days=1)
+
             elif key == "oscar":
-                out_path = raw_dir / "oscar" / f"oscar_{item['start_date']}_{item['end_date']}.nc"
-                download_url_file(
-                    url=f"https://podaac-opendap.jpl.nasa.gov/opendap/allData/oscar/preview/L4/oscar_third_deg/oscar_vel{item['start_date'][:4]}.nc.gz",
-                    out_file=out_path,
-                    key="oscar",
-                    source_id=item["source_id"],
-                    raw_dir=raw_dir,
-                    manifest=manifest,
-                )
+                # NASA PO.DAAC OSCAR ocean currents with Earthdata login
+                import gzip
+                import urllib.request
+
+                oscar_dir = raw_dir / "oscar"
+                oscar_dir.mkdir(parents=True, exist_ok=True)
+                out_path = oscar_dir / f"oscar_{item['start_date']}_{item['end_date']}.nc"
+
+                if out_path.exists() and out_path.stat().st_size > 0:
+                    print(f"  OSCAR file {out_path.name} already exists. Skipping.")
+                    record_downloaded_file(manifest, "oscar", out_path, raw_dir, item["source_id"])
+                else:
+                    print("  Downloading OSCAR ocean currents with Earthdata credentials...")
+                    user = os.environ.get("EARTHDATA_USERNAME", "")
+                    passwd = os.environ.get("EARTHDATA_PASSWORD", "")
+
+                    downloaded = False
+                    # Attempt earthaccess search & download if available
+                    try:
+                        import earthaccess  # type: ignore[import-not-found]
+
+                        earthaccess.login(strategy="environment")
+                        results = earthaccess.search_data(
+                            short_name="OSCAR_L4_OC_third-deg",
+                            temporal=(item["start_date"], item["end_date"]),
+                            bounding_box=(
+                                item["bbox"]["lon_min"],
+                                item["bbox"]["lat_min"],
+                                item["bbox"]["lon_max"],
+                                item["bbox"]["lat_max"],
+                            ),
+                        )
+                        if results:
+                            downloaded_files = earthaccess.download(results, str(oscar_dir))
+                            if downloaded_files:
+                                downloaded = True
+                                for f_str in downloaded_files:
+                                    p = Path(f_str)
+                                    if p.name.endswith(".gz"):
+                                        decomp = p.with_suffix("")
+                                        decomp.write_bytes(gzip.decompress(p.read_bytes()))
+                                        p.unlink()
+                                        record_downloaded_file(
+                                            manifest, "oscar", decomp, raw_dir, item["source_id"]
+                                        )
+                                    else:
+                                        record_downloaded_file(
+                                            manifest, "oscar", p, raw_dir, item["source_id"]
+                                        )
+                    except Exception as e:
+                        logger.info("earthaccess fallback: %s", e)
+
+                    if not downloaded:
+                        # Authenticated PO.DAAC Cloud archive download
+                        year = item["start_date"][:4]
+                        oscar_url = (
+                            "https://archive.podaac.earthdata.nasa.gov/"
+                            f"podaac-ops-cumulus-protected/OSCAR_L4_OC_third-deg/oscar_vel{year}.nc.gz"
+                        )
+                        req = urllib.request.Request(
+                            oscar_url, headers={"User-Agent": "OceanScope-AI/1.0"}
+                        )
+                        import base64
+
+                        creds_b64 = base64.b64encode(f"{user}:{passwd}".encode()).decode()
+                        req.add_header("Authorization", f"Basic {creds_b64}")
+
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            raw_bytes = resp.read()
+                            if raw_bytes[:2] == b"\x1f\x8b":  # gzip magic bytes
+                                out_path.write_bytes(gzip.decompress(raw_bytes))
+                            else:
+                                out_path.write_bytes(raw_bytes)
+                        record_downloaded_file(
+                            manifest, "oscar", out_path, raw_dir, item["source_id"]
+                        )
+
             elif key == "gebco":
-                out_path = raw_dir / "gebco" / "gebco_2023_sub_ice_topo.nc"
-                download_url_file(
-                    url="https://www.bodc.ac.uk/data/open_download/gebco/gebco_2023/geotiff/",
-                    out_file=out_path,
-                    key="gebco",
-                    source_id=item["source_id"],
-                    raw_dir=raw_dir,
-                    manifest=manifest,
-                )
+                # GEBCO bathymetry with zip extraction to ensure genuine NetCDF
+                import urllib.request
+                import zipfile
+
+                gebco_dir = raw_dir / "gebco"
+                gebco_dir.mkdir(parents=True, exist_ok=True)
+                out_path = gebco_dir / "gebco_2023_sub_ice_topo.nc"
+
+                if out_path.exists() and out_path.stat().st_size > 0:
+                    print(f"  GEBCO file {out_path.name} already exists. Skipping.")
+                    record_downloaded_file(manifest, "gebco", out_path, raw_dir, item["source_id"])
+                else:
+                    print("  Downloading GEBCO sub-ice bathymetry from BODC...")
+                    # BODC NetCDF zip package
+                    gebco_zip_url = (
+                        "https://www.bodc.ac.uk/data/open_download/gebco/gebco_2023/zip/"
+                    )
+                    temp_zip = gebco_dir / "gebco_download.zip"
+                    req = urllib.request.Request(
+                        gebco_zip_url, headers={"User-Agent": "OceanScope-AI/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        content_bytes = resp.read()
+
+                    if zipfile.is_zipfile(temp_zip) or content_bytes[:4] == b"PK\x03\x04":
+                        temp_zip.write_bytes(content_bytes)
+                        with zipfile.ZipFile(temp_zip, "r") as z:
+                            nc_files = [
+                                m for m in z.namelist() if m.endswith(".nc") or m.endswith(".nc4")
+                            ]
+                            if nc_files:
+                                target_nc = nc_files[0]
+                                with z.open(target_nc) as src, open(out_path, "wb") as dst:
+                                    dst.write(src.read())
+                        temp_zip.unlink(missing_ok=True)
+                    else:
+                        out_path.write_bytes(content_bytes)
+
+                    record_downloaded_file(manifest, "gebco", out_path, raw_dir, item["source_id"])
+
             elif key == "woa23":
-                out_path = raw_dir / "woa23" / "woa23_decav_t00_04.nc"
-                download_url_file(
-                    url="https://www.ncei.noaa.gov/data/oceans/woa/WOA23/DATA/temperature/netcdf/decav/0.25/woa23_decav_t00_04.nc",
-                    out_file=out_path,
-                    key="woa23",
-                    source_id=item["source_id"],
-                    raw_dir=raw_dir,
-                    manifest=manifest,
-                )
+                # World Ocean Atlas 2023 12 monthly climatology files (t01_04 to t12_04)
+                woa_dir = raw_dir / "woa23"
+                woa_dir.mkdir(parents=True, exist_ok=True)
+                print("  Downloading WOA23 12 monthly climatology files (PRD §2, §3)...")
+                base_woa = "https://www.ncei.noaa.gov/data/oceans/woa/WOA23/DATA/temperature/netcdf/decav/0.25/"
+
+                for m_idx in range(1, 13):
+                    m_str = f"{m_idx:02d}"
+                    out_file = woa_dir / f"woa23_decav_t{m_str}_04.nc"
+                    url = f"{base_woa}woa23_decav_t{m_str}_04.nc"
+                    download_url_file(
+                        url=url,
+                        out_file=out_file,
+                        key="woa23",
+                        source_id=item["source_id"],
+                        raw_dir=raw_dir,
+                        manifest=manifest,
+                    )
+
             elif key == "argo":
-                out_path = raw_dir / "argo" / "argo_indian_ocean_profiles.nc"
-                download_url_file(
-                    url="https://data-argo.ifremer.fr/geo/indian_ocean/",
-                    out_file=out_path,
-                    key="argo",
-                    source_id=item["source_id"],
-                    raw_dir=raw_dir,
-                    manifest=manifest,
-                )
+                # Argo GDAC ERDDAP tabledap subsetted NetCDF download (PRD §4.1, §7)
+                import urllib.parse
+                import urllib.request
+
+                argo_dir = raw_dir / "argo"
+                argo_dir.mkdir(parents=True, exist_ok=True)
+                out_path = argo_dir / f"argo_profiles_{item['start_date']}_{item['end_date']}.nc"
+
+                if out_path.exists() and out_path.stat().st_size > 0:
+                    print(f"  ARGO profiles file {out_path.name} already exists. Skipping.")
+                    record_downloaded_file(manifest, "argo", out_path, raw_dir, item["source_id"])
+                else:
+                    d_range = f"{item['start_date']}..{item['end_date']}"
+                    print(f"  Querying Argo GDAC ERDDAP for North Indian Ocean ({d_range})...")
+                    bbox = item["bbox"]
+                    query_vars = "platform_number,cycle_number,time,latitude,longitude,pres,temp"
+                    constraints = (
+                        f"&time>={item['start_date']}T00:00:00Z"
+                        f"&time<={item['end_date']}T23:59:59Z"
+                        f"&latitude>={bbox['lat_min']}"
+                        f"&latitude<={bbox['lat_max']}"
+                        f"&longitude>={bbox['lon_min']}"
+                        f"&longitude<={bbox['lon_max']}"
+                        f"&pres<=1050"
+                    )
+                    encoded_query = urllib.parse.quote(query_vars + constraints, safe="&,=,")
+                    erddap_url = (
+                        f"https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.nc?{encoded_query}"
+                    )
+
+                    req = urllib.request.Request(
+                        erddap_url, headers={"User-Agent": "OceanScope-AI/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        content_bytes = resp.read()
+
+                    # Verify downloaded file is genuine NetCDF (magic CDF or HDF5)
+                    if not (content_bytes[:3] == b"CDF" or content_bytes[:4] == b"\x89HDF"):
+                        hdr = content_bytes[:30]
+                        raise RuntimeError(f"Argo ERDDAP response was not valid NetCDF: {hdr!r}")
+
+                    out_path.write_bytes(content_bytes)
+                    record_downloaded_file(manifest, "argo", out_path, raw_dir, item["source_id"])
+
             elif key == "indices":
                 download_indices_product(raw_dir, manifest)
             else:

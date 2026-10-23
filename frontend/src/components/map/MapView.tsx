@@ -27,6 +27,15 @@ interface HoverInfo {
   coverage: number;
 }
 
+function getCartoTiles(isLight: boolean): string[] {
+  const variant = isLight ? "light_all" : "dark_all";
+  return [
+    `https://a.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
+    `https://b.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
+    `https://c.basemaps.cartocdn.com/${variant}/{z}/{x}/{y}.png`,
+  ];
+}
+
 export function MapView({
   mapData,
   vmin,
@@ -45,30 +54,46 @@ export function MapView({
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
+  const [isLightMode, setIsLightMode] = useState<boolean>(false);
+
+  // Monitor documentElement class changes to switch between light and dark basemap
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const checkLight = () => document.documentElement.classList.contains("light");
+    setIsLightMode(checkLight());
+
+    const observer = new MutationObserver(() => {
+      setIsLightMode(checkLight());
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    return () => observer.disconnect();
+  }, []);
 
   // Initialize MapLibre Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
+    const initialLight =
+      typeof document !== "undefined" && document.documentElement.classList.contains("light");
+
     const basemapStyle: maplibregl.StyleSpecification = {
       version: 8,
       sources: {
-        carto_dark: {
+        carto_basemap: {
           type: "raster",
-          tiles: [
-            "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-            "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-            "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-          ],
+          tiles: getCartoTiles(initialLight),
           tileSize: 256,
           attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
         },
       },
       layers: [
         {
-          id: "carto-dark-layer",
+          id: "carto-basemap-layer",
           type: "raster",
-          source: "carto_dark",
+          source: "carto_basemap",
           minzoom: 0,
           maxzoom: 19,
         },
@@ -108,6 +133,45 @@ export function MapView({
       mapInstanceRef.current = null;
     };
   }, []);
+
+  // Dynamically update basemap raster tiles when theme toggles
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded) return;
+
+    const tiles = getCartoTiles(isLightMode);
+    const sourceId = "carto_basemap";
+    const layerId = "carto-basemap-layer";
+
+    const source = map.getSource(sourceId) as maplibregl.RasterTileSource | undefined;
+    if (source && "setTiles" in source && typeof source.setTiles === "function") {
+      source.setTiles(tiles);
+    } else {
+      if (map.getLayer(layerId)) {
+        map.removeLayer(layerId);
+      }
+      if (map.getSource(sourceId)) {
+        map.removeSource(sourceId);
+      }
+      map.addSource(sourceId, {
+        type: "raster",
+        tiles,
+        tileSize: 256,
+        attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+      });
+      const beforeLayer = map.getLayer("ocean-grid-layer") ? "ocean-grid-layer" : undefined;
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          minzoom: 0,
+          maxzoom: 19,
+        },
+        beforeLayer
+      );
+    }
+  }, [isLightMode, mapLoaded]);
 
   // Update canvas grid layer when mapData, vmin, or vmax change
   useEffect(() => {
@@ -326,30 +390,32 @@ export function MapView({
       : "Model prediction";
 
   return (
-    <div className={`relative w-full h-full min-h-[400px] overflow-hidden select-none ${className}`}>
+    <div
+      className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-slate-950 transition-colors ${className}`}
+    >
       <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
 
       {/* Hover tooltip */}
       {hoverInfo && (
         <div
-          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-slate-950/90 backdrop-blur-md border border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-200"
+          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-slate-950/90 backdrop-blur-md border border-slate-300 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
           style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
         >
-          <div className="font-mono text-[11px] text-slate-400">
+          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
             {formatCoord(hoverInfo.lat, hoverInfo.lon)}
           </div>
           {hoverInfo.coverage === 0 ? (
             <div className="text-slate-500 font-medium text-[11px]">Land / Unmodelled</div>
           ) : hoverInfo.coverage === 2 ? (
-            <div className="text-amber-400/90 font-medium text-[11px]">
+            <div className="text-amber-500 dark:text-amber-400/90 font-medium text-[11px]">
               No prediction (insufficient input data)
             </div>
           ) : (
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="font-semibold text-cyan-300 font-mono text-sm">
+              <span className="font-semibold text-cyan-600 dark:text-cyan-300 font-mono text-sm">
                 {formatTemp(hoverInfo.value, 1)}
               </span>
-              <span className="text-[10px] text-slate-400">({sourceLabel})</span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">({sourceLabel})</span>
             </div>
           )}
         </div>
