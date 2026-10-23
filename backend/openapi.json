@@ -1284,6 +1284,121 @@
         "title": "RegionSummaryResponse",
         "type": "object"
       },
+      "SectionResponse": {
+        "description": "Response model for GET /section (PRD_BACKEND \u00a74.11).",
+        "properties": {
+          "axis": {
+            "description": "The varying coordinate: 'lon' when lat was given, 'lat' when lon was given",
+            "enum": [
+              "lat",
+              "lon"
+            ],
+            "title": "Axis",
+            "type": "string"
+          },
+          "coverage": {
+            "description": "Coverage codes [position] along the section line",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depths_m": {
+            "description": "All 15 model depths in meters",
+            "items": {
+              "type": "number"
+            },
+            "title": "Depths M",
+            "type": "array"
+          },
+          "field": {
+            "enum": [
+              "pred",
+              "glorys",
+              "error"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "fixed": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "The snapped fixed coordinate (e.g. {'lat': 15.125} or {'lon': 65.125})",
+            "title": "Fixed",
+            "type": "object"
+          },
+          "positions": {
+            "description": "Coordinates along the varying axis (lon or lat)",
+            "items": {
+              "type": "number"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "units": {
+            "default": "degC",
+            "title": "Units",
+            "type": "string"
+          },
+          "values": {
+            "description": "Vertical section slice [depth][position], null where unavailable",
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "synthetic",
+          "date",
+          "field",
+          "axis",
+          "fixed",
+          "positions",
+          "depths_m",
+          "values",
+          "coverage"
+        ],
+        "title": "SectionResponse",
+        "type": "object"
+      },
       "Splits": {
         "description": "Start and end dates for train, validation, and test splits.",
         "properties": {
@@ -2159,6 +2274,104 @@
           }
         },
         "summary": "Area-weighted regional summary statistics",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/v1/section": {
+      "get": {
+        "description": "Returns vertical slice through all 15 depths along one grid row or column.",
+        "operationId": "get_section_api_v1_section_get",
+        "parameters": [
+          {
+            "description": "Date formatted as YYYY-MM-DD",
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "description": "Date formatted as YYYY-MM-DD",
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Field to return",
+            "in": "query",
+            "name": "field",
+            "required": false,
+            "schema": {
+              "default": "pred",
+              "description": "Field to return",
+              "enum": [
+                "pred",
+                "glorys",
+                "error"
+              ],
+              "title": "Field",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Latitude north for east-west section",
+            "in": "query",
+            "name": "lat",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Latitude north for east-west section",
+              "title": "Lat"
+            }
+          },
+          {
+            "description": "Longitude east for north-south section",
+            "in": "query",
+            "name": "lon",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Longitude east for north-south section",
+              "title": "Lon"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Vertical temperature section slice",
         "tags": [
           "data"
         ]

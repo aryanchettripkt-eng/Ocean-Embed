@@ -14,6 +14,7 @@ import {
   mockMeta,
   mockMetrics,
   mockRegionSummary,
+  mockSection,
 } from "./data";
 
 export const handlers = [
@@ -64,6 +65,44 @@ export const handlers = [
     }
 
     return HttpResponse.json(createMockMap(date, depth_m, field));
+  }),
+
+  // Section
+  http.get("*/api/v1/section", ({ request }) => {
+    const url = new URL(request.url);
+    const date = url.searchParams.get("date") ?? "2020-01-05";
+    const field = (url.searchParams.get("field") ?? "pred") as "pred" | "glorys" | "error";
+    const hasLat = url.searchParams.has("lat");
+    const hasLon = url.searchParams.has("lon");
+
+    if ((!hasLat && !hasLon) || (hasLat && hasLon)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "invalid_section",
+            message: "Provide exactly one of 'lat' or 'lon', not both or neither",
+            details: null,
+          },
+        },
+        { status: 422 }
+      );
+    }
+
+    const isLive = mockMeta.latest_live_date ? date >= "2020-01-09" : false;
+    if (isLive && (field === "glorys" || field === "error")) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "reference_unavailable",
+            message: "GLORYS reference is not available for live dates",
+            details: null,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(mockSection);
   }),
 
   // Profile

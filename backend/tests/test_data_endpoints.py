@@ -292,3 +292,117 @@ def test_map_performance_warm_response() -> None:
     p95 = float(np.percentile(timings, 95))
     print(f"\nWarm /map p95 response time: {p95:.2f} ms")
     assert p95 < 300.0, f"Expected warm p95 < 300 ms, got {p95:.2f} ms"
+
+
+def test_section_endpoint() -> None:
+    """Verify /section satisfies PRD_BACKEND §4.11 and Test 13.
+
+    Shapes are 15 × grid_shape.lon (for lat) and 15 × grid_shape.lat (for lon);
+    values equal raw zarr values and match /map at the same depth along that row/col;
+    nulls and coverage pass through; 422 for both/neither lat/lon; 404 reference_unavailable
+    on live dates for glorys/error; warm p95 < 300 ms.
+    """
+    client = TestClient(app)
+
+    # 1. East-West section along lat
+    res_lat = client.get("/api/v1/section?date=2020-01-01&field=pred&lat=15.0")
+    assert res_lat.status_code == 200
+    assert res_lat.headers.get("Cache-Control") == "public, max-age=86400"
+    assert "ETag" in res_lat.headers
+
+    data_lat = res_lat.json()
+    assert data_lat["run_id"] == "synthetic_v1"
+    assert data_lat["synthetic"] is True
+    assert data_lat["date"] == "2020-01-01"
+    assert data_lat["field"] == "pred"
+    assert data_lat["split"] == "val"
+    assert data_lat["units"] == "degC"
+    assert data_lat["axis"] == "lon"
+    assert "lat" in data_lat["fixed"]
+    snapped_lat = data_lat["fixed"]["lat"]
+
+    # Shape: 15 depths x 60 lons
+    assert len(data_lat["depths_m"]) == 15
+    assert len(data_lat["positions"]) == 60
+    assert len(data_lat["values"]) == 15
+    assert len(data_lat["values"][0]) == 60
+    assert len(data_lat["coverage"]) == 60
+
+    # Consistency with /map at depth_index=0
+    map_res = client.get("/api/v1/map?date=2020-01-01&depth_index=0&field=pred").json()
+    lat_row_idx = map_res["lat"].index(snapped_lat)
+    assert data_lat["values"][0] == map_res["values"][lat_row_idx]
+    assert data_lat["coverage"] == map_res["coverage"][lat_row_idx]
+
+    # 2. North-South section along lon
+    res_lon = client.get("/api/v1/section?date=2020-01-01&field=pred&lon=65.0")
+    assert res_lon.status_code == 200
+    data_lon = res_lon.json()
+    assert data_lon["axis"] == "lat"
+    assert "lon" in data_lon["fixed"]
+    snapped_lon = data_lon["fixed"]["lon"]
+
+    # Shape: 15 depths x 30 lats
+    assert len(data_lon["depths_m"]) == 15
+    assert len(data_lon["positions"]) == 30
+    assert len(data_lon["values"]) == 15
+    assert len(data_lon["values"][0]) == 30
+    assert len(data_lon["coverage"]) == 30
+
+    # Consistency with /map at depth_index=0 along column
+    lon_col_idx = map_res["lon"].index(snapped_lon)
+    map_col_vals = [map_res["values"][r][lon_col_idx] for r in range(30)]
+    map_col_cov = [map_res["coverage"][r][lon_col_idx] for r in range(30)]
+    assert data_lon["values"][0] == map_col_vals
+    assert data_lon["coverage"] == map_col_cov
+
+    # 3. Validation: both lat and lon -> 422 invalid_section
+    res_both = client.get("/api/v1/section?date=2020-01-01&lat=15.0&lon=65.0")
+    assert res_both.status_code == 422
+    assert res_both.json()["error"]["code"] == "invalid_section"
+
+    # 4. Validation: neither lat nor lon -> 422 invalid_section
+    res_neither = client.get("/api/v1/section?date=2020-01-01")
+    assert res_neither.status_code == 422
+    assert res_neither.json()["error"]["code"] == "invalid_section"
+
+    # 5. Validation: out of region -> 422 out_of_region
+    res_out_lat = client.get("/api/v1/section?date=2020-01-01&lat=35.0")
+    assert res_out_lat.status_code == 422
+    assert res_out_lat.json()["error"]["code"] == "out_of_region"
+
+    res_out_lon = client.get("/api/v1/section?date=2020-01-01&lon=120.0")
+    assert res_out_lon.status_code == 422
+    assert res_out_lon.json()["error"]["code"] == "out_of_region"
+
+    # 6. Live date reference unavailable: 2020-01-09 is live
+    res_live_glorys = client.get("/api/v1/section?date=2020-01-09&field=glorys&lat=15.0")
+    assert res_live_glorys.status_code == 404
+    assert res_live_glorys.json()["error"]["code"] == "reference_unavailable"
+
+    res_live_error = client.get("/api/v1/section?date=2020-01-09&field=error&lat=15.0")
+    assert res_live_error.status_code == 404
+    assert res_live_error.json()["error"]["code"] == "reference_unavailable"
+
+    # Live date pred succeeds
+    res_live_pred = client.get("/api/v1/section?date=2020-01-09&field=pred&lat=15.0")
+    assert res_live_pred.status_code == 200
+    assert res_live_pred.json()["split"] == "live"
+
+    # 7. Date unavailable -> 404
+    res_bad_date = client.get("/api/v1/section?date=1990-01-01&lat=15.0")
+    assert res_bad_date.status_code == 404
+    assert res_bad_date.json()["error"]["code"] == "date_unavailable"
+
+    # 8. Benchmark warm p95 latency < 300 ms
+    timings: list[float] = []
+    for _ in range(10):
+        t0 = time.perf_counter()
+        r = client.get("/api/v1/section?date=2020-01-01&field=pred&lat=15.0")
+        t1 = time.perf_counter()
+        assert r.status_code == 200
+        timings.append((t1 - t0) * 1000.0)
+
+    p95 = float(np.percentile(timings, 95))
+    print(f"\nWarm /section p95 response time: {p95:.2f} ms")
+    assert p95 < 300.0, f"Expected warm p95 < 300 ms, got {p95:.2f} ms"

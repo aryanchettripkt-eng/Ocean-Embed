@@ -13,6 +13,7 @@ import {
   type MetricsResponse,
   type ProfileResponse,
   type RegionSummaryResponse,
+  type SectionResponse,
   type TimeseriesResponse,
 } from "./client";
 
@@ -46,6 +47,36 @@ export function useMap(
     queryFn: () => apiClient.getMap(params),
     staleTime: Infinity,
     enabled: options?.enabled !== false && !!params.date,
+  });
+}
+
+/**
+ * Vertical slice through all 15 depths along one grid row or column (PRD_FRONTEND §3.1b, PRD_BACKEND §4.11).
+ */
+export function useSection(
+  params: {
+    date?: string;
+    field?: "pred" | "glorys" | "error";
+    lat?: number;
+    lon?: number;
+  },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<SectionResponse>({
+    queryKey: ["section", params.date, params.field ?? "pred", params.lat, params.lon],
+    queryFn: () =>
+      apiClient.getSection({
+        date: params.date!,
+        field: params.field,
+        lat: params.lat,
+        lon: params.lon,
+      }),
+    staleTime: Infinity,
+    enabled:
+      options?.enabled !== false &&
+      !!params.date &&
+      ((params.lat !== undefined && params.lon === undefined) ||
+        (params.lat === undefined && params.lon !== undefined)),
   });
 }
 

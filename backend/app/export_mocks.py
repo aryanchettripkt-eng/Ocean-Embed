@@ -30,6 +30,7 @@ MOCK_ENDPOINTS = {
     "argo.json": "/api/v1/argo",
     "argo_profiles.json": "/api/v1/argo/profiles",
     "headline.json": "/api/v1/headline",
+    "section.json": "/api/v1/section?date=2020-01-05&field=pred&lat=12.5",
 }
 
 

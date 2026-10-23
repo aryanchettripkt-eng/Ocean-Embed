@@ -64,4 +64,28 @@ describe("apiClient and MSW handlers", () => {
       expect(apiErr.code).toBe("test_not_evaluated");
     }
   });
+
+  it("fetches vertical section slice", async () => {
+    const section = await apiClient.getSection({
+      date: "2020-01-05",
+      field: "pred",
+      lat: 12.5,
+    });
+    expect(section.axis).toBe("lon");
+    expect(section.fixed.lat).toBeDefined();
+    expect(section.depths_m.length).toBe(15);
+    expect(section.values.length).toBe(15);
+    expect(section.coverage.length).toBe(section.positions.length);
+  });
+
+  it("handles 422 invalid_section when neither lat nor lon is provided", async () => {
+    try {
+      await apiClient.getSection({ date: "2020-01-05" });
+      expect.fail("Should have thrown ApiError");
+    } catch (err) {
+      const apiErr = err as ApiError;
+      expect(apiErr.status).toBe(422);
+      expect(apiErr.code).toBe("invalid_section");
+    }
+  });
 });

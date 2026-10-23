@@ -12,6 +12,7 @@ from app.schemas.models import (
     MapResponse,
     ProfileResponse,
     RegionSummaryResponse,
+    SectionResponse,
     TimeseriesResponse,
 )
 
@@ -43,6 +44,27 @@ def get_map(
 ) -> MapResponse:
     """Query 2D grid slice."""
     res = store.get_map(date=date, depth_m=depth_m, depth_index=depth_index, field=field)
+    _set_cache_headers(response, res.run_id, request)
+    return res
+
+
+@router.get(
+    "/section",
+    response_model=SectionResponse,
+    tags=["data"],
+    summary="Vertical temperature section slice",
+    description="Returns vertical slice through all 15 depths along one grid row or column.",
+)
+def get_section(
+    request: Request,
+    response: Response,
+    date: str = Query(..., description="Date formatted as YYYY-MM-DD"),
+    field: Literal["pred", "glorys", "error"] = Query("pred", description="Field to return"),
+    lat: float | None = Query(None, description="Latitude north for east-west section"),
+    lon: float | None = Query(None, description="Longitude east for north-south section"),
+) -> SectionResponse:
+    """Query vertical section slice across all 15 depths."""
+    res = store.get_section(date=date, field=field, lat=lat, lon=lon)
     _set_cache_headers(response, res.run_id, request)
     return res
 

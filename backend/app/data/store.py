@@ -22,6 +22,7 @@ from app.errors import (
     DateUnavailableError,
     HeadlineNotAvailableError,
     InvalidDateFormatError,
+    InvalidSectionError,
     OutOfRegionError,
     RangeTooLargeError,
     ReferenceUnavailableError,
@@ -55,6 +56,7 @@ from app.schemas.models import (
     ProfileResponse,
     Region,
     RegionSummaryResponse,
+    SectionResponse,
     Splits,
     TimeseriesResponse,
 )
@@ -408,6 +410,91 @@ class OutputStore:
             values=values_list,
             coverage=coverage_list,
             stats=stats,
+        )
+
+    def get_section(
+        self,
+        date: str,
+        field: Literal["pred", "glorys", "error"] = "pred",
+        lat: float | None = None,
+        lon: float | None = None,
+    ) -> SectionResponse:
+        """Return vertical slice across 15 depths along a row or column (PRD_BACKEND §4.11)."""
+        if (lat is None and lon is None) or (lat is not None and lon is not None):
+            raise InvalidSectionError("Provide exactly one of 'lat' or 'lon', not both or neither")
+
+        split = self.get_date_split(date)
+        if split == "live" and field in ("glorys", "error"):
+            raise ReferenceUnavailableError()
+
+        ds = self.get_predictions_dataset()
+        try:
+            ds_date = ds.sel(time=date)
+        except KeyError:
+            raise DateUnavailableError(f"Date {date} is unavailable in dataset")
+
+        assert self.loader.manifest is not None
+        reg = self.loader.manifest["region"]
+        lats_raw = ds.coords["lat"].values
+        lons_raw = ds.coords["lon"].values
+
+        if lat is not None:
+            lat_idx, snapped_lat = snap_coordinate(lat, lats_raw, reg["lat_min"], reg["lat_max"])
+            axis: Literal["lat", "lon"] = "lon"
+            fixed = {"lat": snapped_lat}
+            positions = [round(float(x), 3) for x in lons_raw]
+            cov_slice = ds_date["coverage"].isel(lat=lat_idx).values.astype(int)
+
+            if field == "pred":
+                raw_slice = ds_date["temp_pred"].isel(lat=lat_idx).values.astype(np.float32)
+            elif field == "glorys":
+                raw_slice = ds_date["temp_glorys"].isel(lat=lat_idx).values.astype(np.float32)
+            elif field == "error":
+                p = ds_date["temp_pred"].isel(lat=lat_idx).values.astype(np.float32)
+                g = ds_date["temp_glorys"].isel(lat=lat_idx).values.astype(np.float32)
+                raw_slice = p - g
+            else:
+                msg = f"Field '{field}' must be pred, glorys, or error"
+                raise APIError(422, "invalid_field", msg)
+        else:
+            assert lon is not None
+            lon_idx, snapped_lon = snap_coordinate(lon, lons_raw, reg["lon_min"], reg["lon_max"])
+            axis = "lat"
+            fixed = {"lon": snapped_lon}
+            positions = [round(float(y), 3) for y in lats_raw]
+            cov_slice = ds_date["coverage"].isel(lon=lon_idx).values.astype(int)
+
+            if field == "pred":
+                raw_slice = ds_date["temp_pred"].isel(lon=lon_idx).values.astype(np.float32)
+            elif field == "glorys":
+                raw_slice = ds_date["temp_glorys"].isel(lon=lon_idx).values.astype(np.float32)
+            elif field == "error":
+                p = ds_date["temp_pred"].isel(lon=lon_idx).values.astype(np.float32)
+                g = ds_date["temp_glorys"].isel(lon=lon_idx).values.astype(np.float32)
+                raw_slice = p - g
+            else:
+                msg = f"Field '{field}' must be pred, glorys, or error"
+                raise APIError(422, "invalid_field", msg)
+
+        values_list: list[list[float | None]] = [
+            [None if np.isnan(v) else round(float(v), 2) for v in row] for row in raw_slice
+        ]
+        coverage_list: list[int] = [int(c) for c in cov_slice]
+        depths_list: list[float] = [float(d) for d in self.loader.manifest["depths_m"]]
+
+        return SectionResponse(
+            run_id=self.loader.manifest["active_run_id"],
+            synthetic=self.loader.manifest["synthetic"],
+            date=date,
+            field=field,
+            split=split,
+            units="degC",
+            axis=axis,
+            fixed=fixed,
+            positions=positions,
+            depths_m=depths_list,
+            values=values_list,
+            coverage=coverage_list,
         )
 
     def get_profile(self, lat: float, lon: float, date: str) -> ProfileResponse:

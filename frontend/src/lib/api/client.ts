@@ -15,6 +15,7 @@ export type ArgoResponse = components["schemas"]["ArgoResponse"];
 export type ArgoProfilesResponse = components["schemas"]["ArgoProfilesResponse"];
 export type ArgoProfileMatch = components["schemas"]["ArgoProfileMatch"];
 export type HeadlineResponse = components["schemas"]["HeadlineResponse"];
+export type SectionResponse = components["schemas"]["SectionResponse"];
 
 export class ApiError extends Error {
   code: string;
@@ -99,6 +100,19 @@ export const apiClient = {
     if (params.depth_index !== undefined) q.set("depth_index", params.depth_index.toString());
     if (params.field) q.set("field", params.field);
     return fetchApi<MapResponse>(`/map?${q.toString()}`);
+  },
+
+  getSection(params: {
+    date: string;
+    field?: "pred" | "glorys" | "error";
+    lat?: number;
+    lon?: number;
+  }): Promise<SectionResponse> {
+    const q = new URLSearchParams({ date: params.date });
+    if (params.field) q.set("field", params.field);
+    if (params.lat !== undefined) q.set("lat", params.lat.toString());
+    if (params.lon !== undefined) q.set("lon", params.lon.toString());
+    return fetchApi<SectionResponse>(`/section?${q.toString()}`);
   },
 
   getProfile(params: { lat: number; lon: number; date: string }): Promise<ProfileResponse> {
