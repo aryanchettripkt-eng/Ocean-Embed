@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300" fill="none">
+    <!-- Orbit dashed ray indicator -->
+    <path d="M 40 260 C 120 180 280 120 380 40" stroke="#1E2A2B" stroke-width="1.5" stroke-dasharray="6 6" opacity="0.4"/>
+    <!-- Left Solar Array -->
+    <g transform="translate(70, 110) rotate(-15)">
+      <rect x="0" y="0" width="90" height="42" fill="#E4D8BA" stroke="#1E2A2B" stroke-width="2"/>
+      <line x1="30" y1="0" x2="30" y2="42" stroke="#1E2A2B" stroke-width="1.2"/>
+      <line x1="60" y1="0" x2="60" y2="42" stroke="#1E2A2B" stroke-width="1.2"/>
+      <line x1="0" y1="21" x2="90" y2="21" stroke="#1E2A2B" stroke-width="1.2"/>
+      <path d="M 90 21 L 115 21" stroke="#1E2A2B" stroke-width="3"/>
+    </g>
+    <!-- Right Solar Array -->
+    <g transform="translate(235, 68) rotate(-15)">
+      <path d="M -25 21 L 0 21" stroke="#1E2A2B" stroke-width="3"/>
+      <rect x="0" y="0" width="90" height="42" fill="#E4D8BA" stroke="#1E2A2B" stroke-width="2"/>
+      <line x1="30" y1="0" x2="30" y2="42" stroke="#1E2A2B" stroke-width="1.2"/>
+      <line x1="60" y1="0" x2="60" y2="42" stroke="#1E2A2B" stroke-width="1.2"/>
+      <line x1="0" y1="21" x2="90" y2="21" stroke="#1E2A2B" stroke-width="1.2"/>
+    </g>
+    <!-- Satellite Body -->
+    <g transform="translate(180, 85) rotate(-15)">
+      <rect x="0" y="0" width="46" height="56" rx="2" fill="#F6F1E2" stroke="#1E2A2B" stroke-width="2.5"/>
+      <rect x="8" y="8" width="30" height="18" fill="#F2B66D" stroke="#1E2A2B" stroke-width="1.5"/>
+      <!-- Radiometer / Altimeter sensor dish -->
+      <path d="M 23 56 L 23 74" stroke="#1E2A2B" stroke-width="2.5"/>
+      <path d="M 6 74 Q 23 88 40 74" stroke="#1E2A2B" stroke-width="2" fill="#E4D8BA"/>
+      <!-- Radar beam lines downward -->
+      <line x1="16" y1="84" x2="6" y2="108" stroke="#2F6B73" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <line x1="23" y1="86" x2="23" y2="114" stroke="#2F6B73" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <line x1="30" y1="84" x2="40" y2="108" stroke="#2F6B73" stroke-width="1.5" stroke-dasharray="3 3"/>
+    </g>
+  </svg>

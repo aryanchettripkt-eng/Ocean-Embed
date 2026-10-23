@@ -1,0 +1,748 @@
+.landing {
+  --paper: #EFE6CF;
+  --paper-shade: #E4D8BA;
+  --ink: #1E2A2B;
+  --ink-soft: #4A5654;
+  --sea-deep: #1F4E57;
+  --sea-surface: #2F6B73;
+  --foam: #F6F1E2;
+  --sun: #F2B66D;
+
+  background-color: var(--paper);
+  color: var(--ink);
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+  font-family: var(--font-mono, monospace);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Paper grain overlay */
+.grainOverlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-image: url("/landing/grain.png");
+  background-repeat: repeat;
+  mix-blend-mode: multiply;
+  opacity: 0.25;
+  pointer-events: none;
+  z-index: 99;
+}
+
+/* Top synthetic banner wrapper */
+.bannerWrapper {
+  position: relative;
+  z-index: 40;
+}
+
+/* Header Row */
+.headerRow {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 2rem;
+  border-bottom: 1.5px solid rgba(30, 42, 43, 0.15);
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.brandLogo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+.brandText {
+  font-family: var(--font-pixelify, monospace);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.navLinks {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.navLink {
+  color: var(--ink-soft);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 150ms ease;
+  position: relative;
+  padding-bottom: 2px;
+}
+
+.navLink:hover {
+  color: var(--ink);
+}
+
+.navLinkActive {
+  color: var(--ink);
+  border-bottom: 2px solid var(--ink);
+}
+
+/* Mobile Nav Menu (<details>) */
+.mobileMenu {
+  display: none;
+  position: relative;
+}
+
+.mobileMenuSummary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  background-color: var(--paper-shade);
+}
+
+.mobileMenuSummary::-webkit-details-marker {
+  display: none;
+}
+
+.mobileDropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.5rem;
+  background-color: var(--paper);
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  z-index: 50;
+}
+
+.mobileDropdown a {
+  padding: 0.75rem 1rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-bottom: 1px solid var(--paper-shade);
+}
+
+.mobileDropdown a:hover {
+  background-color: var(--paper-shade);
+}
+
+/* Hero Section */
+.heroSection {
+  position: relative;
+  min-height: calc(100svh - 80px);
+  max-height: 1000px;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  overflow: hidden;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+@media (min-width: 1024px) {
+  .heroSection {
+    grid-template-columns: 460px 1fr;
+  }
+}
+
+@media (min-width: 1280px) {
+  .heroSection {
+    grid-template-columns: 520px 1fr;
+  }
+}
+
+/* Hero Text Column */
+.heroTextCol {
+  position: relative;
+  z-index: 20;
+  padding: 2.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.h1Title {
+  font-family: var(--font-pixelify, monospace);
+  font-size: clamp(48px, 9vw, 128px);
+  font-weight: 600;
+  line-height: 0.95;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.tagline {
+  font-size: clamp(20px, 3.2vw, 40px);
+  font-weight: 500;
+  color: var(--sea-deep);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.lede {
+  font-size: clamp(16px, 1.3vw, 18px);
+  color: var(--ink-soft);
+  line-height: 1.6;
+  max-width: 440px;
+  margin: 0;
+}
+
+.ctaContainer {
+  margin-top: 1rem;
+}
+
+.ctaButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 2rem;
+  background-color: var(--paper);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  user-select: none;
+}
+
+.ctaButton:hover {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--ink);
+  background-color: var(--paper-shade);
+}
+
+.ctaButton:active {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 var(--ink);
+}
+
+/* Hero Scene */
+.heroSceneContainer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  z-index: 10;
+  pointer-events: none;
+}
+
+@media (min-width: 1024px) {
+  .heroSceneContainer {
+    position: relative;
+    height: 100%;
+  }
+}
+
+.skyCoastLayer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center bottom;
+  z-index: 1;
+}
+
+.treeLayer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 42%;
+  max-width: 500px;
+  height: auto;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Water Area & Band */
+.waterArea {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+}
+
+.oceanBandContainer {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+  border-top: 1.5px solid var(--ink);
+}
+
+.oceanBandImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.seabedLayer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  max-width: 550px;
+  height: auto;
+  z-index: 8;
+  pointer-events: none;
+}
+
+/* Satellite & Orbit */
+.satelliteLayer {
+  position: absolute;
+  top: 6%;
+  right: 28%;
+  width: 160px;
+  height: 120px;
+  z-index: 4;
+  animation: satelliteOrbit 40s linear infinite;
+  will-change: transform;
+}
+
+@keyframes satelliteOrbit {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate(30px, 15px) rotate(3deg);
+  }
+  50% {
+    transform: translate(0, 30px) rotate(0deg);
+  }
+  75% {
+    transform: translate(-30px, 15px) rotate(-3deg);
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+}
+
+/* ARGO Float */
+.argoFloatLayer {
+  position: absolute;
+  top: 25%;
+  right: 22%;
+  width: 55px;
+  height: 180px;
+  z-index: 9;
+  animation: floatBob 6s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes floatBob {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+/* Wave container & paths */
+.wavesWrapper {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 36px;
+  overflow: hidden;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.waveTrack {
+  display: flex;
+  width: 200%;
+  height: 100%;
+}
+
+.wavePath1 {
+  width: 50%;
+  height: 100%;
+  animation: waveScrollLeft 18s linear infinite;
+  will-change: transform;
+}
+
+.wavePath2 {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  animation: waveScrollRight 26s linear infinite;
+  will-change: transform;
+  opacity: 0.85;
+}
+
+@keyframes waveScrollLeft {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes waveScrollRight {
+  0% { transform: translateX(-50%); }
+  100% { transform: translateX(0); }
+}
+
+/* Bracket Callout */
+.calloutWrapper {
+  position: absolute;
+  z-index: 15;
+  pointer-events: auto;
+}
+
+.bracketCallout {
+  position: relative;
+  display: inline-block;
+  padding: 6px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background-color: rgba(239, 230, 207, 0.92);
+  backdrop-filter: blur(2px);
+  margin: 0;
+}
+
+.bracketCallout::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  border-top: 1.5px solid var(--ink);
+  border-left: 1.5px solid var(--ink);
+  border-right: 1.5px solid var(--ink);
+}
+
+.bracketCallout::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  border-bottom: 1.5px solid var(--ink);
+  border-left: 1.5px solid var(--ink);
+  border-right: 1.5px solid var(--ink);
+}
+
+/* Depth Ruler */
+.depthRuler {
+  position: absolute;
+  right: 1.5rem;
+  top: 0;
+  bottom: 0;
+  width: 68px;
+  z-index: 14;
+  pointer-events: none;
+  border-left: 1.5px dashed rgba(30, 42, 43, 0.35);
+}
+
+.depthTick {
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: center;
+  transform: translateY(-50%);
+}
+
+.tickLine {
+  width: 8px;
+  height: 1.5px;
+  background-color: var(--ink);
+}
+
+.tickLabel {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--foam);
+  background-color: rgba(30, 42, 43, 0.7);
+  padding: 1px 4px;
+  border-radius: 2px;
+  letter-spacing: 0.04em;
+}
+
+/* Below the fold: How It Works */
+.howItWorksSection {
+  position: relative;
+  z-index: 20;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 5rem 2rem;
+  border-top: 2px solid var(--ink);
+  background-color: var(--paper);
+}
+
+.sectionHeader {
+  text-align: center;
+  margin-bottom: 3.5rem;
+}
+
+.sectionEyebrow {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sea-deep);
+  margin-bottom: 0.5rem;
+}
+
+.sectionTitle {
+  font-family: var(--font-pixelify, monospace);
+  font-size: clamp(28px, 4vw, 44px);
+  color: var(--ink);
+  margin: 0;
+}
+
+.cardsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+}
+
+@media (min-width: 768px) {
+  .cardsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.stepCard {
+  background-color: var(--paper-shade);
+  border: 1.5px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.stepNumber {
+  font-family: var(--font-pixelify, monospace);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--sea-surface);
+}
+
+.stepHeading {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+}
+
+.stepBody {
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.teaserRow {
+  margin-top: 3.5rem;
+  text-align: center;
+}
+
+.teaserLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--sea-deep);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.teaserLink:hover {
+  color: var(--ink);
+}
+
+/* Footer */
+.landingFooter {
+  position: relative;
+  z-index: 20;
+  border-top: 1.5px solid rgba(30, 42, 43, 0.2);
+  background-color: var(--paper-shade);
+  padding: 3rem 2rem 2.5rem;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+}
+
+.footerContent {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+@media (min-width: 768px) {
+  .footerContent {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+}
+
+.footerCredits {
+  max-width: 600px;
+  line-height: 1.6;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.footerLinks a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.footerLinks a:hover {
+  text-decoration: underline;
+}
+
+/* Dive Transition Overlay */
+.diveOverlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 100;
+  pointer-events: none;
+  overflow: hidden;
+  display: none;
+}
+
+.diveOverlayActive {
+  display: block;
+  pointer-events: auto;
+}
+
+.diveWaterRise {
+  position: absolute;
+  inset: 0;
+  background-color: var(--sea-deep);
+  transform: translateY(100%);
+  animation: waterRise 450ms cubic-bezier(0.32, 0, 0.67, 0) forwards;
+}
+
+@keyframes waterRise {
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+
+.diveDitherDissolve {
+  position: absolute;
+  inset: 0;
+  background-color: var(--sea-deep);
+  mask-image: url("/landing/dither-strip.png");
+  mask-size: 1600% 100%;
+  mask-repeat: no-repeat;
+  mask-position: 0% 0%;
+  animation: ditherStep 350ms steps(15) 450ms forwards;
+}
+
+@keyframes ditherStep {
+  0% { mask-position: 0% 0%; }
+  100% { mask-position: 100% 0%; }
+}
+
+.diveStatusText {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--foam);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  .satelliteLayer,
+  .argoFloatLayer,
+  .wavePath1,
+  .wavePath2,
+  .diveWaterRise,
+  .diveDitherDissolve {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  .ctaButton {
+    transition: none !important;
+  }
+}
+
+/* Mobile Media Queries */
+@media (max-width: 767px) {
+  .navLinks {
+    display: none;
+  }
+  .mobileMenu {
+    display: block;
+  }
+  .headerRow {
+    padding: 1rem 1.25rem;
+  }
+  .heroTextCol {
+    padding: 1.5rem 1.25rem;
+  }
+  .satelliteLayer {
+    width: 100px;
+    height: 80px;
+    right: 10%;
+  }
+  .argoFloatLayer {
+    right: 8%;
+    width: 40px;
+    height: 140px;
+  }
+  .depthRuler {
+    right: 0.5rem;
+    width: 54px;
+  }
+}
