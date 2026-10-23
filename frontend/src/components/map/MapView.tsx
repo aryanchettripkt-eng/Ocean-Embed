@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { formatCoord, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
+import { isNorthIndianOcean } from "../../lib/oceanMask";
 import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
 
 interface MapViewProps {
@@ -231,7 +232,16 @@ export function MapView({
       lastDataUrlRef.current = null;
     } else {
       const colormap = mapData.field === "error" ? "balance" : "thermal";
-      const canvas = renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap);
+      const nLat = mapData.lat?.length ?? mapData.values.length;
+      const nLon = mapData.lon?.length ?? (mapData.values[0]?.length ?? 0);
+      const maskedCoverage = mapData.coverage.map((row, r) =>
+        row.map((cov, c) => {
+          const lat = mapData.lat?.[r] ?? (30.0 / nLat) * (r + 0.5);
+          const lon = mapData.lon?.[c] ?? 40.0 + (60.0 / nLon) * (c + 0.5);
+          return isNorthIndianOcean(lat, lon) ? cov : 0;
+        })
+      );
+      const canvas = renderGridToCanvas(mapData.values, maskedCoverage, vmin, vmax, colormap);
       lastDataUrlRef.current = canvas.toDataURL();
     }
     syncGridLayer();
@@ -253,6 +263,9 @@ export function MapView({
     if (!map) return;
 
     const selectAtLngLat = (lng: number, lat: number) => {
+      if (!isNorthIndianOcean(lat, lng)) {
+        return;
+      }
       const data = mapDataRef.current;
       if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
         if (data && data.lat && data.lat.length > 0 && data.lon && data.lon.length > 0) {
@@ -291,8 +304,9 @@ export function MapView({
 
         const cellLat = data.lat[r];
         const cellLon = data.lon[c];
-        const val = data.values[r]?.[c] ?? null;
-        const cov = data.coverage[r]?.[c] ?? 0;
+        const isOcean = isNorthIndianOcean(cellLat, cellLon);
+        const val = isOcean ? (data.values[r]?.[c] ?? null) : null;
+        const cov = isOcean ? (data.coverage[r]?.[c] ?? 0) : 0;
 
         setHoverInfo({
           x: e.point.x,
