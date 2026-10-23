@@ -2,9 +2,11 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl, { type CanvasSource, type Map as MapLibreMap } from "maplibre-gl";
-import { formatCoord, formatTemp } from "../../lib/format";
+import { formatCoord, formatDepth, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
-import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
+import type { ArgoProfileMatch, MapResponse, SectionResponse } from "../../lib/api/client";
+import type { WallId } from "../map3d/depthScale";
+import type { CutawayLayer } from "../map3d/CutawayLayer";
 
 export interface RegionBounds {
   lat_min: number;
@@ -25,6 +27,18 @@ interface MapViewProps {
   showArgo?: boolean;
   argoProfiles?: ArgoProfileMatch[];
   className?: string;
+
+  // 3D Explorer props (PRD_FRONTEND §3.1b)
+  view?: "map" | "3d";
+  depth_m?: number;
+  availableDepths?: number[];
+  colorRanges?: { depth_m: number; vmin: number; vmax: number }[];
+  sections?: Partial<Record<WallId, SectionResponse>>;
+  isTouring?: boolean;
+  onStopTour?: () => void;
+  isExploded?: boolean;
+  isSmoothed?: boolean;
+  showContours?: boolean;
 }
 
 interface HoverInfo {
@@ -34,6 +48,7 @@ interface HoverInfo {
   lon: number;
   value: number | null;
   coverage: number;
+  depth_m?: number;
 }
 
 const DEFAULT_REGION: RegionBounds = {
@@ -80,6 +95,16 @@ export function MapView({
   showArgo = false,
   argoProfiles = [],
   className = "",
+  view = "map",
+  depth_m = 100.0,
+  availableDepths,
+  colorRanges,
+  sections,
+  isTouring = false,
+  onStopTour,
+  isExploded = false,
+  isSmoothed = false,
+  showContours = true,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -90,6 +115,9 @@ export function MapView({
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isLightMode, setIsLightMode] = useState<boolean>(false);
   const currentStyleRef = useRef<string | null>(null);
+
+  // Reference to 3D Custom Layer instance
+  const cutawayLayerRef = useRef<CutawayLayer | null>(null);
 
   const activeRegion = region ?? DEFAULT_REGION;
   const regionRef = useRef<RegionBounds>(activeRegion);
@@ -144,6 +172,14 @@ export function MapView({
     const map = mapInstanceRef.current;
     if (!map || !map.isStyleLoaded()) return;
 
+    // In 3D mode, the 2D raster grid layer is hidden to avoid z-fighting
+    if (view === "3d") {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", "none");
+      }
+      return;
+    }
+
     const data = mapDataRef.current;
     const canvas = canvasRef.current;
 
@@ -166,6 +202,7 @@ export function MapView({
 
     if (existingSource && existingLayer) {
       existingSource.setCoordinates(coordinates);
+      map.setLayoutProperty(layerId, "visibility", "visible");
       existingSource.play();
       requestAnimationFrame(() => {
         existingSource.pause();
@@ -200,9 +237,78 @@ export function MapView({
         });
       }
     }
-  }, [getCoordinates]);
+  }, [getCoordinates, view]);
 
-  // Initialize MapLibre Map with locked 2D pitch and disabled drag-rotate
+  // Lazy-load and attach 3D cutaway layer when view is "3d"
+  const sync3DLayer = useCallback(async () => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    if (view === "3d") {
+      if (!cutawayLayerRef.current) {
+        // Dynamically import CutawayLayer so it is NOT bundled into the initial / page load (PRD_FRONTEND §3.1b)
+        const { CutawayLayer } = await import("../map3d/CutawayLayer");
+        const layer = new CutawayLayer({
+          region: regionRef.current,
+          availableDepths: availableDepths ?? [0.5, 10, 20, 50, 100, 200, 500, 1000],
+          colorRanges,
+          isDark: !isLightMode,
+        });
+
+        if (!map.getLayer(layer.id)) {
+          map.addLayer(layer);
+        }
+        cutawayLayerRef.current = layer;
+      } else if (!map.getLayer(cutawayLayerRef.current.id)) {
+        map.addLayer(cutawayLayerRef.current);
+      }
+
+      const layer = cutawayLayerRef.current;
+      if (layer) {
+        layer.setIsDark(!isLightMode);
+        layer.setSmoothed(isSmoothed);
+        layer.setExploded(isExploded);
+        layer.setShowContours(showContours);
+
+        const reducedMotion =
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        layer.setDepth(depth_m, reducedMotion);
+
+        if (mapDataRef.current) {
+          layer.setMapData(mapDataRef.current, vmin, vmax);
+        }
+
+        if (sections) {
+          for (const wallId of ["south", "north", "west", "east"] as WallId[]) {
+            const sec = sections[wallId];
+            if (sec) {
+              layer.setSectionData(wallId, sec);
+            }
+          }
+        }
+      }
+    } else if (cutawayLayerRef.current) {
+      if (map.getLayer(cutawayLayerRef.current.id)) {
+        map.removeLayer(cutawayLayerRef.current.id);
+      }
+      cutawayLayerRef.current = null;
+    }
+  }, [
+    view,
+    availableDepths,
+    colorRanges,
+    isLightMode,
+    isSmoothed,
+    isExploded,
+    showContours,
+    depth_m,
+    vmin,
+    vmax,
+    sections,
+  ]);
+
+  // Initialize MapLibre Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
@@ -225,19 +331,21 @@ export function MapView({
       zoom: 4,
       minZoom: 2,
       maxZoom: 10,
-      pitch: 0,
-      maxPitch: 0, // Flat 2D map view
-      dragRotate: false, // Disable drag rotate in 2D map view
-      pitchWithRotate: false,
-      touchPitch: false,
+      pitch: view === "3d" ? 50 : 0,
+      bearing: view === "3d" ? -20 : 0,
+      maxPitch: view === "3d" ? 85 : 0,
+      dragRotate: view === "3d",
+      pitchWithRotate: view === "3d",
+      touchPitch: view === "3d",
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
 
     const handleStyleReady = () => {
       if (map.isStyleLoaded()) {
         syncGridLayer();
+        sync3DLayer();
       }
     };
 
@@ -264,8 +372,86 @@ export function MapView({
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      cutawayLayerRef.current = null;
     };
-  }, [syncGridLayer]);
+  }, [syncGridLayer, sync3DLayer, view]);
+
+  // Dynamically switch pitch, bearing, and controls between 2D Map and 3D Cutaway
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded) return;
+
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (view === "3d") {
+      map.setMaxPitch(85);
+      map.dragRotate.enable();
+      map.touchPitch.enable();
+
+      map.easeTo({
+        pitch: 50,
+        bearing: -20,
+        duration: reducedMotion ? 0 : 800,
+      });
+
+      syncGridLayer();
+      sync3DLayer();
+    } else {
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        duration: reducedMotion ? 0 : 600,
+      });
+
+      map.setMaxPitch(0);
+      map.dragRotate.disable();
+      map.touchPitch.disable();
+
+      syncGridLayer();
+      sync3DLayer();
+    }
+  }, [view, mapLoaded, syncGridLayer, sync3DLayer]);
+
+  // Update 3D layer on parameter changes
+  useEffect(() => {
+    if (view === "3d" && mapLoaded) {
+      sync3DLayer();
+    }
+  }, [view, mapLoaded, sync3DLayer]);
+
+  // Tour mode: auto-rotate bearing smoothly in 3D
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || view !== "3d" || !isTouring) return;
+
+    let tourRaf: number | null = null;
+
+    const rotateStep = () => {
+      const currentBearing = map.getBearing();
+      map.setBearing((currentBearing + 0.15) % 360);
+      tourRaf = requestAnimationFrame(rotateStep);
+    };
+
+    tourRaf = requestAnimationFrame(rotateStep);
+
+    // Cancel tour on user interaction
+    const handleUserInteract = () => {
+      if (onStopTour) onStopTour();
+    };
+
+    map.on("mousedown", handleUserInteract);
+    map.on("touchstart", handleUserInteract);
+    map.on("wheel", handleUserInteract);
+
+    return () => {
+      if (tourRaf !== null) cancelAnimationFrame(tourRaf);
+      map.off("mousedown", handleUserInteract);
+      map.off("touchstart", handleUserInteract);
+      map.off("wheel", handleUserInteract);
+    };
+  }, [view, isTouring, mapLoaded, onStopTour]);
 
   // Dynamically update basemap style when theme toggles
   useEffect(() => {
@@ -314,7 +500,7 @@ export function MapView({
       pendingMouseEventRef.current = e;
 
       if (hoverRafRef.current !== null) {
-        return; // Already scheduled for this animation frame
+        return;
       }
 
       hoverRafRef.current = requestAnimationFrame(() => {
@@ -378,6 +564,7 @@ export function MapView({
           lon: cellLon,
           value: val,
           coverage: cov,
+          depth_m,
         });
       });
     };
@@ -427,7 +614,7 @@ export function MapView({
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
     };
-  }, []);
+  }, [depth_m]);
 
   // Update selection marker
   useEffect(() => {
@@ -506,8 +693,11 @@ export function MapView({
           className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-slate-950/90 backdrop-blur-md border border-slate-300 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
           style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
         >
-          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
-            {formatCoord(hoverInfo.lat, hoverInfo.lon)}
+          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+            <span>{formatCoord(hoverInfo.lat, hoverInfo.lon)}</span>
+            {view === "3d" && hoverInfo.depth_m !== undefined && (
+              <span className="text-cyan-500 font-semibold">· {formatDepth(hoverInfo.depth_m)}</span>
+            )}
           </div>
           {hoverInfo.coverage === 0 ? (
             <div className="text-slate-500 font-medium text-[11px]">Land / Unmodelled</div>

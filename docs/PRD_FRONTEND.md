@@ -1,6 +1,6 @@
 # PRD: Frontend Web App — OceanScope AI
 
-**Status:** Draft v3 (2026-10-24): 3D cutaway view (§3.1b), map code fixes (§10). v2 (2026-10-22): headline card, live dates, competitor ARGO columns, updated sources  
+**Status:** Draft v4 (2026-10-24): Meta features (§3.4: guide/navigator, voice, event time machine, postcards, lasso, beach mode); landing page in `docs/PLAN_LANDING.md`. v3 (2026-10-24): 3D cutaway view (§3.1b), map code fixes (§10). v2 (2026-10-22): headline card, live dates, competitor ARGO columns, updated sources  
 **Owner:** Aryan  
 **Implementer:** Coding agent  
 **Lives in:** `frontend/` of the monorepo (see `AGENTS.md`).  
@@ -14,10 +14,11 @@
 2. **Types come from the API contract.** Generate `src/lib/api/types.ts` from `backend/openapi.json` with `openapi-typescript`. Do not hand-write response types. If the API lacks something, write it in `docs/OPEN_QUESTIONS.md`; do not work around it with client-side math on other endpoints.
 3. **Always label the source** of every number: *Model prediction*, *GLORYS reanalysis*, or *ARGO observation*. Never present predictions as observations.
 4. **Show limitations.** The caveat strings from `/meta.caveats` are displayed verbatim where specified. If `synthetic` is true, a non-dismissible banner says so on every page.
-5. **No secrets in the frontend.** Only `NEXT_PUBLIC_API_BASE_URL` (and `NEXT_PUBLIC_USE_MOCKS`). LLM calls go through the backend's `/chat`.
+5. **No secrets in the frontend.** Only `NEXT_PUBLIC_API_BASE_URL` (and `NEXT_PUBLIC_USE_MOCKS`). Every Meta model call (chat, transcribe, image, SAM) goes through our backend; the browser never calls the Meta API.
 6. **TypeScript strict, no `any`, no `@ts-ignore`,** ESLint clean. Do not disable lint rules to pass CI.
 7. **Do not add dependencies** beyond Section 2 without stating why in the commit message. No paid map tokens or services.
 8. When unsure, write the question in `docs/OPEN_QUESTIONS.md` and stop that task.
+9. **AI output is labelled and never a source of numbers.** Numbers shown next to AI text or images come from API fields, rendered as HTML; generated images never carry numbers; the frontend applies only the UI actions listed in PRD_BACKEND §6.2.
 
 ---
 
@@ -131,14 +132,42 @@ The Explorer gains a **View** switch: *Map* (the 2D map above, unchanged) | *3D*
 ### 3.3 `/about`
 Static content (MDX allowed) explaining: the problem, data sources (DUACS SLA/ADT, OSTIA SST, MULTIOBS SSS, OSCAR, CCMP, ERA5, GEBCO, WOA23, climate indices from NOAA CPC and the Australian Bureau of Meteorology, GLORYS12, GREP, ARMOR3D, ARGO) with links and required acknowledgements/licence lines, the method in plain language (surface inputs with 7- and 60-day history, climate indices and recent ARGO floats → U-Net → 15 depth anomalies + climatology; trained on GLORYS and GREP, fine-tuned on ARGO), what "live" dates are, limitations (caveats verbatim from `/meta`), and team/credits. Numbers on this page must also come from the API, not be typed in.
 
-### 3.4 Assistant (only if `meta.chat.enabled`)
-- Floating "Ask about the ocean" button → side drawer chat.
-- Sends the current explorer context (date, depth, selected lat/lon) with each message.
-- Shows each answer with an expandable "Data used" section listing the tool calls and their results (from the `/chat` response).
-- Shows `provider_label` small under the input ("Answers by …, based on model outputs").
-- Suggested starter questions (3 chips) derived from current context, e.g. "What's the temperature profile here on {date}?"
-- Handles 429/503/502 with friendly messages; disables input while waiting; 25 s client timeout.
-- If chat is disabled, no button is rendered (no dead UI).
+### 3.4 Ocean guide and Meta features (core since v4; each part only if its `meta.features` flag is true)
+Meta's models are how people move through the data: you ask, and the ocean moves. Every part is hidden (no dead UI) when its flag is false, and the rest of the site works without any of them. Each AI output is labelled: `AI_CAVEAT`, `POSTCARD_CAVEAT` or `SEGMENT_CAVEAT` from `/meta.caveats`, verbatim.
+
+**a) Ocean guide = chat + navigator (`features.chat`)**
+- A floating "Ask the ocean" button opens a side drawer (bottom sheet on phones). It sends the current explorer context (date, depth, field, view mode, selection, camera centre) with each message to `/chat`.
+- Answers render as plain text/markdown (HTML disabled). Each answer has an expandable "Data used" section (tool calls and results) and the `provider_label` under the input.
+- **Navigator:** the response's `ui_actions` are applied in order through the same URL-state setters the controls use (so Back undoes them), with a short camera animation (≤ 1.2 s, none under reduced motion). A small chip under the answer says what moved ("Moved to 15 Jan 2019 · 50 m · Bay of Bengal") with an "Undo" link. The frontend applies only the four action types in PRD_BACKEND §6.2 and ignores anything else.
+- If `grounded` is false, show the fallback text exactly as returned with a neutral "Couldn't verify" badge.
+- Three starter chips from the current context, e.g. "What's happening at 100 m here?", "Show me the warmest water today", "Take me to Cyclone Fani".
+- Handles 429/503/502 with friendly messages; input disabled while waiting; 25 s client timeout.
+
+**b) Voice dive (`features.voice`)**
+- A hold-to-talk mic button in the guide's input (tap-to-toggle for accessibility). Records with `MediaRecorder` (Opus/WebM; MP4/AAC on Safari), max 30 s with a visible countdown, then posts to `/transcribe`.
+- The transcript appears in the input for 1.5 s (editable; any key cancels auto-send) and is then sent to `/chat` as text.
+- Microphone permission is requested only on the first press, with a one-line explanation first; if denied, the mic button explains how to re-enable it and typing still works. Audio is never stored or sent anywhere but our backend.
+
+**c) Event time machine**
+- An "Events" button in the Explorer opens a list from `/events` (title, dates, source link). Choosing one opens a compare strip: **Before / During / After** tabs (or a slider on desktop) that set the date to `before`, `start`…`end`, `after`, zoom to the event bbox and pick the first suggested depth; the 3D view works the same way.
+- An "Explain" button asks the guide (`/chat`) to compare before and after for that bbox and depth; its UI actions can step through the phases.
+- Every event shows its `source_name` and link. No event text is typed into the frontend.
+- Events in the sealed test period never appear (the backend filters them; the frontend does not override that).
+
+**d) Ocean postcards (`features.postcards`)**
+- A "Make a postcard" button in the Explorer (and on an event) posts the current date, depth and event to `/postcard`. While waiting (up to 45 s), a "printing" animation in the landing-page paper style; cancel button.
+- The result is shown as a card: the generated image plus an **HTML caption** overlaid from the response (`date`, depth, mean temperature, source label), and `POSTCARD_CAVEAT` under it. The picture itself never carries numbers.
+- "Download" composes image + caption into one PNG on a client `<canvas>` (so the caption and caveat stay attached), and "Copy link" shares the explorer URL, not the image URL.
+
+**e) Lasso (`features.segment`)**
+- A "Lasso" tool in the map toolbar: tap a point on the 2D map or the 3D top face → `/segment` → draw the returned `outline` as an ink-style line with a soft fill; a panel shows the stats (mean/min/max/std, area) with the source label, the method ("Selected by SAM 3.1" or "Selected by similar temperature (±0.5 °C)") and `SEGMENT_CAVEAT`.
+- "Ask about this area" sends the selection's bbox and stats as context to the guide.
+- While the request runs (≤ 10 s), show a pulsing outline at the tapped point; on error, a one-line message and no stats.
+
+**f) Beach mode (`features.beach`, phones only)**
+- A "Beach mode" entry in the mobile menu opens `/beach`: one big "Point at the sea" button. On tap: request geolocation (and on iOS `DeviceOrientationEvent.requestPermission()`), read the compass heading, call `/nearest-ocean`, then show that cell's `/profile` as a big vertical temperature strip with the distance and direction ("62 km east of you"), plus the mic button to ask the guide about it.
+- No compass → nearest ocean cell without a bearing. Permission denied → a manual "pick a spot on the map" fallback. Location is sent only on tap, never in the background, never stored in the browser beyond the session.
+- Outside the region → "OceanScope covers the North Indian Ocean; here's the nearest point we cover", with a link to the map.
 
 ---
 
@@ -156,6 +185,7 @@ Static content (MDX allowed) explaining: the problem, data sources (DUACS SLA/AD
 | Units/formatting | °C with 1 decimal on the map and tooltips, 2 decimals in tables; depths "123 m" (≥ 10 m rounded to the nearest metre, < 10 m one decimal); coordinates "12.375°N, 65.125°E" |
 | Security | No `dangerouslySetInnerHTML` except sanitized MDX; chat text rendered as plain text/markdown with HTML disabled |
 | SEO/sharing | Title, description, Open Graph image (static) for link previews |
+| Meta features | All of §3.4 is lazily loaded (`import()` on first open); none of it adds to the initial `/` bundle. Permission prompts (mic, location, motion) only after a user tap with a one-line reason. Every AI request shows progress within 100 ms and can be cancelled. |
 | 3D view | ≥ 45 fps while rotating on a mid-range laptop (integrated GPU) at 1080p; dive animation never blocks input; 3D module ≤ 25 KB gzipped and lazily loaded (not counted in the 350 KB `/` budget); switching Map ↔ 3D keeps date, depth, field and selection; URL state gains `view=map|3d` |
 
 ---
@@ -172,7 +202,11 @@ frontend/
 │   │   ├── controls/        # DatePicker, DepthSelector, FieldToggle, PlayButton
 │   │   ├── panels/          # DetailsPanel, ProfileChart, TimeSeriesChart
 │   │   ├── validation/      # MetricCards, DepthErrorChart, MetricsTable, ArgoSection
-│   │   ├── chat/            # ChatDrawer, MessageList, DataUsed
+│   │   ├── guide/           # GuideDrawer, MessageList, DataUsed, applyUiActions, MicButton (lazily loaded)
+│   │   ├── events/          # EventList, PhaseCompare
+│   │   ├── postcard/        # PostcardButton, PostcardCard, composeDownload
+│   │   ├── lasso/           # LassoTool, SelectionPanel
+│   │   ├── beach/           # BeachMode (route /beach)
 │   │   └── common/          # Banner (synthetic/caveats), ErrorState, Loading, SplitBadge
 │   ├── lib/
 │   │   ├── api/             # client.ts (fetch wrapper, error parsing), types.ts (generated), hooks.ts (React Query)
@@ -197,6 +231,7 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 ---
 
 ## 7. Tests (required)
+- Meta features (mocked API): `applyUiActions` applies the four action types via URL state and ignores unknown ones; Undo restores the previous URL; a `grounded: false` answer shows the badge; the mic flow sends the edited transcript, not the raw one; postcard caption text comes from the response and the caveat is present; lasso shows the method and caveat; every feature's UI is absent when its flag is false; beach mode falls back when geolocation or orientation is denied.
 - Unit: `format.ts`, `colormaps.ts` (endpoints and NaN handling), `url-state.ts` (round-trip, invalid input), API error parsing.
 - Component: GridLayer renders correct pixel colour for a known value and transparent for null; DetailsPanel shows source labels; synthetic banner appears when `synthetic: true`; chat button absent when chat disabled; on a `live` date the GLORYS and Difference controls are disabled and `LIVE_CAVEAT` shows; the headline card renders "Met", "Not met" and "Not yet evaluated" correctly.
 - 3D (unit, no GPU needed): the depth → √depth z mapping and its tick labels; wall colour range from `meta.color_ranges`; which two walls face the camera for bearings 0°, 90°, 180°, 270°; screen point → grid cell on the sunk top face (round trip); fallback to 2D when WebGL2 is missing (mock `getContext` returning null).
@@ -214,7 +249,8 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 | F3 Details | Profile + time series charts, accuracy line | E2E test passes |
 | F4 Validation + About | `/validation`, `/about`, caveats | Pages render all metric groups from mocks |
 | F5 Live backend | Point at the HF Space; cold-start UX | Production Vercel URL works against the live API with synthetic data, then real data |
-| F6 Assistant | Chat drawer | Works against the backend with a mocked/real provider; hidden when disabled |
+| F6 Assistant (superseded by F8) | Chat drawer | Works against the backend with a mocked/real provider; hidden when disabled |
+| F8 Meta features | §3.4 a–f, in PHASES P7 order | Tests pass on mocks; each part works against the deployed backend with the real Meta API; owner's 20-question test |
 | F7 3D cutaway | §3.1b: view switch, custom layer (top face, walls, contours, 20 °C line, lighting), dive animation, depth rail, exploded layers, fallbacks; then the optional slice tool | 3D tests pass; fps and bundle targets met; works on the deployed site with synthetic data; Aryan signs off the look |
 
 F1–F4 must be built against mocks and must not wait for the backend or the model.

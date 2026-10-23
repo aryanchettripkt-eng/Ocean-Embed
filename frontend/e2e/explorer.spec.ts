@@ -154,4 +154,34 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
     await expect(page.locator("text=Active Deployment Parameters")).toBeVisible();
     await expect(page.locator("text=Data Sources & Acknowledgements")).toBeVisible();
   });
+
+  test("switches to 3D cutaway view, displays 3D controls, and verifies depth rail", async ({ page }) => {
+    // 3D view on desktop viewport (>= 768px)
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/?date=2020-01-05&view=3d");
+
+    // View switch button should reflect 3D Cutaway
+    const btn3D = page.getByRole("button", { name: /3D Cutaway/i });
+    await expect(btn3D).toBeVisible({ timeout: 15000 });
+
+    // Depth rail should be visible in 3D mode
+    const depthRail = page.getByRole("slider", { name: /Ocean Depth Rail/i });
+    await expect(depthRail).toBeVisible({ timeout: 15000 });
+
+    // 3D toolbar options should be visible: Tour, Exploded, Smoothed/Exact cells, 20°C Isotherm
+    await expect(page.getByRole("button", { name: "Tour" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Exploded" })).toBeVisible();
+
+    // Verify URL contains view=3d
+    await expect(page).toHaveURL(/view=3d/);
+
+    // Save screenshot as CI artifact (PRD_FRONTEND §7)
+    await page.screenshot({ path: "test-results/3d-cutaway-view.png" });
+
+    // Switch back to 2D Map
+    const btn2D = page.getByRole("button", { name: /2D Map/i });
+    await btn2D.click();
+    await expect(page).not.toHaveURL(/view=3d/);
+    await expect(depthRail).not.toBeVisible();
+  });
 });

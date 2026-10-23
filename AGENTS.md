@@ -48,6 +48,7 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 8. **Never force-push `main`, never rewrite shared history, never commit directly to `main`.**
 9. **Ask instead of guessing** when requirements are unclear: add a dated entry to `docs/OPEN_QUESTIONS.md` and stop that task.
 10. **No new branches and no pushing without the owner's permission.** Do not create, rename or delete any git branch, and do not `git push` (or open, update or merge a pull request) unless Aryan has explicitly said so for that specific action. Approval for one push or branch does not carry over to the next. Work and commit locally on the branch you were told to use, then report and wait.
+11. **Meta / AI features.** Meta model calls (Muse Spark, Voice Transcribe, Muse Image, SAM) happen only in `backend/app/meta/`, with the key from env vars. AI-generated text and images are labelled with the caveat strings and never become a source of numbers; tests never call the real Meta API. Never commit API keys, transcripts, user audio or generated images.
 
 ## 6. Workflow for every task
 1. Read this file, the relevant PRD section, and `docs/PROGRESS.md`.
@@ -64,6 +65,7 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 ## 7. Division of labour between agents
 - **Claude** writes plans, PRD updates, task breakdowns and reviews; it may also implement.
 - **Gemini** implements tasks from the plan.
+- **Muse Code** (Meta's coding tool) is the recommended implementer for the Ocean guide tasks (PHASES P7-B1, P7-F1); the same rules apply to it.
 - One agent per branch at a time. Before starting, check `docs/PROGRESS.md` for a task marked in progress by another agent.
 - Reviews check the diff against the PRD acceptance criteria and this file's hard rules.
 
