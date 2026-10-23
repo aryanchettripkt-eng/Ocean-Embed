@@ -26,9 +26,9 @@ export function Banner({ type = "synthetic", message, className = "" }: BannerPr
     return (
       <div
         role="alert"
-        className={`w-full bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 text-xs md:text-sm font-medium text-amber-300 flex items-center justify-center gap-2 backdrop-blur-sm ${className}`}
+        className={`w-full bg-amber-500 text-slate-950 font-bold px-4 py-1.5 text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm ${className}`}
       >
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+        <AlertTriangle className="h-4 w-4 shrink-0 text-slate-950" />
         <span>{displayMessage}</span>
       </div>
     );
