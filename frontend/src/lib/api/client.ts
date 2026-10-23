@@ -31,10 +31,14 @@ export class ApiError extends Error {
 }
 
 export function getApiBaseUrl(): string {
-  const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  let envUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
   if (envUrl) {
-    // Strip trailing slash if any
-    return envUrl.replace(/\/+$/, "");
+    // Strip trailing slashes if any
+    envUrl = envUrl.replace(/\/+$/, "");
+    if (!envUrl.endsWith("/api/v1")) {
+      envUrl = `${envUrl}/api/v1`;
+    }
+    return envUrl;
   }
   return "http://localhost:8000/api/v1";
 }

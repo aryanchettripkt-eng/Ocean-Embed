@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.v1 import api_v1_router
+from app.api.v1 import api_v1_router, root_router
 from app.data.loader import loader
 from app.errors import (
     APIError,
@@ -79,5 +79,6 @@ app.add_middleware(
 # GZip middleware for responses > 1 KB
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# Mount API v1 router
+# Mount API router at /api/v1 (canonical schema) and at / (convenience fallback)
 app.include_router(api_v1_router)
+app.include_router(root_router, include_in_schema=False)
