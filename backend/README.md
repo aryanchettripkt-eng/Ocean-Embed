@@ -1,3 +1,14 @@
+---
+title: OceanScope AI API
+emoji: 🌊
+colorFrom: blue
+colorTo: cyan
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+---
+
 # oceanscope-backend
 
 FastAPI service serving OceanScope AI subsurface temperature reconstruction data, metrics, and chat.

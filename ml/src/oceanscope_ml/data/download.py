@@ -7,6 +7,7 @@ climatology, and ARGO float data. Supports --dry-run for planning without downlo
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import os
 import shutil
@@ -275,8 +276,8 @@ def plan_download(
         }
 
         if spec.get("depth_subset"):
-            # 15 depths +- neighbours (0 to 1050 m)
-            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1050.0}
+            # 15 depths +- neighbours: 0 m to just past GLORYS level 1062.44 m (~1000 m tier)
+            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1100.0}
 
         plan[prod_key] = plan_item
 
@@ -389,8 +390,10 @@ def download_copernicus(
         "start_datetime": f"{item['start_date']}T00:00:00",
         "end_datetime": f"{item['end_date']}T23:59:59",
         "output_directory": str(out_subdir),
-        "force_download": False,
     }
+    # copernicusmarine >= 2 dropped force_download; skip_existing avoids re-downloading
+    if "skip_existing" in inspect.signature(copernicusmarine.subset).parameters:
+        kwargs["skip_existing"] = True
     if item.get("depth_range"):
         dr = item["depth_range"]
         kwargs["minimum_depth"] = dr["min_depth_m"]
@@ -398,11 +401,13 @@ def download_copernicus(
 
     print(f"  Downloading {key} ({item['name']}) via copernicusmarine subset...")
     result = copernicusmarine.subset(**kwargs)
-    if isinstance(result, list):
-        for p in result:
-            record_downloaded_file(manifest, key, Path(p), raw_dir, item["source_id"])
-    elif result:
-        record_downloaded_file(manifest, key, Path(result), raw_dir, item["source_id"])
+    # copernicusmarine >= 2 returns a ResponseSubset object; older versions return a path
+    results = result if isinstance(result, list) else [result]
+    for r in results:
+        file_path = getattr(r, "file_path", r)
+        if not file_path:
+            raise RuntimeError(f"copernicusmarine returned no file for {key}")
+        record_downloaded_file(manifest, key, Path(file_path), raw_dir, item["source_id"])
 
 
 def download_era5(item: dict[str, Any], raw_dir: Path, manifest: dict[str, Any]) -> None:
@@ -791,7 +796,7 @@ def execute_download(
                         f"&latitude<={bbox['lat_max']}"
                         f"&longitude>={bbox['lon_min']}"
                         f"&longitude<={bbox['lon_max']}"
-                        f"&pres<=1050"
+                        f"&pres<=1100"
                     )
                     encoded_query = urllib.parse.quote(query_vars + constraints, safe="&,=,")
                     erddap_url = (

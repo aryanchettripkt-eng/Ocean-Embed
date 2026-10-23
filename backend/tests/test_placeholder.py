@@ -144,6 +144,15 @@ def test_cors_headers() -> None:
     )
     assert "access-control-allow-origin" not in res_disallowed.headers
 
+    # Vercel origin allowed via regex
+    res_vercel = client.get(
+        "/api/v1/health", headers={"Origin": "https://oceanscope-demo.vercel.app"}
+    )
+    assert (
+        res_vercel.headers.get("access-control-allow-origin")
+        == "https://oceanscope-demo.vercel.app"
+    )
+
 
 def test_openapi_spec_up_to_date() -> None:
     """Verify openapi.json on disk is identical to active OpenAPI schema (PRD_BACKEND Test 8)."""
