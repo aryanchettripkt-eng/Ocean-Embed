@@ -162,3 +162,26 @@ Add Testing Library and Playwright, and add a CI check that the generated types 
   - there is a warm `/map` p95 test
 - **Fixtures.** They were correctly updated for v5: headline CSV, GREP/ARMOR3D columns in both ARGO files, 2 live days with NaN `temp_glorys`, and 1993/2018 splits. The headline `diff` sign (model − competitor) matches §1.1.
 - **Frontend.** The structure follows §5. Types are genuinely generated and match `openapi.json`. The canvas renderer does a real hatch for coverage 2 and transparency for land, with a correct y-flip. Colormaps and formatting follow the spec. Typecheck, lint, test and build are all clean.
+
+---
+
+## Recheck of commit 3 on `p1-fixes` (2026-10-23)
+
+`p1-fixes` is still local only: it is not pushed, has no PR and no CI run. Checks run on a copy of the device files: ML ruff/mypy/pytest clean (12 tests), backend clean (32), frontend typecheck, lint, 39 unit tests and 8/8 e2e pass, build OK. The downloaders could not be run from here (no network to the data hosts, no credentials), so the download findings below come from reading the code.
+
+| # | Item from check 3 | Status |
+|---|---|---|
+| 1 | Non-Copernicus downloaders | **Partly fixed**, see below |
+| 2 | GLORYS detection misses `cmems_mod_glo_phy…` names | **Fixed**: matches the dataset id and the `glorys12/` folder, still rejects GREP/ARMOR3D |
+| 3 | Niño 3.4 monthly | **Fixed**: parses CPC `wksst9120.for` (column 7 is the Niño 3.4 SSTA). It silently falls back to monthly files if the fetch fails; it should log or fail instead |
+| 4 | Bundle size without MapLibre | **Fixed**: MapView is static, `/` first-load JS is 338 kB against the 350 kB budget (tight) |
+| 5a | Basemap stays dark in light mode | **Not fixed**: MapView looks for a `light` class on `<html>`, but `Header.tsx` only adds/removes `dark`. The `light` class is never set, so the basemap is always dark |
+| 5b | Validation page error boundary | **Fixed**: each section is wrapped |
+
+Downloaders (item 1):
+- **Deps**: copernicusmarine, cdsapi, earthaccess are now in `ml/pyproject.toml`. Fixed.
+- **WOA23**: now loops all 12 monthly `woa23_decav_tMM_04.nc` files. Looks right.
+- **ARGO**: now an ERDDAP tabledap NetCDF query with bbox, time and `pres<=1050`, and it checks the NetCDF magic bytes. Looks right. Should-fix: it does not request QC flags or adjusted values (`temp_qc`, `pres_qc`, `temp_adjusted`), which the hold-out matchups need. It is also one big request for the whole period, which ERDDAP may time out on; chunk by year. `argo` is also in the Copernicus list, so it needlessly demands `copernicusmarine`.
+- **CCMP**: now loops day by day, but the URL is `…/v03.0/Y2020/M01/…`. The RSS layout is, to my knowledge, `…/v03.0/daily/y2020/m01/…` (needs `daily/` and lowercase `y`/`m`), and the fallback path is also invented. As written every day will 404. Unverified live.
+- **OSCAR**: earthaccess with gunzip is the right idea, but the short name `OSCAR_L4_OC_third-deg` is the retired v1 collection (current is `OSCAR_L4_OC_FINAL_V2.0`, or the NRT/interim ones). earthaccess errors are swallowed at INFO level, and the fallback is a made-up URL with Basic auth, which Earthdata's OAuth redirect will not accept.
+- **GEBCO**: the zip URL is `gebco_2023/zip/`, which is the ice-surface grid, while the file is saved as `gebco_2023_sub_ice_topo.nc`. It downloads the whole global grid (about 4 GB zipped, 7.5 GB unzipped) into memory twice with no bbox subset, and if the response is not a zip it writes whatever came back (for example an HTML page) as `.nc` with no check. If the zip has no `.nc`, nothing is written but the file is still recorded in the manifest.
