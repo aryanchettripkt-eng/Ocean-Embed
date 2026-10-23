@@ -59,7 +59,9 @@ export function MapView({
   // Monitor documentElement class changes to switch between light and dark basemap
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const checkLight = () => document.documentElement.classList.contains("light");
+    const checkLight = () =>
+      document.documentElement.classList.contains("light") ||
+      !document.documentElement.classList.contains("dark");
     setIsLightMode(checkLight());
 
     const observer = new MutationObserver(() => {
@@ -77,7 +79,9 @@ export function MapView({
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const initialLight =
-      typeof document !== "undefined" && document.documentElement.classList.contains("light");
+      typeof document !== "undefined" &&
+      (document.documentElement.classList.contains("light") ||
+        !document.documentElement.classList.contains("dark"));
 
     const basemapStyle: maplibregl.StyleSpecification = {
       version: 8,

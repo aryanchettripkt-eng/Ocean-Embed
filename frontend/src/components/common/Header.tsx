@@ -17,8 +17,10 @@ export function Header() {
     setTheme(initial);
     if (initial === "dark") {
       document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
     } else {
       document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
     }
   }, []);
 
@@ -28,8 +30,10 @@ export function Header() {
     localStorage.setItem("theme", next);
     if (next === "dark") {
       document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
     } else {
       document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
     }
   };
 

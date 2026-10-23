@@ -1,10 +1,15 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Banner } from "../src/components/common/Banner";
+import { Header } from "../src/components/common/Header";
 import { FieldToggle } from "../src/components/controls/FieldToggle";
 import { HeadlineCard } from "../src/components/validation/HeadlineCard";
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/",
+}));
 
 function createTestQueryClient() {
   return new QueryClient({
@@ -213,4 +218,22 @@ describe("Frontend Component Verification (A7)", () => {
       expect(screen.getByText("test-only-product")).toBeInTheDocument();
     });
   });
+
+  describe("Header theme toggling", () => {
+    it("toggles light and dark classes symmetrically on documentElement", () => {
+      document.documentElement.className = "dark";
+      renderWithClient(<Header />);
+      const btn = screen.getByRole("button", { name: /Toggle dark\/light theme/i });
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+
+      fireEvent.click(btn);
+      expect(document.documentElement.classList.contains("light")).toBe(true);
+      expect(document.documentElement.classList.contains("dark")).toBe(false);
+
+      fireEvent.click(btn);
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+      expect(document.documentElement.classList.contains("light")).toBe(false);
+    });
+  });
 });
+

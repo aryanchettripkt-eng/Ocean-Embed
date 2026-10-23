@@ -311,3 +311,20 @@ def test_is_glorys_file() -> None:
     # 5. Competitor ARMOR3D (015_004) must be rejected
     p5 = Path("/data/raw/armor3d/dataset-armor-3d-rep-weekly.nc")
     assert is_glorys_file(p5) is False
+
+
+def test_download_specs_and_formatting() -> None:
+    """Verify CCMP daily path, OSCAR v2 dataset name, and GEBCO sub-ice topo grid."""
+    from oceanscope_ml.data.download import PRODUCT_SPECS
+
+    # 1. CCMP has daily/ source_url
+    assert PRODUCT_SPECS["ccmp"]["source_url"].endswith("daily/")
+
+    # 2. OSCAR uses active v2 dataset
+    assert PRODUCT_SPECS["oscar"]["source_id"] == "OSCAR_L4_OC_FINAL_V2.0"
+    assert PRODUCT_SPECS["oscar"]["dataset_id"] == "OSCAR_L4_OC_FINAL_V2.0"
+
+    # 3. GEBCO uses sub-ice topography grid
+    assert PRODUCT_SPECS["gebco"]["source_id"] == "GEBCO_2023_sub_ice_topo"
+    assert PRODUCT_SPECS["gebco"]["dataset_id"] == "gebco_2023_sub_ice_topo"
+    assert "sub-ice" in PRODUCT_SPECS["gebco"]["notes"]
