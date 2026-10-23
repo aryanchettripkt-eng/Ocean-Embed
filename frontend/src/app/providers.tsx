@@ -17,10 +17,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
-  const [mockReady, setMockReady] = useState(false);
+  const isMocking = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+  const [mockReady, setMockReady] = useState(() => !isMocking);
 
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_USE_MOCKS === "true") {
+    if (isMocking) {
       import("../mocks/browser")
         .then(async ({ worker }) => {
           if (worker) {
@@ -37,9 +38,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     } else {
       setMockReady(true);
     }
-  }, []);
+  }, [isMocking]);
 
-  if (!mockReady) {
+  if (isMocking && !mockReady) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
         <div className="flex items-center space-x-3">

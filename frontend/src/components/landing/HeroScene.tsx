@@ -1,46 +1,43 @@
 import React from "react";
 import Image from "next/image";
+import { CoastLandscape } from "./CoastLandscape";
 import { Waves } from "./Waves";
+import { ThermalBand } from "./ThermalBand";
+import { SeabedReef } from "./SeabedReef";
 import { DepthRuler } from "./DepthRuler";
 import { Callout } from "./Callout";
 import styles from "./landing.module.css";
 
+/**
+ * Woodblock Hero Scene (PRD_FRONTEND §0, §2, PLAN_LANDING §4, §5).
+ * Composed entirely of hand-crafted Japanese ukiyo-e woodblock vector SVG layers:
+ * - CoastLandscape: Sky, sun, mountains, coastal promontory, pagoda, and pine framing
+ * - Satellite: Observation satellite with telemetry scanning beam
+ * - Waves: Great Wave foam claws and surging sea surface
+ * - ThermalBand: Subsurface temperature cross-section with DepthRuler
+ * - SeabedReef: Abyssal rocky ledges, golden coral fans, kelp, and pelagic fish school
+ * - ArgoFloat: Scientific profiling float bobbing in the water column
+ */
 export function HeroScene() {
   return (
     <div className={styles.heroSceneContainer} aria-hidden="false">
-      {/* 1. Sky & Coast background layer */}
+      {/* 1. Woodblock Sky & Coast Landscape (0 KB raster, pure vector SVG) */}
       <div className={styles.skyCoastLayer} aria-hidden="true">
-        <Image
-          src="/landing/sky-coast.webp"
-          alt="Woodblock coastal landscape of the North Indian Ocean with mountains and rising sun"
-          fill
-          priority
-          sizes="(max-width: 1024px) 100vw, 75vw"
-          className="object-cover object-bottom"
-        />
+        <CoastLandscape />
       </div>
 
-      {/* 2. Top-right Pine branches */}
-      <div className={styles.treeLayer} aria-hidden="true">
-        <Image
-          src="/landing/tree.webp"
-          alt=""
-          width={900}
-          height={700}
-          className="w-full h-auto"
-        />
-      </div>
-
-      {/* 3. Orbiting Satellite & Callout */}
+      {/* 2. Orbiting Earth Observation Satellite & Sensor Scanning Beam */}
       <div className={styles.satelliteLayer} aria-hidden="true">
         <Image
           src="/landing/satellite.svg"
           alt=""
-          width={160}
-          height={120}
+          width={240}
+          height={180}
+          priority
           className="w-full h-auto"
         />
       </div>
+
       <Callout
         text="Satellites observe the surface"
         style={{ top: "14%", right: "24%" }}
@@ -51,41 +48,28 @@ export function HeroScene() {
         style={{ top: "42%", right: "12%" }}
       />
 
-      {/* 4. Underwater Region */}
+      {/* 3. Underwater Subsurface Region */}
       <div className={styles.waterArea} aria-hidden="true">
-        {/* Waves at the surface waterline */}
+        {/* Japanese woodblock waves with Great Wave curling foam claws */}
         <Waves />
 
-        {/* Thermal band cross-section */}
+        {/* Subsurface thermal band cross-section with Depth Ruler */}
         <div className={styles.oceanBandContainer}>
-          <Image
-            src="/landing/ocean-band-placeholder.webp"
-            alt=""
-            fill
-            sizes="100vw"
-            className={styles.oceanBandImage}
-          />
-          {/* Depth Ruler on the right face */}
+          <ThermalBand />
           <DepthRuler />
         </div>
 
-        {/* Seabed coral & reef bottom-left */}
+        {/* Rocky Seabed, Coral Reef & Pelagic Fish School (vector SVG) */}
         <div className={styles.seabedLayer}>
-          <Image
-            src="/landing/seabed.webp"
-            alt=""
-            width={1000}
-            height={500}
-            className="w-full h-auto"
-          />
+          <SeabedReef />
         </div>
 
-        {/* Bobbing ARGO Float */}
+        {/* Bobbing Scientific ARGO Profiling Float */}
         <div className={styles.argoFloatLayer}>
           <Image
             src="/landing/argo-float.svg"
             alt=""
-            width={55}
+            width={65}
             height={180}
             className="w-full h-auto"
           />
