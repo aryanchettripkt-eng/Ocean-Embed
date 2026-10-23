@@ -1,13 +1,22 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import maplibregl, { type CanvasSource, type Map as MapLibreMap } from "maplibre-gl";
 import { formatCoord, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
 import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
 
+export interface RegionBounds {
+  lat_min: number;
+  lat_max: number;
+  lon_min: number;
+  lon_max: number;
+}
+
 interface MapViewProps {
   mapData?: MapResponse | null;
+  region?: RegionBounds;
+  gridResolutionDeg?: number;
   vmin: number;
   vmax: number;
   selectedLat: number | null;
@@ -27,6 +36,13 @@ interface HoverInfo {
   coverage: number;
 }
 
+const DEFAULT_REGION: RegionBounds = {
+  lat_min: 0.0,
+  lat_max: 30.0,
+  lon_min: 40.0,
+  lon_max: 100.0,
+};
+
 const OPENFREEMAP_STYLES = {
   light: "https://tiles.openfreemap.org/styles/positron",
   dark: "https://tiles.openfreemap.org/styles/dark",
@@ -36,8 +52,26 @@ function getBasemapStyle(isLight: boolean): string {
   return isLight ? OPENFREEMAP_STYLES.light : OPENFREEMAP_STYLES.dark;
 }
 
+/**
+ * Find the nearest index in an array of sorted coordinate values.
+ */
+function findNearestIndex(arr: number[], target: number): number {
+  if (arr.length === 0) return 0;
+  let bestIdx = 0;
+  let bestDist = Math.abs(arr[0] - target);
+  for (let i = 1; i < arr.length; i++) {
+    const dist = Math.abs(arr[i] - target);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 export function MapView({
   mapData,
+  region,
   vmin,
   vmax,
   selectedLat,
@@ -53,10 +87,30 @@ export function MapView({
   const argoMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [styleEpoch, setStyleEpoch] = useState(0);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isLightMode, setIsLightMode] = useState<boolean>(false);
   const currentStyleRef = useRef<string | null>(null);
+
+  const activeRegion = region ?? DEFAULT_REGION;
+  const regionRef = useRef<RegionBounds>(activeRegion);
+  useEffect(() => {
+    regionRef.current = activeRegion;
+  }, [activeRegion]);
+
+  const mapDataRef = useRef(mapData);
+  useEffect(() => {
+    mapDataRef.current = mapData;
+  }, [mapData]);
+
+  const onSelectPointRef = useRef(onSelectPoint);
+  useEffect(() => {
+    onSelectPointRef.current = onSelectPoint;
+  }, [onSelectPoint]);
+
+  // Canvas source reference to avoid PNG dataURL encoding on main thread
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceId = "ocean-grid-source";
+  const layerId = "ocean-grid-layer";
 
   // Monitor documentElement class changes to switch between light and dark basemap
   useEffect(() => {
@@ -76,7 +130,79 @@ export function MapView({
     return () => observer.disconnect();
   }, []);
 
-  // Initialize MapLibre Map
+  const getCoordinates = useCallback(
+    (rgn: RegionBounds): [[number, number], [number, number], [number, number], [number, number]] => [
+      [rgn.lon_min, rgn.lat_max], // Top-left [lon, lat]
+      [rgn.lon_max, rgn.lat_max], // Top-right
+      [rgn.lon_max, rgn.lat_min], // Bottom-right
+      [rgn.lon_min, rgn.lat_min], // Bottom-left
+    ],
+    []
+  );
+
+  const syncGridLayer = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    const data = mapDataRef.current;
+    const canvas = canvasRef.current;
+
+    if (
+      !data ||
+      !canvas ||
+      !data.values ||
+      data.values.length === 0 ||
+      !data.values[0] ||
+      data.values[0].length === 0
+    ) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      return;
+    }
+
+    const coordinates = getCoordinates(regionRef.current);
+    const existingSource = map.getSource(sourceId) as CanvasSource | undefined;
+    const existingLayer = map.getLayer(layerId);
+
+    if (existingSource && existingLayer) {
+      existingSource.setCoordinates(coordinates);
+      existingSource.play();
+      requestAnimationFrame(() => {
+        existingSource.pause();
+      });
+    } else {
+      if (existingLayer) map.removeLayer(layerId);
+      if (existingSource) map.removeSource(sourceId);
+
+      map.addSource(sourceId, {
+        type: "canvas",
+        canvas,
+        coordinates,
+        animate: false,
+      });
+
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0.9,
+          "raster-fade-duration": 0,
+          "raster-resampling": "nearest",
+        },
+      });
+
+      const newSource = map.getSource(sourceId) as CanvasSource | undefined;
+      if (newSource) {
+        newSource.play();
+        requestAnimationFrame(() => {
+          newSource.pause();
+        });
+      }
+    }
+  }, [getCoordinates]);
+
+  // Initialize MapLibre Map with locked 2D pitch and disabled drag-rotate
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
@@ -88,33 +214,49 @@ export function MapView({
     const initialStyle = getBasemapStyle(initialLight);
     currentStyleRef.current = initialStyle;
 
+    const rgn = regionRef.current;
+    const centerLon = (rgn.lon_min + rgn.lon_max) / 2;
+    const centerLat = (rgn.lat_min + rgn.lat_max) / 2;
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: initialStyle,
-      center: [70.0, 15.0],
+      center: [centerLon, centerLat],
       zoom: 4,
       minZoom: 2,
       maxZoom: 10,
+      pitch: 0,
+      maxPitch: 0, // Flat 2D map view
+      dragRotate: false, // Disable drag rotate in 2D map view
+      pitchWithRotate: false,
+      touchPitch: false,
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+
+    const handleStyleReady = () => {
+      if (map.isStyleLoaded()) {
+        syncGridLayer();
+      }
+    };
 
     map.on("load", () => {
       setMapLoaded(true);
-      setStyleEpoch((e) => e + 1);
+      handleStyleReady();
     });
     map.on("style.load", () => {
       setMapLoaded(true);
-      setStyleEpoch((e) => e + 1);
+      handleStyleReady();
     });
+    map.on("styledata", handleStyleReady);
     map.on("error", () => {
       setMapLoaded(true);
     });
 
     if (map.isStyleLoaded()) {
       setMapLoaded(true);
-      setStyleEpoch((e) => e + 1);
+      handleStyleReady();
     }
 
     mapInstanceRef.current = map;
@@ -123,7 +265,7 @@ export function MapView({
       map.remove();
       mapInstanceRef.current = null;
     };
-  }, []);
+  }, [syncGridLayer]);
 
   // Dynamically update basemap style when theme toggles
   useEffect(() => {
@@ -139,98 +281,90 @@ export function MapView({
 
   // Update canvas grid layer when mapData, vmin, or vmax change
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !mapLoaded || !mapData) return;
+    if (
+      !mapData ||
+      !mapData.values ||
+      mapData.values.length === 0 ||
+      !mapData.values[0] ||
+      mapData.values[0].length === 0
+    ) {
+      syncGridLayer();
+      return;
+    }
+
+    if (!canvasRef.current && typeof document !== "undefined") {
+      canvasRef.current = document.createElement("canvas");
+    }
 
     const colormap = mapData.field === "error" ? "balance" : "thermal";
-    const canvas = renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap);
-    const dataUrl = canvas.toDataURL();
+    renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap, 4, canvasRef.current);
+    syncGridLayer();
+  }, [mapData, vmin, vmax, syncGridLayer]);
 
-    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
-      [40.0, 30.0], // Top-left [lon, lat]
-      [100.0, 30.0], // Top-right
-      [100.0, 0.0], // Bottom-right
-      [40.0, 0.0], // Bottom-left
-    ];
+  // Throttled hover handler and single click path
+  const hoverRafRef = useRef<number | null>(null);
+  const lastHoverCellRef = useRef<{ r: number; c: number } | null>(null);
+  const pendingMouseEventRef = useRef<maplibregl.MapMouseEvent | null>(null);
 
-    const sourceId = "ocean-grid-source";
-    const layerId = "ocean-grid-layer";
-
-    const existingSource = map.getSource(sourceId) as maplibregl.ImageSource | undefined;
-
-    if (existingSource) {
-      existingSource.updateImage({ url: dataUrl });
-    } else {
-      map.addSource(sourceId, {
-        type: "image",
-        url: dataUrl,
-        coordinates,
-      });
-
-      map.addLayer({
-        id: layerId,
-        type: "raster",
-        source: sourceId,
-        paint: {
-          "raster-opacity": 0.9,
-          "raster-fade-duration": 150,
-          "raster-resampling": "nearest",
-        },
-      });
-    }
-  }, [mapLoaded, mapData, vmin, vmax, styleEpoch]);
-
-  const mapDataRef = useRef(mapData);
-  useEffect(() => {
-    mapDataRef.current = mapData;
-  }, [mapData]);
-
-  const onSelectPointRef = useRef(onSelectPoint);
-  useEffect(() => {
-    onSelectPointRef.current = onSelectPoint;
-  }, [onSelectPoint]);
-
-  // Handle hover and click inspection over grid cells
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    const selectAtLngLat = (lng: number, lat: number) => {
-      const data = mapDataRef.current;
-      if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
-        if (data && data.lat && data.lat.length > 0 && data.lon && data.lon.length > 0) {
-          const nLat = data.lat.length;
-          const nLon = data.lon.length;
-          const r = Math.min(nLat - 1, Math.max(0, Math.floor(lat / (30.0 / nLat))));
-          const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - 40.0) / (60.0 / nLon))));
-          const snappedLat = data.lat[r];
-          const snappedLon = data.lon[c];
-          onSelectPointRef.current(snappedLat, snappedLon);
-        } else {
-          const snappedLat = Math.round(lat * 4) / 4;
-          const snappedLon = Math.round(lng * 4) / 4;
-          onSelectPointRef.current(snappedLat, snappedLon);
-        }
-      }
-    };
-
     const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
-      const data = mapDataRef.current;
-      if (!data) return;
-      const { lng, lat } = e.lngLat;
-      const lonMin = 40.0;
-      const lonMax = 100.0;
-      const latMin = 0.0;
-      const latMax = 30.0;
+      pendingMouseEventRef.current = e;
 
-      if (lng >= lonMin && lng <= lonMax && lat >= latMin && lat <= latMax) {
-        const nLat = data.lat.length;
-        const nLon = data.lon.length;
-        const latRes = (latMax - latMin) / nLat;
-        const lonRes = (lonMax - lonMin) / nLon;
+      if (hoverRafRef.current !== null) {
+        return; // Already scheduled for this animation frame
+      }
 
-        const r = Math.min(nLat - 1, Math.max(0, Math.floor((lat - latMin) / latRes)));
-        const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - lonMin) / lonRes)));
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const evt = pendingMouseEventRef.current;
+        const data = mapDataRef.current;
+        const rgn = regionRef.current;
+
+        if (
+          !evt ||
+          !data ||
+          !data.lat ||
+          !data.lon ||
+          data.lat.length === 0 ||
+          data.lon.length === 0
+        ) {
+          if (lastHoverCellRef.current !== null) {
+            lastHoverCellRef.current = null;
+            setHoverInfo(null);
+          }
+          return;
+        }
+
+        const { lng, lat } = evt.lngLat;
+        if (
+          lng < rgn.lon_min ||
+          lng > rgn.lon_max ||
+          lat < rgn.lat_min ||
+          lat > rgn.lat_max
+        ) {
+          if (lastHoverCellRef.current !== null) {
+            lastHoverCellRef.current = null;
+            setHoverInfo(null);
+          }
+          return;
+        }
+
+        const r = findNearestIndex(data.lat, lat);
+        const c = findNearestIndex(data.lon, lng);
+
+        // Skip state update if mouse is still in the same grid cell
+        if (
+          lastHoverCellRef.current &&
+          lastHoverCellRef.current.r === r &&
+          lastHoverCellRef.current.c === c
+        ) {
+          return;
+        }
+
+        lastHoverCellRef.current = { r, c };
 
         const cellLat = data.lat[r];
         const cellLon = data.lon[c];
@@ -238,37 +372,45 @@ export function MapView({
         const cov = data.coverage[r]?.[c] ?? 0;
 
         setHoverInfo({
-          x: e.point.x,
-          y: e.point.y,
+          x: evt.point.x,
+          y: evt.point.y,
           lat: cellLat,
           lon: cellLon,
           value: val,
           coverage: cov,
         });
-      } else {
-        setHoverInfo(null);
-      }
+      });
     };
 
     const handleMouseLeave = () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+      pendingMouseEventRef.current = null;
+      lastHoverCellRef.current = null;
       setHoverInfo(null);
     };
 
+    // Single click path: MapLibre click handler only
     const handleClick = (e: maplibregl.MapMouseEvent) => {
-      selectAtLngLat(e.lngLat.lng, e.lngLat.lat);
-    };
+      const data = mapDataRef.current;
+      const rgn = regionRef.current;
+      const { lng, lat } = e.lngLat;
 
-    const handleDomClick = (e: MouseEvent) => {
-      const container = mapContainerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      try {
-        const coords = map.unproject([x, y]);
-        selectAtLngLat(coords.lng, coords.lat);
-      } catch {
-        // Unproject failed
+      if (
+        lng >= rgn.lon_min &&
+        lng <= rgn.lon_max &&
+        lat >= rgn.lat_min &&
+        lat <= rgn.lat_max
+      ) {
+        if (data?.lat && data?.lon && data.lat.length > 0 && data.lon.length > 0) {
+          const r = findNearestIndex(data.lat, lat);
+          const c = findNearestIndex(data.lon, lng);
+          onSelectPointRef.current(data.lat[r], data.lon[c]);
+        } else {
+          onSelectPointRef.current(lat, lng);
+        }
       }
     };
 
@@ -276,14 +418,14 @@ export function MapView({
     map.on("mouseout", handleMouseLeave);
     map.on("click", handleClick);
 
-    const containerEl = mapContainerRef.current;
-    containerEl?.addEventListener("click", handleDomClick, true);
-
     return () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
       map.off("mousemove", handleMouseMove);
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
-      containerEl?.removeEventListener("click", handleDomClick, true);
     };
   }, []);
 
@@ -317,7 +459,6 @@ export function MapView({
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded) return;
 
-    // Clear previous argo markers
     argoMarkersRef.current.forEach((m) => m.remove());
     argoMarkersRef.current = [];
 

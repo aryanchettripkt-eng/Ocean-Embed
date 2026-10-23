@@ -168,6 +168,8 @@ function ExplorerContent() {
         <ErrorBoundary name="Interactive Map">
           <MapView
             mapData={mapData}
+            region={meta.region}
+            gridResolutionDeg={meta.grid_resolution_deg}
             vmin={colorRange.vmin}
             vmax={colorRange.vmax}
             selectedLat={state.lat}
