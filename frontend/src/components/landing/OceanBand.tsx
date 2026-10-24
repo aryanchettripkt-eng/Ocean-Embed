@@ -7,7 +7,7 @@ import { THERMAL_LUT } from "../../lib/colormaps";
 import { ThermalBand } from "./ThermalBand";
 import styles from "./landing.module.css";
 
-// Standard 4x4 Bayer Matrix
+// Standard 4x4 Bayer Dither Matrix
 const BAYER_4X4: number[][] = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -18,14 +18,37 @@ const BAYER_4X4: number[][] = [
 /**
  * Phase C: Real Data Subsurface Ocean Band (PLAN_LANDING §7).
  * Fetches GET /section at ~15°N for the latest available date.
- * Renders on a <canvas> with sqrt(depth) scaling, Bayer 4x4 ordered dithering
- * using the cmocean thermal LUT, 2°C dashed contours, and the 20°C isotherm line.
- * Vector ThermalBand stays underneath as graceful fallback with zero layout shift.
+ * Optimized for TBT <= 150ms:
+ * - Query loads lazily (via requestIdleCallback after initial render).
+ * - Canvas renders at 400x125 pixelated resolution in chunked animation frames (no long tasks).
+ * - Vector ThermalBand underneath provides zero-CLS instant paint fallback.
  */
 export function OceanBand() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [canvasReady, setCanvasReady] = useState(false);
+  const [fetchEnabled, setFetchEnabled] = useState(false);
   const { data: meta } = useMeta();
+
+  // 1. Lazy load trigger: enable data fetch only after initial paint is complete
+  useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
+    let idleHandle: number | null = null;
+
+    if (typeof window !== "undefined") {
+      if ("requestIdleCallback" in window) {
+        idleHandle = window.requestIdleCallback(() => setFetchEnabled(true), { timeout: 2500 });
+      } else {
+        timer = setTimeout(() => setFetchEnabled(true), 1500);
+      }
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (idleHandle !== null && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleHandle);
+      }
+    };
+  }, []);
 
   // Find latitude row nearest 15.0°N
   const targetLat = useMemo(() => {
@@ -52,7 +75,7 @@ export function OceanBand() {
       field: "pred",
       lat: targetLat,
     },
-    { enabled: !!meta && !!targetDate }
+    { enabled: fetchEnabled && !!meta && !!targetDate }
   );
 
   useEffect(() => {
@@ -66,8 +89,10 @@ export function OceanBand() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const width = 1600;
-    const height = 500;
+    // Optimized resolution: 400 x 125 (50,000 pixels instead of 800,000)
+    // Scaled with image-rendering: pixelated for authentic woodblock dither look
+    const width = 400;
+    const height = 125;
     canvas.width = width;
     canvas.height = height;
 
@@ -80,11 +105,10 @@ export function OceanBand() {
     const numPositions = positions.length;
     const numDepths = depths.length;
 
-    // Create ImageData
     const imgData = ctx.createImageData(width, height);
     const data = imgData.data;
 
-    // Helper: sample temperature at (posIdx, depth_m)
+    // Helper: sample temperature at (posIdx, depth_m) with bilinear interpolation
     function sampleTemp(pIdx: number, dMeters: number): number | null {
       let d0 = 0;
       let d1 = 0;
@@ -125,98 +149,120 @@ export function OceanBand() {
       return top * (1 - fracD) + bot * fracD;
     }
 
-    // Render pixel grid with ordered Bayer 4x4 dithering
-    for (let y = 0; y < height; y++) {
-      const ratioY = y / (height - 1);
-      const dMeters = ratioY * ratioY * maxDepth;
+    // Chunked non-blocking rendering: 25 scanlines per slice (5 slices total)
+    let currentY = 0;
+    const chunkSize = 25;
+    let animId: number;
 
-      for (let x = 0; x < width; x++) {
-        const pIdx = (x / (width - 1)) * (numPositions - 1);
-        const temp = sampleTemp(pIdx, dMeters);
+    function renderSlice() {
+      const endY = Math.min(height, currentY + chunkSize);
 
-        const pixelIndex = (y * width + x) * 4;
+      for (let y = currentY; y < endY; y++) {
+        const ratioY = y / (height - 1);
+        const dMeters = ratioY * ratioY * maxDepth;
 
-        if (temp === null || isNaN(temp)) {
-          data[pixelIndex] = 20;
-          data[pixelIndex + 1] = 53;
-          data[pixelIndex + 2] = 59;
-          data[pixelIndex + 3] = 230;
-          continue;
+        for (let x = 0; x < width; x++) {
+          const pIdx = (x / (width - 1)) * (numPositions - 1);
+          const temp = sampleTemp(pIdx, dMeters);
+          const pixelIndex = (y * width + x) * 4;
+
+          if (temp === null || isNaN(temp)) {
+            data[pixelIndex] = 20;
+            data[pixelIndex + 1] = 53;
+            data[pixelIndex + 2] = 59;
+            data[pixelIndex + 3] = 230;
+            continue;
+          }
+
+          const frac = (temp - vmin) / range;
+          const bayer = (BAYER_4X4[y % 4][x % 4] / 16 - 0.5) * (1 / 32);
+          const ditheredFrac = Math.max(0, Math.min(1, frac + bayer));
+          const lutIdx = Math.max(0, Math.min(255, Math.floor(ditheredFrac * 255)));
+          const rgb = THERMAL_LUT[lutIdx] ?? [20, 53, 59];
+
+          data[pixelIndex] = rgb[0];
+          data[pixelIndex + 1] = rgb[1];
+          data[pixelIndex + 2] = rgb[2];
+          data[pixelIndex + 3] = 255;
         }
+      }
 
-        const frac = (temp - vmin) / range;
-        const bayer = (BAYER_4X4[y % 4][x % 4] / 16 - 0.5) * (1 / 32);
-        const ditheredFrac = Math.max(0, Math.min(1, frac + bayer));
-        const lutIdx = Math.max(0, Math.min(255, Math.floor(ditheredFrac * 255)));
-        const rgb = THERMAL_LUT[lutIdx] ?? [20, 53, 59];
+      currentY = endY;
 
-        data[pixelIndex] = rgb[0];
-        data[pixelIndex + 1] = rgb[1];
-        data[pixelIndex + 2] = rgb[2];
-        data[pixelIndex + 3] = 255;
+      if (currentY < height) {
+        animId = requestAnimationFrame(renderSlice);
+      } else {
+        // All pixels rendered, write to canvas and draw contours
+        ctx?.putImageData(imgData, 0, 0);
+
+        // 2°C contours & 20°C Isotherm
+        const contourTemps = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28];
+
+        contourTemps.forEach((targetTemp) => {
+          const is20C = targetTemp === 20;
+          ctx?.beginPath();
+          let started = false;
+
+          for (let x = 0; x < width; x += 2) {
+            const pIdx = (x / (width - 1)) * (numPositions - 1);
+            let foundDepth: number | null = null;
+
+            for (let d = 0; d < numDepths - 1; d++) {
+              const tTop = sampleTemp(pIdx, depths[d]);
+              const tBot = sampleTemp(pIdx, depths[d + 1]);
+              if (tTop !== null && tBot !== null) {
+                if (
+                  (tTop >= targetTemp && tBot <= targetTemp) ||
+                  (tTop <= targetTemp && tBot >= targetTemp)
+                ) {
+                  const diff = tBot - tTop;
+                  const f = Math.abs(diff) > 1e-4 ? (targetTemp - tTop) / diff : 0;
+                  foundDepth = depths[d] + f * (depths[d + 1] - depths[d]);
+                  break;
+                }
+              }
+            }
+
+            if (foundDepth !== null) {
+              const y = (Math.sqrt(foundDepth) / Math.sqrt(maxDepth)) * (height - 1);
+              if (!started) {
+                ctx?.moveTo(x, y);
+                started = true;
+              } else {
+                ctx?.lineTo(x, y);
+              }
+            } else {
+              started = false;
+            }
+          }
+
+          if (ctx) {
+            ctx.save();
+            if (is20C) {
+              ctx.strokeStyle = "#F6F1E2";
+              ctx.lineWidth = 1.8;
+              ctx.setLineDash([8, 4]);
+              ctx.globalAlpha = 0.95;
+            } else {
+              ctx.strokeStyle = "#F6F1E2";
+              ctx.lineWidth = 0.9;
+              ctx.setLineDash([4, 4]);
+              ctx.globalAlpha = 0.6;
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+        });
+
+        setCanvasReady(true);
       }
     }
 
-    ctx.putImageData(imgData, 0, 0);
+    animId = requestAnimationFrame(renderSlice);
 
-    // Draw 2°C contours and 20°C Isotherm
-    const contourTemps = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28];
-
-    contourTemps.forEach((targetTemp) => {
-      const is20C = targetTemp === 20;
-      ctx.beginPath();
-      let started = false;
-
-      for (let x = 0; x < width; x += 4) {
-        const pIdx = (x / (width - 1)) * (numPositions - 1);
-
-        let foundDepth: number | null = null;
-        for (let d = 0; d < numDepths - 1; d++) {
-          const tTop = sampleTemp(pIdx, depths[d]);
-          const tBot = sampleTemp(pIdx, depths[d + 1]);
-          if (tTop !== null && tBot !== null) {
-            if (
-              (tTop >= targetTemp && tBot <= targetTemp) ||
-              (tTop <= targetTemp && tBot >= targetTemp)
-            ) {
-              const diff = tBot - tTop;
-              const f = Math.abs(diff) > 1e-4 ? (targetTemp - tTop) / diff : 0;
-              foundDepth = depths[d] + f * (depths[d + 1] - depths[d]);
-              break;
-            }
-          }
-        }
-
-        if (foundDepth !== null) {
-          const y = (Math.sqrt(foundDepth) / Math.sqrt(maxDepth)) * (height - 1);
-          if (!started) {
-            ctx.moveTo(x, y);
-            started = true;
-          } else {
-            ctx.lineTo(x, y);
-          }
-        } else {
-          started = false;
-        }
-      }
-
-      ctx.save();
-      if (is20C) {
-        ctx.strokeStyle = "#F6F1E2";
-        ctx.lineWidth = 2.8;
-        ctx.setLineDash([14, 6]);
-        ctx.globalAlpha = 0.95;
-      } else {
-        ctx.strokeStyle = "#F6F1E2";
-        ctx.lineWidth = 1.3;
-        ctx.setLineDash([8, 8]);
-        ctx.globalAlpha = 0.65;
-      }
-      ctx.stroke();
-      ctx.restore();
-    });
-
-    setCanvasReady(true);
+    return () => {
+      cancelAnimationFrame(animId);
+    };
   }, [section, meta]);
 
   const captionText = useMemo(() => {

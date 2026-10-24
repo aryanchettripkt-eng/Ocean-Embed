@@ -13,3 +13,25 @@
   --background: #020617;
   --foreground: #f8fafc;
 }
+
+/* Shared Element Cross-Route View Transitions */
+::view-transition-group(ocean-section) {
+  animation-duration: 550ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+::view-transition-old(ocean-section) {
+  object-fit: cover;
+}
+
+::view-transition-new(ocean-section) {
+  object-fit: cover;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(ocean-section),
+  ::view-transition-old(ocean-section),
+  ::view-transition-new(ocean-section) {
+    animation: none !important;
+  }
+}

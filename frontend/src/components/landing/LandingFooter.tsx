@@ -9,19 +9,19 @@ export function LandingFooter() {
         <div className={styles.footerCredits}>
           <p>
             <strong>OceanScope AI</strong> is trained on GLORYS12 reanalysis and evaluated against
-            independent in-situ ARGO float profiles. Satellite observations provided by Copernicus
-            Marine Service (DUACS SLA, OSTIA SST, SSS), PO.DAAC (OSCAR currents, CCMP winds), NOAA
-            (WOA23 climatology, climate indices), and GEBCO bathymetry.
+            independent in-situ ARGO float profiles. Satellite and atmospheric observations provided by
+            Copernicus Marine Service (DUACS SLA, OSTIA SST, SSS), ECMWF (ERA5 surface heat fluxes & precipitation),
+            PO.DAAC (OSCAR currents, CCMP winds), NOAA (WOA23 climatology, climate indices), and GEBCO bathymetry.
           </p>
           <p style={{ marginTop: "0.5rem", opacity: 0.8 }}>
-            OceanScope AI • Created by Aryan Chettri & AI Pair Programming Team
+            Built for oceanographic machine learning research and interactive subsurface exploration.
           </p>
         </div>
 
         <nav aria-label="Landing footer navigation">
           <ul className={styles.footerLinks}>
             <li>
-              <Link href="/">Explorer</Link>
+              <Link href="/explore">Explorer</Link>
             </li>
             <li>
               <Link href="/validation">Validation</Link>
@@ -34,7 +34,7 @@ export function LandingFooter() {
             </li>
             <li>
               <a
-                href="https://github.com"
+                href="https://github.com/aryanchettripkt-eng/Ocean-Embed"
                 target="_blank"
                 rel="noopener noreferrer"
               >

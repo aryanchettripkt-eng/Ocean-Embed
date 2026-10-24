@@ -81,4 +81,35 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
     await expect(page).toHaveURL(/\/explore(\?.*)?$/);
     await context.close();
   });
+
+  test("focus moves to explorer heading (#explorer-heading) after navigation", async ({ page }) => {
+    await page.goto("/");
+    const cta = page.getByRole("link", { name: /EXPLORE THE OCEAN/i });
+    await cta.click();
+
+    await expect(page).toHaveURL(/\/explore(\?.*)?$/);
+    const heading = page.locator("#explorer-heading");
+    await expect(heading).toBeAttached();
+    // Verify focus moved
+    await expect(heading).toBeFocused({ timeout: 5000 });
+  });
+
+  test("captures landing page screenshots at 1440, 1024, 768, and 390 px", async ({ page }) => {
+    const viewports = [
+      { width: 1440, height: 900, name: "screenshot-1440.png" },
+      { width: 1024, height: 768, name: "screenshot-1024.png" },
+      { width: 768, height: 1024, name: "screenshot-768.png" },
+      { width: 390, height: 844, name: "screenshot-390.png" },
+    ];
+
+    for (const vp of viewports) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.goto("/");
+      await page.waitForLoadState("networkidle");
+      // Wait for hero to render
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await page.screenshot({ path: `../docs/landing/screenshots/${vp.name}`, fullPage: false });
+    }
+  });
 });
+

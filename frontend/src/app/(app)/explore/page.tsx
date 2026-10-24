@@ -64,6 +64,14 @@ function ExplorerContent() {
     }
   }, [meta, searchParams]);
 
+  // Focus explorer heading on mount (PLAN_LANDING §6 item 5)
+  useEffect(() => {
+    const heading = document.getElementById("explorer-heading");
+    if (heading) {
+      heading.focus();
+    }
+  }, []);
+
   // Sync URL query string when state changes
   useEffect(() => {
     const params = buildExplorerSearchParams(state);
@@ -237,6 +245,11 @@ function ExplorerContent() {
 
   return (
     <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden flex flex-col md:flex-row bg-slate-100 dark:bg-slate-950 transition-colors">
+      {/* Main Accessible Heading for Focus Management (PLAN_LANDING §6 item 5) */}
+      <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
+        OceanScope AI Subsurface Temperature Explorer
+      </h1>
+
       {/* Map Viewport */}
       <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] min-h-[400px]">
         <ErrorBoundary name="Interactive Map">

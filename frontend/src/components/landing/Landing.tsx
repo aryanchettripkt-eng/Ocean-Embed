@@ -99,7 +99,9 @@ export function Landing() {
       {/* 4. Full-viewport Hero Section */}
       <main>
         <section className={styles.heroSection} aria-label="Hero Introduction">
-          <HeroText />
+          <div className={styles.heroContent}>
+            <HeroText />
+          </div>
           <HeroScene />
         </section>
 
