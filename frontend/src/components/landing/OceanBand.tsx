@@ -4,7 +4,6 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useMeta, useSection } from "../../lib/api/hooks";
 import { findNearestCoord, getWallColorRange } from "../map3d/depthScale";
 import { THERMAL_LUT } from "../../lib/colormaps";
-import { ThermalBand } from "./ThermalBand";
 import styles from "./landing.module.css";
 
 // Standard 4x4 Bayer Dither Matrix
@@ -275,10 +274,7 @@ export function OceanBand() {
 
   return (
     <div className={styles.oceanBandImage} style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* 1. Underlying vector woodblock SVG (instant paint, zero CLS fallback) */}
-      <ThermalBand />
-
-      {/* 2. Real /section data canvas with Bayer dithering and isotherms */}
+      {/* 1. Real /section data canvas with Bayer dithering and isotherms */}
       <canvas
         ref={canvasRef}
         className={`${styles.oceanBandCanvas} ${canvasReady ? styles.oceanBandCanvasActive : ""}`}

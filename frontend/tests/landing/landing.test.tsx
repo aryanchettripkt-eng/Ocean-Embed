@@ -8,9 +8,9 @@ import { ExploreLink } from "../../src/components/landing/ExploreLink";
 import { HowItWorks } from "../../src/components/landing/HowItWorks";
 import { LandingFooter } from "../../src/components/landing/LandingFooter";
 import { Banner } from "../../src/components/common/Banner";
-import { OceanBand } from "../../src/components/landing/OceanBand";
+import { Callout } from "../../src/components/landing/Callout";
 import * as hooks from "../../src/lib/api/hooks";
-import type { MetaResponse, SectionResponse } from "../../src/lib/api/client";
+import type { MetaResponse } from "../../src/lib/api/client";
 
 // Mock next/navigation
 const mockPush = vi.fn();
@@ -295,47 +295,19 @@ describe("Landing Page Component Suite (§10)", () => {
     expect(footer).toBeInTheDocument();
     expect(footer.textContent).toContain("Copernicus Marine Service");
     expect(footer.textContent).toContain("ARGO float");
+    expect(footer.textContent).toContain("ERA5");
   });
 
-  it("OceanBand renders fallback vector band and real data caption when section arrives", () => {
-    const mockSection: SectionResponse = {
-      axis: "lon",
-      date: "2020-01-10",
-      depths_m: [0.5, 100, 500, 1000],
-      field: "pred",
-      fixed: { lat: 15.0 },
-      positions: [60.0, 70.0, 80.0],
-      run_id: "test-run",
-      synthetic: true,
-      units: "degC",
-      values: [
-        [28.5, 28.2, 28.0],
-        [24.0, 23.5, 23.0],
-        [12.0, 11.5, 11.0],
-        [6.0, 5.8, 5.5],
-      ],
-      coverage: [1, 1, 1],
-    };
+  it("Callout bare variant renders text without bracket SVG", () => {
+    const { rerender } = render(
+      <Callout text={"OCEAN CURRENTS\nMOVE HEAT"} variant="bare" />
+    );
+    expect(screen.getByText("OCEAN CURRENTS")).toBeInTheDocument();
+    expect(screen.getByText("MOVE HEAT")).toBeInTheDocument();
+    expect(screen.queryByTestId("callout-bracket-svg")).toBeNull();
 
-    vi.spyOn(hooks, "useMeta").mockReturnValue({
-      data: mockMeta,
-      isLoading: false,
-    } as ReturnType<typeof hooks.useMeta>);
-
-    vi.spyOn(hooks, "useSection").mockReturnValue({
-      data: mockSection,
-      isLoading: false,
-    } as ReturnType<typeof hooks.useSection>);
-
-    renderWithClient(<OceanBand />);
-
-    // Canvas exists
-    expect(screen.getByTestId("ocean-band-canvas")).toBeInTheDocument();
-
-    // Caption exists and reflects real data parameters
-    const caption = screen.getByTestId("ocean-band-caption");
-    expect(caption).toBeInTheDocument();
-    expect(caption.textContent).toContain("Model prediction · 2020-01-10 · section at 15.0°N");
-    expect(caption.textContent).toContain("Synthetic demo data");
+    // With ink variant, bracket SVG is rendered
+    rerender(<Callout text={"SATELLITES\nOBSERVE\nTHE SURFACE"} variant="ink" />);
+    expect(screen.getByTestId("callout-bracket-svg")).toBeInTheDocument();
   });
 });

@@ -10,11 +10,12 @@ export function LandingFooter() {
           <p>
             <strong>OceanScope AI</strong> is trained on GLORYS12 reanalysis and evaluated against
             independent in-situ ARGO float profiles. Satellite and atmospheric observations provided by
-            Copernicus Marine Service (DUACS SLA, OSTIA SST, SSS), ECMWF (ERA5 surface heat fluxes & precipitation),
-            PO.DAAC (OSCAR currents, CCMP winds), NOAA (WOA23 climatology, climate indices), and GEBCO bathymetry.
+            Copernicus Marine Service (DUACS SLA, OSTIA SST, SSS), ECMWF (ERA5 surface heat fluxes, 10 m winds & precipitation),
+            PO.DAAC (OSCAR currents), NOAA (WOA23 climatology, climate indices), and GEBCO bathymetry.
           </p>
           <p style={{ marginTop: "0.5rem", opacity: 0.8 }}>
-            Built for oceanographic machine learning research and interactive subsurface exploration.
+            Built for &lt;hackathon name&gt;
+            {/* TODO(Aryan): Replace with actual hackathon name once confirmed */}
           </p>
         </div>
 
@@ -33,11 +34,8 @@ export function LandingFooter() {
               <Link href="/about">About & Licenses</Link>
             </li>
             <li>
-              <a
-                href="https://github.com/aryanchettripkt-eng/Ocean-Embed"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              {/* TODO(Aryan): Replace '#' with actual GitHub repository URL */}
+              <a href="#">
                 GitHub
               </a>
             </li>

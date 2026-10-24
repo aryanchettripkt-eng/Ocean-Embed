@@ -55,6 +55,7 @@ export function DepthRuler() {
       aria-label="Depth scale from ocean surface to depth"
       role="region"
     >
+      <div className={styles.rulerLine} />
       {displayTicks.map((tick, i) => (
         <div
           key={`${tick.depth}-${i}`}

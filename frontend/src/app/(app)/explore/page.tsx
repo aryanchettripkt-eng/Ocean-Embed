@@ -228,7 +228,14 @@ function ExplorerContent() {
   }, []);
 
   if (isMetaLoading) {
-    return <Loading fullScreen label="Loading OceanScope AI metadata..." />;
+    return (
+      <>
+        <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
+          OceanScope AI Subsurface Temperature Explorer
+        </h1>
+        <Loading fullScreen label="Loading OceanScope AI metadata..." />
+      </>
+    );
   }
 
   if (metaError || !meta) {

@@ -22,97 +22,106 @@ export function Landing() {
         <Banner type="synthetic" />
       </div>
 
-      {/* 3. Header Row */}
-      <header className={styles.headerRow} role="banner">
-        <Link href="/" className={styles.brandLogo} aria-label="OceanScope AI Home">
-          {/* Wave Logo Mark */}
-          <svg
-            width="28"
-            height="20"
-            viewBox="0 0 28 20"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <path
-              d="M 2 12 Q 8 4 14 12 T 26 12"
-              stroke="#1E2A2B"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-            />
-            <path
-              d="M 2 16 Q 8 8 14 16 T 26 16"
-              stroke="#2F6B73"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-          <span className={styles.brandText}>OCEANSCOPE AI</span>
-        </Link>
-
-        {/* Desktop Nav: HOME · EXPLORE · DATA · LEARN · ABOUT */}
-        <nav aria-label="Landing navigation">
-          <ul className={styles.navLinks}>
-            <li>
-              <Link href="/" className={`${styles.navLink} ${styles.navLinkActive}`}>
-                Home
-              </Link>
-            </li>
-            <li>
-              <Link href="/explore" className={styles.navLink}>
-                Explore
-              </Link>
-            </li>
-            <li>
-              <Link href="/validation" className={styles.navLink}>
-                Data
-              </Link>
-            </li>
-            <li>
-              <Link href="/about#method" className={styles.navLink}>
-                Learn
-              </Link>
-            </li>
-            <li>
-              <Link href="/about" className={styles.navLink}>
-                About
-              </Link>
-            </li>
-          </ul>
-
-          {/* Mobile Collapsible Details Menu (No JS needed) */}
-          <details className={styles.mobileMenu}>
-            <summary className={styles.mobileMenuSummary} aria-label="Toggle navigation menu">
-              MENU ▾
-            </summary>
-            <div className={styles.mobileDropdown}>
-              <Link href="/">Home</Link>
-              <Link href="/explore">Explore</Link>
-              <Link href="/validation">Data</Link>
-              <Link href="/about#method">Learn</Link>
-              <Link href="/about">About</Link>
-            </div>
-          </details>
-        </nav>
-      </header>
-
-      {/* 4. Full-viewport Hero Section */}
       <main>
+        {/* 3. Hero Section: Centered fixed-aspect 1673:940 stage on desktop, stacked on mobile */}
         <section className={styles.heroSection} aria-label="Hero Introduction">
-          <div className={styles.heroContent}>
-            <HeroText />
+          <div className={styles.stage}>
+            {/* Header: Logo and Nav inside stage */}
+            <header className={styles.stageHeader} role="banner">
+              <Link href="/" className={styles.brandLogo} aria-label="OceanScope AI Home">
+                {/* Circular wave emblem */}
+                <svg
+                  className={styles.logoSvg}
+                  viewBox="0 0 32 32"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <circle cx="16" cy="16" r="14.5" stroke="#1E2A2B" strokeWidth="2" fill="none" />
+                  <path
+                    d="M 6 18 C 9 18, 12 12, 16 12 C 20 12, 21 15, 19 17 C 17 19, 15 17, 16 15"
+                    stroke="#1E2A2B"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
+                  />
+                  <path
+                    d="M 8 22 C 12 22, 16 18, 20 18 C 23 18, 25 20, 24 22"
+                    stroke="#1E2A2B"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
+                  />
+                </svg>
+                <span className={styles.brandText}>OCEANSCOPE AI</span>
+              </Link>
+
+              {/* Desktop Nav: HOME · EXPLORE · DATA · LEARN · ABOUT */}
+              <nav aria-label="Landing navigation" className={styles.stageNav}>
+                <ul className={styles.navLinks}>
+                  <li>
+                    <Link href="/" className={`${styles.navLink} ${styles.navLinkActive}`}>
+                      Home
+                    </Link>
+                  </li>
+                  <li>
+                    <Link href="/explore" className={styles.navLink}>
+                      Explore
+                    </Link>
+                  </li>
+                  <li>
+                    <Link href="/validation" className={styles.navLink}>
+                      Data
+                    </Link>
+                  </li>
+                  <li>
+                    <Link href="/about#method" className={styles.navLink}>
+                      Learn
+                    </Link>
+                  </li>
+                  <li>
+                    <Link href="/about" className={styles.navLink}>
+                      About
+                    </Link>
+                  </li>
+                </ul>
+
+                {/* Mobile Collapsible Details Menu (< 768 px) */}
+                <details className={styles.mobileMenu}>
+                  <summary className={styles.mobileMenuSummary} aria-label="Toggle navigation menu">
+                    MENU ▾
+                  </summary>
+                  <div className={styles.mobileDropdown}>
+                    <Link href="/">Home</Link>
+                    <Link href="/explore">Explore</Link>
+                    <Link href="/validation">Data</Link>
+                    <Link href="/about#method">Learn</Link>
+                    <Link href="/about">About</Link>
+                  </div>
+                </details>
+              </nav>
+            </header>
+
+            {/* Hero Text Block */}
+            <div className={styles.heroText}>
+              <HeroText />
+            </div>
+
+            {/* Background scene art, callouts, and depth ruler */}
+            <HeroScene />
           </div>
-          <HeroScene />
         </section>
 
-        {/* 5. Below the Fold: How it works */}
+        {/* 4. Below the Fold: How it works */}
         <HowItWorks />
       </main>
 
-      {/* 6. Footer */}
+      {/* 5. Footer */}
       <LandingFooter />
 
-      {/* 7. Dive Transition Overlay */}
+      {/* 6. Dive Transition Overlay */}
       <DiveOverlay />
     </div>
   );

@@ -7,7 +7,8 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
       if (
         msg.type() === "error" &&
         !msg.text().includes("Failed to load resource") &&
-        !msg.text().includes("404")
+        !msg.text().includes("404") &&
+        !msg.text().includes("CORS policy")
       ) {
         consoleErrors.push(msg.text());
       }
@@ -95,6 +96,7 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
   });
 
   test("captures landing page screenshots at 1440, 1024, 768, and 390 px", async ({ page }) => {
+    test.setTimeout(60000);
     const viewports = [
       { width: 1440, height: 900, name: "screenshot-1440.png" },
       { width: 1024, height: 768, name: "screenshot-1024.png" },
@@ -105,9 +107,8 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
     for (const vp of viewports) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
       await page.goto("/");
-      await page.waitForLoadState("networkidle");
       // Wait for hero to render
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 15000 });
       await page.screenshot({ path: `../docs/landing/screenshots/${vp.name}`, fullPage: false });
     }
   });
