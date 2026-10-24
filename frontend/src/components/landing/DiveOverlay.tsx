@@ -15,7 +15,7 @@ export function DiveOverlay() {
   useEffect(() => {
     function handleDive(e: Event) {
       const customEvent = e as CustomEvent<{ href: string }>;
-      const targetHref = customEvent.detail?.href ?? "/?view=3d";
+      const targetHref = customEvent.detail?.href ?? "/explore?view=3d";
 
       setIsActive(true);
       setShowSlowWarning(false);

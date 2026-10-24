@@ -24,7 +24,7 @@ export function Landing() {
 
       {/* 3. Header Row */}
       <header className={styles.headerRow} role="banner">
-        <Link href="/welcome" className={styles.brandLogo} aria-label="OceanScope AI Home">
+        <Link href="/" className={styles.brandLogo} aria-label="OceanScope AI Home">
           {/* Wave Logo Mark */}
           <svg
             width="28"
@@ -54,12 +54,12 @@ export function Landing() {
         <nav aria-label="Landing navigation">
           <ul className={styles.navLinks}>
             <li>
-              <Link href="/welcome" className={`${styles.navLink} ${styles.navLinkActive}`}>
+              <Link href="/" className={`${styles.navLink} ${styles.navLinkActive}`}>
                 Home
               </Link>
             </li>
             <li>
-              <Link href="/" className={styles.navLink}>
+              <Link href="/explore" className={styles.navLink}>
                 Explore
               </Link>
             </li>
@@ -86,8 +86,8 @@ export function Landing() {
               MENU ▾
             </summary>
             <div className={styles.mobileDropdown}>
-              <Link href="/welcome">Home</Link>
-              <Link href="/">Explore</Link>
+              <Link href="/">Home</Link>
+              <Link href="/explore">Explore</Link>
               <Link href="/validation">Data</Link>
               <Link href="/about#method">Learn</Link>
               <Link href="/about">About</Link>

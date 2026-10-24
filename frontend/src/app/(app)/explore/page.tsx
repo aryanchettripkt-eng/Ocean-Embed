@@ -6,29 +6,29 @@ import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle } from "lucide-react";
 
-import { useArgoProfiles, useMap, useMeta, useSection } from "../lib/api/hooks";
-import { apiClient } from "../lib/api/client";
-import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../lib/url-state";
-import { DatePicker } from "../components/controls/DatePicker";
-import { DepthSelector } from "../components/controls/DepthSelector";
-import { FieldToggle, type FieldType } from "../components/controls/FieldToggle";
-import { Colorbar } from "../components/map/Colorbar";
-import { CoverageLegend } from "../components/map/CoverageLegend";
-import { Banner } from "../components/common/Banner";
-import { Loading } from "../components/common/Loading";
-import { ErrorState } from "../components/common/ErrorState";
-import { ErrorBoundary } from "../components/common/ErrorBoundary";
-import { formatCoord } from "../lib/format";
-import { getWallColorRange } from "../components/map3d/depthScale";
-import { ViewSwitch } from "../components/map3d/ViewSwitch";
-import { DepthRail } from "../components/map3d/DepthRail";
+import { useArgoProfiles, useMap, useMeta, useSection } from "../../../lib/api/hooks";
+import { apiClient } from "../../../lib/api/client";
+import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
+import { DatePicker } from "../../../components/controls/DatePicker";
+import { DepthSelector } from "../../../components/controls/DepthSelector";
+import { FieldToggle, type FieldType } from "../../../components/controls/FieldToggle";
+import { Colorbar } from "../../../components/map/Colorbar";
+import { CoverageLegend } from "../../../components/map/CoverageLegend";
+import { Banner } from "../../../components/common/Banner";
+import { Loading } from "../../../components/common/Loading";
+import { ErrorState } from "../../../components/common/ErrorState";
+import { ErrorBoundary } from "../../../components/common/ErrorBoundary";
+import { formatCoord } from "../../../lib/format";
+import { getWallColorRange } from "../../../components/map3d/depthScale";
+import { ViewSwitch } from "../../../components/map3d/ViewSwitch";
+import { DepthRail } from "../../../components/map3d/DepthRail";
 
-// MapView is statically included so MapLibre is counted directly in the initial / budget (PRD_FRONTEND §4)
-import { MapView } from "../components/map/MapView";
+// MapView is statically included so MapLibre is counted directly in the bundle budget (PRD_FRONTEND §4)
+import { MapView } from "../../../components/map/MapView";
 
 // DetailsPanel is displayed only when a point is clicked; charts (Recharts) load on-demand
 const DetailsPanel = dynamic(
-  () => import("../components/panels/DetailsPanel").then((mod) => mod.DetailsPanel),
+  () => import("../../../components/panels/DetailsPanel").then((mod) => mod.DetailsPanel),
   {
     ssr: false,
     loading: () => (
@@ -67,7 +67,7 @@ function ExplorerContent() {
   // Sync URL query string when state changes
   useEffect(() => {
     const params = buildExplorerSearchParams(state);
-    const newUrl = `/?${params.toString()}`;
+    const newUrl = `/explore?${params.toString()}`;
     window.history.replaceState(null, "", newUrl);
   }, [state]);
 

@@ -687,7 +687,7 @@ export function MapView({
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
     };
-  }, [depth_m, view]);
+  }, [depth_m, view, mapLoaded]);
 
   // Update selection marker
   useEffect(() => {
@@ -757,6 +757,7 @@ export function MapView({
   return (
     <div
       className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-slate-950 transition-colors ${className}`}
+      style={{ viewTransitionName: view === "3d" ? "ocean-section" : undefined }}
     >
       <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
 

@@ -2,19 +2,20 @@ import React from "react";
 import Image from "next/image";
 import { CoastLandscape } from "./CoastLandscape";
 import { Waves } from "./Waves";
-import { ThermalBand } from "./ThermalBand";
+import { OceanBand } from "./OceanBand";
 import { SeabedReef } from "./SeabedReef";
 import { DepthRuler } from "./DepthRuler";
 import { Callout } from "./Callout";
 import styles from "./landing.module.css";
 
 /**
- * Woodblock Hero Scene (PRD_FRONTEND §0, §2, PLAN_LANDING §4, §5).
- * Composed entirely of hand-crafted Japanese ukiyo-e woodblock vector SVG layers:
+ * Woodblock Hero Scene (PRD_FRONTEND §0, §2, PLAN_LANDING §4, §5, §7).
+ * Composed of hand-crafted Japanese ukiyo-e woodblock vector SVG layers
+ * with real /section data cross-section overlay in Phase C:
  * - CoastLandscape: Sky, sun, mountains, coastal promontory, pagoda, and pine framing
  * - Satellite: Observation satellite with telemetry scanning beam
  * - Waves: Great Wave foam claws and surging sea surface
- * - ThermalBand: Subsurface temperature cross-section with DepthRuler
+ * - OceanBand: Real /section data canvas with ThermalBand vector fallback and DepthRuler
  * - SeabedReef: Abyssal rocky ledges, golden coral fans, kelp, and pelagic fish school
  * - ArgoFloat: Scientific profiling float bobbing in the water column
  */
@@ -55,7 +56,7 @@ export function HeroScene() {
 
         {/* Subsurface thermal band cross-section with Depth Ruler */}
         <div className={styles.oceanBandContainer}>
-          <ThermalBand />
+          <OceanBand />
           <DepthRuler />
         </div>
 

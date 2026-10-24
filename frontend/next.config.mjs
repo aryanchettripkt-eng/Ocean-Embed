@@ -2,6 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
+    viewTransition: true,
     optimizePackageImports: ["lucide-react", "recharts"],
   },
 };

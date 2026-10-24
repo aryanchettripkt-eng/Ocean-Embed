@@ -11,7 +11,7 @@ export function HeroText() {
         A quieter way to see the hidden temperature of the ocean.
       </p>
       <div className={styles.ctaContainer}>
-        <ExploreLink href="/" />
+        <ExploreLink />
       </div>
     </div>
   );

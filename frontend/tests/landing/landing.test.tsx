@@ -8,8 +8,9 @@ import { ExploreLink } from "../../src/components/landing/ExploreLink";
 import { HowItWorks } from "../../src/components/landing/HowItWorks";
 import { LandingFooter } from "../../src/components/landing/LandingFooter";
 import { Banner } from "../../src/components/common/Banner";
+import { OceanBand } from "../../src/components/landing/OceanBand";
 import * as hooks from "../../src/lib/api/hooks";
-import type { MetaResponse } from "../../src/lib/api/client";
+import type { MetaResponse, SectionResponse } from "../../src/lib/api/client";
 
 // Mock next/navigation
 const mockPush = vi.fn();
@@ -19,7 +20,7 @@ vi.mock("next/navigation", () => ({
     push: mockPush,
     prefetch: mockPrefetch,
   }),
-  usePathname: () => "/welcome",
+  usePathname: () => "/",
 }));
 
 // Mock next/font/google for Vitest environment
@@ -152,8 +153,8 @@ describe("Landing Page Component Suite (§10)", () => {
     const learnLinks = screen.getAllByRole("link", { name: "Learn" });
     const aboutLinks = screen.getAllByRole("link", { name: "About" });
 
-    expect(homeLinks[0]).toHaveAttribute("href", "/welcome");
-    expect(exploreLinks[0]).toHaveAttribute("href", "/");
+    expect(homeLinks[0]).toHaveAttribute("href", "/");
+    expect(exploreLinks[0]).toHaveAttribute("href", "/explore");
     expect(dataLinks[0]).toHaveAttribute("href", "/validation");
     expect(learnLinks[0]).toHaveAttribute("href", "/about#method");
     expect(aboutLinks[0]).toHaveAttribute("href", "/about");
@@ -294,5 +295,47 @@ describe("Landing Page Component Suite (§10)", () => {
     expect(footer).toBeInTheDocument();
     expect(footer.textContent).toContain("Copernicus Marine Service");
     expect(footer.textContent).toContain("ARGO float");
+  });
+
+  it("OceanBand renders fallback vector band and real data caption when section arrives", () => {
+    const mockSection: SectionResponse = {
+      axis: "lon",
+      date: "2020-01-10",
+      depths_m: [0.5, 100, 500, 1000],
+      field: "pred",
+      fixed: { lat: 15.0 },
+      positions: [60.0, 70.0, 80.0],
+      run_id: "test-run",
+      synthetic: true,
+      units: "degC",
+      values: [
+        [28.5, 28.2, 28.0],
+        [24.0, 23.5, 23.0],
+        [12.0, 11.5, 11.0],
+        [6.0, 5.8, 5.5],
+      ],
+      coverage: [1, 1, 1],
+    };
+
+    vi.spyOn(hooks, "useMeta").mockReturnValue({
+      data: mockMeta,
+      isLoading: false,
+    } as ReturnType<typeof hooks.useMeta>);
+
+    vi.spyOn(hooks, "useSection").mockReturnValue({
+      data: mockSection,
+      isLoading: false,
+    } as ReturnType<typeof hooks.useSection>);
+
+    renderWithClient(<OceanBand />);
+
+    // Canvas exists
+    expect(screen.getByTestId("ocean-band-canvas")).toBeInTheDocument();
+
+    // Caption exists and reflects real data parameters
+    const caption = screen.getByTestId("ocean-band-caption");
+    expect(caption).toBeInTheDocument();
+    expect(caption.textContent).toContain("Model prediction · 2020-01-10 · section at 15.0°N");
+    expect(caption.textContent).toContain("Synthetic demo data");
   });
 });

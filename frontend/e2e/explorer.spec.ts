@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
-  test("loads explorer, displays synthetic banner, and inspects controls", async ({ page }) => {
-    await page.goto("/");
+test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7, PLAN_LANDING §8)", () => {
+  test("loads explorer at /explore, displays synthetic banner, and inspects controls", async ({ page }) => {
+    await page.goto("/explore");
 
     // 1. Synthetic banner should be visible
     const banner = page.getByRole("alert").filter({ hasText: /synthetic demo data/i });
@@ -18,8 +18,15 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
     await expect(page.getByRole("button", { name: "Model prediction" })).toBeVisible();
   });
 
+  test("redirects legacy root links with explorer params to /explore (PLAN_LANDING §8)", async ({ page }) => {
+    await page.goto("/?date=2020-01-05&depth=100");
+    await expect(page).toHaveURL(/\/explore\?.*date=2020-01-05/);
+    await expect(page).toHaveURL(/depth=100/);
+    await expect(page.locator("text=Field")).toBeVisible({ timeout: 15000 });
+  });
+
   test("toggles theme between dark and light modes", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/explore");
     const themeBtn = page.locator('button[aria-label="Toggle dark/light theme"]');
     await expect(themeBtn).toBeVisible({ timeout: 15000 });
 
@@ -36,7 +43,7 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
   });
 
   test("updates URL query parameters when changing depth and field without skipping", async ({ page }) => {
-    await page.goto("/?date=2020-01-05");
+    await page.goto("/explore?date=2020-01-05");
     await expect(page.locator("text=Field")).toBeVisible({ timeout: 15000 });
 
     // Click on depth preset 100 m
@@ -60,7 +67,7 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
   });
 
   test("steps date using date picker buttons and updates URL", async ({ page }) => {
-    await page.goto("/?date=2020-01-05");
+    await page.goto("/explore?date=2020-01-05");
     await expect(page.locator("text=Field")).toBeVisible({ timeout: 15000 });
 
     // Verify initial date input
@@ -88,13 +95,17 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
   });
 
   test("clicks on map canvas to select a cell and opens details panel", async ({ page }) => {
-    await page.goto("/?date=2020-01-05&depth=100&field=pred");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
+    await page.goto("/explore?date=2020-01-05&depth=100&field=pred");
     await expect(page.locator("text=Field")).toBeVisible({ timeout: 15000 });
     await expect(page.locator("text=Model Predicted Temperature")).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("text=Fetching temperature slice...")).not.toBeVisible({ timeout: 15000 });
 
-    // Wait for the map canvas to load
+    // Wait for the map canvas to load and stabilize
     const mapCanvas = page.locator("canvas.maplibregl-canvas");
     await expect(mapCanvas).toBeVisible({ timeout: 15000 });
+    await page.waitForTimeout(1500);
 
     const box = await mapCanvas.boundingBox();
     expect(box).not.toBeNull();
@@ -118,7 +129,7 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
 
   test("restores state from shareable URL and opens details panel for cell", async ({ page }) => {
     // Navigate with complete state query params
-    await page.goto("/?date=2020-01-05&depth=100&field=pred&lat=12.500&lon=65.500");
+    await page.goto("/explore?date=2020-01-05&depth=100&field=pred&lat=12.500&lon=65.500");
 
     // Details panel should be open with cell profile and time series
     await expect(page.locator("text=Vertical Temperature Profile")).toBeVisible({ timeout: 15000 });
@@ -156,9 +167,8 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7)", () => {
   });
 
   test("switches to 3D cutaway view, displays 3D controls, and verifies depth rail", async ({ page }) => {
-    // 3D view on desktop viewport (>= 768px)
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/?date=2020-01-05&view=3d");
+    await page.goto("/explore?date=2020-01-05&view=3d");
 
     // View switch button should reflect 3D Cutaway
     const btn3D = page.getByRole("button", { name: /3D Cutaway/i });

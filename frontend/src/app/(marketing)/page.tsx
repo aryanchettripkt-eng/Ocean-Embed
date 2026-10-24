@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     title: "OceanScope AI — Beneath the Surface",
     description:
       "AI-powered 3D subsurface ocean temperature reconstruction for the North Indian Ocean.",
-    url: "/welcome",
+    url: "/",
     siteName: "OceanScope AI",
     images: [
       {
@@ -32,18 +32,6 @@ export const metadata: Metadata = {
   },
 };
 
-export default function WelcomePage() {
-  return (
-    <>
-      <style
-        dangerouslySetInnerHTML={{
-          __html: `
-            header.sticky { display: none !important; }
-            html, body { overflow-x: hidden !important; max-width: 100vw !important; }
-          `,
-        }}
-      />
-      <Landing />
-    </>
-  );
+export default function LandingPage() {
+  return <Landing />;
 }

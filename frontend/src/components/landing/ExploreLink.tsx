@@ -19,14 +19,14 @@ export function ExploreLink({
 }: ExploreLinkProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [targetHref, setTargetHref] = useState(href ?? "/?view=3d");
+  const [targetHref, setTargetHref] = useState(href ?? "/explore?view=3d");
 
-  // Determine target href based on desktop vs mobile (defaults to /?view=3d on desktop, / on mobile)
+  // Determine target href based on desktop vs mobile (defaults to /explore?view=3d on desktop, /explore on mobile)
   useEffect(() => {
     if (href) {
       setTargetHref(href);
     } else if (typeof window !== "undefined") {
-      setTargetHref(window.innerWidth < 768 ? "/" : "/?view=3d");
+      setTargetHref(window.innerWidth < 768 ? "/explore" : "/explore?view=3d");
     }
   }, [href]);
 
