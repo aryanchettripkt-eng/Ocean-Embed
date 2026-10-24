@@ -140,7 +140,7 @@ async function generateOg() {
   console.log(`og.png: ${buffer.length} bytes`);
 }
 
-// 4. Generate scene-{640,1024,1600,2400}.{avif,webp} from public/landing/src/scene-clean.png
+// 4. Generate scene-{640,1024,1600,2400,3200}.{avif,webp} from public/landing/src/scene-clean.png
 async function generateSceneAssets() {
   const srcFile = path.join(srcDir, 'scene-clean.png');
   if (!fs.existsSync(srcFile)) {
@@ -148,23 +148,29 @@ async function generateSceneAssets() {
     process.exit(1);
   }
 
-  const widths = [640, 1024, 1600, 2400];
-  for (const w of widths) {
-    const h = Math.round(w * 940 / 1673);
+  const meta = await sharp(srcFile).metadata();
+  const sourceWidth = meta.width || 2400;
 
-    // AVIF q=50
+  const candidateWidths = [640, 1024, 1600, 2400, 3200];
+  // Never upscale: only include widths <= sourceWidth
+  const widths = candidateWidths.filter((w) => w <= sourceWidth);
+
+  for (const w of widths) {
+    const h = Math.round((w * 940) / 1673);
+
+    // AVIF q=60
     const avifBuf = await sharp(srcFile)
       .resize(w, h, { kernel: 'lanczos3' })
-      .avif({ quality: 50 })
+      .avif({ quality: 60 })
       .toBuffer();
     const avifPath = path.join(outDir, `scene-${w}.avif`);
     fs.writeFileSync(avifPath, avifBuf);
     console.log(`scene-${w}.avif: ${avifBuf.length} bytes (${Math.round(avifBuf.length / 1024)} KB)`);
 
-    // WebP q=72
+    // WebP q=80
     const webpBuf = await sharp(srcFile)
       .resize(w, h, { kernel: 'lanczos3' })
-      .webp({ quality: 72 })
+      .webp({ quality: 80 })
       .toBuffer();
     const webpPath = path.join(outDir, `scene-${w}.webp`);
     fs.writeFileSync(webpPath, webpBuf);

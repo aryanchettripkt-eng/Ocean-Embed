@@ -1,4 +1,6 @@
-import React from "react";
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Banner } from "../common/Banner";
 import { HeroText } from "./HeroText";
@@ -10,24 +12,50 @@ import { pixelifySans, ibmPlexMono } from "./fonts";
 import styles from "./landing.module.css";
 
 export function Landing() {
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const [bannerH, setBannerH] = useState<number>(32);
+
+  // Measure the banner's real height dynamically and set --banner-h
+  useEffect(() => {
+    if (!bannerRef.current) return;
+    const updateH = () => {
+      if (bannerRef.current) {
+        const height = Math.round(bannerRef.current.getBoundingClientRect().height);
+        if (height > 0) {
+          setBannerH(height);
+        }
+      }
+    };
+    updateH();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(updateH);
+      observer.observe(bannerRef.current);
+      return () => observer.disconnect();
+    }
+  }, []);
+
   return (
     <div
       className={`${styles.landing} ${pixelifySans.variable} ${ibmPlexMono.variable}`}
+      style={{ "--banner-h": `${bannerH}px` } as React.CSSProperties}
     >
       {/* 1. Paper grain noise overlay (pointer-events: none) */}
       <div className={styles.grainOverlay} aria-hidden="true" />
 
       {/* 2. Synthetic data warning banner */}
-      <div className={styles.bannerWrapper}>
+      <div ref={bannerRef} className={styles.bannerWrapper}>
         <Banner type="synthetic" />
       </div>
 
       <main>
-        {/* 3. Hero Section: Centered fixed-aspect 1673:940 stage on desktop, stacked on mobile */}
+        {/* 3. Hero Section: covers the full screen viewport height */}
         <section className={styles.heroSection} aria-label="Hero Introduction">
-          <div className={styles.stage}>
-            {/* Header: Logo and Nav inside stage */}
-            <header className={styles.stageHeader} role="banner">
+          {/* Sibling Layer 1: Art Stage (art + callouts + depth ruler) */}
+          <HeroScene />
+
+          {/* Sibling Layer 2: Overlay UI (Header and Hero Text positioned over the hero) */}
+          <div className={styles.heroOverlay}>
+            <header className={styles.heroHeader} role="banner">
               <Link href="/" className={styles.brandLogo} aria-label="OceanScope AI Home">
                 {/* Circular wave emblem */}
                 <svg
@@ -59,7 +87,7 @@ export function Landing() {
               </Link>
 
               {/* Desktop Nav: HOME · EXPLORE · DATA · LEARN · ABOUT */}
-              <nav aria-label="Landing navigation" className={styles.stageNav}>
+              <nav aria-label="Landing navigation" className={styles.heroNav}>
                 <ul className={styles.navLinks}>
                   <li>
                     <Link href="/" className={`${styles.navLink} ${styles.navLinkActive}`}>
@@ -108,9 +136,6 @@ export function Landing() {
             <div className={styles.heroText}>
               <HeroText />
             </div>
-
-            {/* Background scene art, callouts, and depth ruler */}
-            <HeroScene />
           </div>
         </section>
 
