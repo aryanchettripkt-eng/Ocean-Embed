@@ -18,7 +18,6 @@ import pytest
 import xarray as xr
 
 from oceanscope_ml.data.preprocess import (
-    generate_synthetic_raw_sample,
     run_preprocessing,
 )
 from oceanscope_ml.data.reduce import TargetGrid, reduce_armor3d
@@ -31,6 +30,7 @@ from oceanscope_ml.models.baselines import (
     fit_ridge_baseline,
     run_baselines,
 )
+from tests.synthetic_data import generate_synthetic_raw_sample
 
 
 class MockConfig:
@@ -81,11 +81,16 @@ class MockConfig:
         class DummyTrain:
             seed = 42
 
+        class DummyBaselines:
+            max_train_samples = 500_000
+            ridge_alpha = 1.0
+
         self.region = DummyRegion()
         self.grid = DummyGrid()
         self.splits = DummySplits()
         self.paths = DummyPaths()
         self.train = DummyTrain()
+        self.baselines = DummyBaselines()
         self.raw_dict = {
             "project": self.project,
             "dataset_version": self.dataset_version,
@@ -277,6 +282,50 @@ def test_run_baselines_end_to_end(
     assert len(df_c) == 16
     assert len(df_r) == 16
     assert list(df_c.columns) == list(df_r.columns)
+    # PRD_AI_ML §5.6 & REVIEW_P3 A7: Climatology and Ridge MUST evaluate on exact same cells
+    assert (df_c["n"] == df_r["n"]).all()
+
+
+def test_baselines_missing_dates_raises_no_fallback(
+    test_processed_store: tuple[Path, MockConfig],
+) -> None:
+    """Test that missing train or val dates raise ValueError rather than falling back to 70/30."""
+    store_path, cfg = test_processed_store
+
+    # Point train split to dates not in store (store has 2019-01-01..05)
+    cfg.splits.train = ["2018-01-01", "2018-01-05"]
+    with pytest.raises(ValueError, match="No training dates found"):
+        run_baselines(config=cfg, store_path=store_path)  # type: ignore[arg-type]
+
+    # Point val split to dates not in store
+    cfg.splits.train = ["2019-01-01", "2019-01-03"]
+    cfg.splits.val = ["2018-01-01", "2018-01-05"]
+    with pytest.raises(ValueError, match="No validation dates found"):
+        run_baselines(config=cfg, store_path=store_path)  # type: ignore[arg-type]
+
+
+def test_baselines_empty_depth_records_nan(
+    test_processed_store: tuple[Path, MockConfig],
+) -> None:
+    """Test that depths with zero valid cells record NaN rather than fabricated 0.0."""
+    store_path, cfg = test_processed_store
+    ds = xr.open_zarr(store_path)
+
+    # Invalidate all cells at depth index 2 (9.573 m)
+    ds_mod = ds.copy(deep=True)
+    target_v = ds_mod["target_valid"].values.copy()
+    target_v[:, 2, :, :] = False
+    ds_mod["target_valid"].values = target_v
+
+    val_dates = pd.date_range("2019-01-04", periods=2, freq="D")
+    df_clim = evaluate_climatology_baseline(ds_mod, val_dates, cfg.depths_m)
+
+    row_depth2 = df_clim[df_clim["depth_m"] == cfg.depths_m[2]].iloc[0]
+    # Because target_valid is False at depth 2, n for that depth must be 0 and rmse_c must be NaN
+    assert row_depth2["n"] == 0
+    assert np.isnan(row_depth2["rmse_c"])
+    assert np.isnan(row_depth2["mae_c"])
+    assert np.isnan(row_depth2["bias_c"])
 
 
 def test_no_test_leakage_in_baselines(

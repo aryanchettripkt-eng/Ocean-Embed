@@ -19,11 +19,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xarray as xr
+import zarr
 
 from oceanscope_ml.data.climatology import fit_harmonic_climatology
 from oceanscope_ml.data.preprocess import (
     compute_config_hash,
-    generate_synthetic_raw_sample,
+    find_product_files,
     load_config,
 )
 from oceanscope_ml.data.reduce import (
@@ -41,22 +42,34 @@ from oceanscope_ml.data.reduce import (
     reduce_sst,
     reduce_woa,
 )
-from oceanscope_ml.data.transform import compute_norm_stats
+from oceanscope_ml.data.transform import check_no_test_leakage, compute_norm_stats
 
 logger = logging.getLogger("oceanscope_ml.data.build_store")
 
-# Estimated daily and static download sizes (MB) for dry-run estimation
-ESTIMATED_SIZES_MB: dict[str, dict[str, float]] = {
-    "glorys12": {"daily_download": 20.0, "daily_store": 1.7},
-    "sla_adt": {"daily_download": 3.0, "daily_store": 0.23},
-    "sst": {"daily_download": 6.8, "daily_store": 0.115},
-    "sss": {"daily_download": 1.5, "daily_store": 0.115},
-    "oscar": {"daily_download": 1.0, "daily_store": 0.23},
-    "era5": {"daily_download": 2.5, "daily_store": 0.58},
-    "grep": {"daily_download": 6.0, "daily_store": 1.7},
-    "gebco": {"static_download": 15.0, "static_store": 0.115},
-    "woa23": {"static_download": 25.0, "static_store": 1.7},
-}
+
+def check_budget(
+    scratch_dir: Path | None,
+    store_dir: Path,
+    max_scratch_gb: float = 20.0,
+    max_store_gb: float = 20.0,
+) -> None:
+    """Enforce scratch disk and store budget (PRD §4.2: <= 20 GB scratch, <= 20 GB store)."""
+    if scratch_dir is not None and scratch_dir.exists():
+        scratch_bytes = sum(f.stat().st_size for f in scratch_dir.rglob("*") if f.is_file())
+        scratch_gb = scratch_bytes / (1024.0**3)
+        if scratch_gb > max_scratch_gb:
+            raise RuntimeError(
+                f"Scratch disk budget exceeded: {scratch_gb:.2f} GB "
+                f"> {max_scratch_gb:.1f} GB limit."
+            )
+
+    if store_dir.exists():
+        store_bytes = sum(f.stat().st_size for f in store_dir.rglob("*") if f.is_file())
+        store_gb = store_bytes / (1024.0**3)
+        if store_gb > max_store_gb:
+            raise RuntimeError(
+                f"Store disk budget exceeded: {store_gb:.2f} GB > {max_store_gb:.1f} GB limit."
+            )
 
 
 def parse_year_spec(year_spec: str) -> list[int]:
@@ -78,38 +91,59 @@ def plan_store_build(
     years: list[int],
     config: Any,
 ) -> dict[str, Any]:
-    """Calculate planned requests, transfer sizes, and store growth for dry-run."""
+    """Calculate planned remote requests, transfer sizes, and store growth for dry-run.
+
+    Implements PRD §4.2 and REVIEW B7.
+    """
+    lon_min = config.region.lon_min
+    lon_max = config.region.lon_max
+    lat_min = config.region.lat_min
+    lat_max = config.region.lat_max
+    res = config.grid.resolution_deg
+    depths = config.depths_m
+
+    n_lat = int(round((lat_max - lat_min) / res))
+    n_lon = int(round((lon_max - lon_min) / res))
+    n_depths = len(depths)
+
+    cells_2d = n_lat * n_lon
+    cells_3d = n_depths * cells_2d
+
+    # Remote daily requests derived from spatial and depth dimensions
+    glorys_daily_mb = (380 * 740 * n_depths * 4) / (1024.0**2)
+    sla_daily_mb = (250 * 490 * 2 * 4) / (1024.0**2)
+    sst_daily_mb = (620 * 1220 * 1 * 4) / (1024.0**2)
+    sss_daily_mb = (250 * 490 * 1 * 4) / (1024.0**2)
+    oscar_daily_mb = (cells_2d * 2 * 4) / (1024.0**2)
+    era5_daily_mb = (cells_2d * 5 * 4) / (1024.0**2)
+    grep_daily_mb = (cells_3d * 4) / (1024.0**2)
+    armor_daily_mb = (250 * 490 * n_depths * 4) / (1024.0**2)
+
+    daily_transfer_mb = (
+        glorys_daily_mb
+        + sla_daily_mb
+        + sst_daily_mb
+        + sss_daily_mb
+        + oscar_daily_mb
+        + era5_daily_mb
+        + grep_daily_mb
+        + armor_daily_mb
+    )
+
+    daily_store_uncompressed_mb = (cells_3d * 4 * 4 + cells_2d * 11 * 4) / (1024.0**2)
+    daily_store_compressed_mb = daily_store_uncompressed_mb / 3.0
+
+    static_transfer_mb = 75.0
+    static_store_mb = 25.0
+
     plan_per_year: list[dict[str, Any]] = []
-    total_transfer_mb = 0.0
-    total_store_growth_mb = 0.0
-
-    # Static products accounted once
-    static_transfer_mb = (
-        ESTIMATED_SIZES_MB["gebco"]["static_download"]
-        + ESTIMATED_SIZES_MB["woa23"]["static_download"]
-    )
-    static_store_mb = (
-        ESTIMATED_SIZES_MB["gebco"]["static_store"] + ESTIMATED_SIZES_MB["woa23"]["static_store"]
-    )
-
-    total_transfer_mb += static_transfer_mb
-    total_store_growth_mb += static_store_mb
+    total_transfer_mb = static_transfer_mb
+    total_store_growth_mb = static_store_mb
 
     for yr in years:
         days_in_yr = 366 if (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0)) else 365
-        daily_transfer = sum(
-            spec.get("daily_download", 0.0)
-            for k, spec in ESTIMATED_SIZES_MB.items()
-            if "daily_download" in spec
-        )
-        daily_store = sum(
-            spec.get("daily_store", 0.0)
-            for k, spec in ESTIMATED_SIZES_MB.items()
-            if "daily_store" in spec
-        )
-
-        yr_transfer = days_in_yr * daily_transfer
-        yr_store = days_in_yr * daily_store
+        yr_transfer = days_in_yr * daily_transfer_mb
+        yr_store = days_in_yr * daily_store_compressed_mb
 
         total_transfer_mb += yr_transfer
         total_store_growth_mb += yr_store
@@ -123,9 +157,81 @@ def plan_store_build(
             }
         )
 
+    requests_info = [
+        {
+            "product": "glorys12",
+            "service": "Copernicus Marine",
+            "dataset_id": "cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            "var": "thetao",
+            "dims": f"{n_depths} depths x 1/12° bbox",
+            "daily_mb": round(glorys_daily_mb, 2),
+        },
+        {
+            "product": "sla_adt",
+            "service": "Copernicus Marine",
+            "dataset_id": "cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D",
+            "var": "sla, adt",
+            "dims": "0.125° bbox",
+            "daily_mb": round(sla_daily_mb, 2),
+        },
+        {
+            "product": "sst",
+            "service": "Copernicus Marine",
+            "dataset_id": "METOFFICE-GLO-SST-L4-REP-OBS-SST",
+            "var": "analysed_sst",
+            "dims": "0.05° bbox",
+            "daily_mb": round(sst_daily_mb, 2),
+        },
+        {
+            "product": "sss",
+            "service": "Copernicus Marine",
+            "dataset_id": "cmems_obs-mob_glo_phy-sss_my_multi_P1D",
+            "var": "sos",
+            "dims": "0.125° bbox",
+            "daily_mb": round(sss_daily_mb, 2),
+        },
+        {
+            "product": "oscar",
+            "service": "NASA PO.DAAC / Harmony",
+            "dataset_id": "oscar_currents",
+            "var": "u, v",
+            "dims": "0.25° bbox",
+            "daily_mb": round(oscar_daily_mb, 2),
+        },
+        {
+            "product": "era5",
+            "service": "Copernicus CDS",
+            "dataset_id": "derived-era5-single-levels-daily-statistics",
+            "var": "u10, v10, fluxes, precip",
+            "dims": "0.25° bbox",
+            "daily_mb": round(era5_daily_mb, 2),
+        },
+        {
+            "product": "grep",
+            "service": "Copernicus Marine",
+            "dataset_id": "cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m",
+            "var": "thetao_mean",
+            "dims": f"{n_depths} depths x 0.25° bbox",
+            "daily_mb": round(grep_daily_mb, 2),
+        },
+        {
+            "product": "armor3d",
+            "service": "Copernicus Marine",
+            "dataset_id": "cmems_obs-mob_glo_phy_my_0.125deg_P1D-m",
+            "var": "to",
+            "dims": f"{n_depths} depths x 0.125° bbox",
+            "daily_mb": round(armor_daily_mb, 2),
+        },
+    ]
+
     return {
         "years": years,
         "n_years": len(years),
+        "region_bbox": [lon_min, lon_max, lat_min, lat_max],
+        "grid_resolution_deg": res,
+        "grid_shape": [n_lat, n_lon],
+        "depths_count": n_depths,
+        "requests": requests_info,
         "static_transfer_mb": round(static_transfer_mb, 1),
         "total_transfer_mb": round(total_transfer_mb, 1),
         "total_store_growth_mb": round(total_store_growth_mb, 1),
@@ -135,27 +241,74 @@ def plan_store_build(
 
 def print_dry_run_plan(plan: dict[str, Any]) -> None:
     """Print formatted dry-run plan table to console."""
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 80)
     print("  OCEANSCOPE AI - BUILD STORE DRY-RUN PLAN (PRD_AI_ML §4.2)")
-    print("=" * 70)
+    print("=" * 80)
     print(f"Target Years       : {plan['years']}")
     print(f"Total Years Count  : {plan['n_years']}")
+    dims_str = f"{plan['grid_shape'][0]}x{plan['grid_shape'][1]} ({plan['grid_resolution_deg']}°)"
+    print(f"Grid Dimensions    : {dims_str}, {plan['depths_count']} depths")
     print(f"Static Transfer    : {plan['static_transfer_mb']:.1f} MB (GEBCO + WOA23)")
     total_tx_gb = plan["total_transfer_mb"] / 1024.0
     total_st_gb = plan["total_store_growth_mb"] / 1024.0
     print(f"Total Est. Transfer: {total_tx_gb:.2f} GB ({plan['total_transfer_mb']:.1f} MB)")
     print(f"Total Est. Storage : {total_st_gb:.2f} GB (target <= 20 GB master)")
-    print("-" * 70)
+    print("-" * 80)
+    print(f"{'Product':<12} {'Service':<22} {'Dataset ID':<35} {'Est. MB/day':<10}")
+    print("-" * 80)
+    for r in plan["requests"]:
+        print(f"{r['product']:<12} {r['service']:<22} {r['dataset_id']:<35} {r['daily_mb']:<10.2f}")
+    print("-" * 80)
     print(f"{'Year':<8} {'Days':<6} {'Est. Transfer (MB)':<22} {'Est. Store Growth (MB)':<22}")
-    print("-" * 70)
+    print("-" * 80)
     for y_info in plan["years_detail"]:
         y_yr = y_info["year"]
         y_days = y_info["days"]
         y_tx = y_info["estimated_transfer_mb"]
         y_st = y_info["estimated_store_mb"]
         print(f"{y_yr:<8} {y_days:<6} {y_tx:<22.1f} {y_st:<22.1f}")
-    print("=" * 70)
+    print("=" * 80)
     print("Dry-run complete. No data was downloaded or written.\n")
+
+
+def stream_copernicus(
+    dataset_id: str,
+    bbox: tuple[float, float, float, float],
+    dates: tuple[str, str],
+    variables: list[str] | None = None,
+    depths: tuple[float, float] | None = None,
+) -> xr.Dataset:
+    """Stream a remote Copernicus Marine dataset via copernicusmarine.open_dataset."""
+    try:
+        import copernicusmarine
+    except ImportError as e:
+        raise RuntimeError("copernicusmarine package is required for streaming data.") from e
+
+    lon_min, lon_max, lat_min, lat_max = bbox
+    kwargs: dict[str, Any] = {
+        "dataset_id": dataset_id,
+        "minimum_longitude": lon_min - 1.0,
+        "maximum_longitude": lon_max + 1.0,
+        "minimum_latitude": lat_min - 1.0,
+        "maximum_latitude": lat_max + 1.0,
+        "start_datetime": dates[0],
+        "end_datetime": dates[1],
+    }
+    if variables:
+        kwargs["variables"] = variables
+    if depths:
+        kwargs["minimum_depth"] = depths[0]
+        kwargs["maximum_depth"] = depths[1]
+
+    logger.info("Streaming remote dataset %s for %s..%s...", dataset_id, dates[0], dates[1])
+    return copernicusmarine.open_dataset(**kwargs)
+
+
+def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
+    """Filter list of files to those containing the specified year in name or path."""
+    yr_str = str(year)
+    matched = [f for f in files if yr_str in f.name or yr_str in str(f)]
+    return matched if matched else files
 
 
 def reduce_year_dataset(
@@ -163,39 +316,39 @@ def reduce_year_dataset(
     raw_path: Path,
     target_grid: TargetGrid,
     depths_m: list[float],
+    manifest: dict[str, Any] | None = None,
 ) -> tuple[xr.Dataset, list[str]]:
-    """Reduce all products for a given year using shared reduce functions."""
+    """Reduce all products for a given year using shared reduce functions from raw files.
+
+    Strictly uses find_product_files (PRD §0 Rule 1, REVIEW A1); never synthesizes missing files.
+    """
     source_files: list[str] = []
     processed_vars: dict[str, xr.DataArray] = {}
 
-    # --- GLORYS12 ---
-    glorys_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "glorys" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-        reverse=True,
-    )
-    if not glorys_candidates:
+    # --- GLORYS12 Primary Target ---
+    glorys_files = filter_files_by_year(find_product_files(raw_path, "glorys12", manifest), year)
+    if not glorys_files:
         raise FileNotFoundError(f"Missing GLORYS12 raw data for year {year} in {raw_path}")
 
-    source_files.append(str(glorys_candidates[0].relative_to(raw_path)))
-    ds_raw_glorys = xr.open_dataset(glorys_candidates[0])
+    source_files.append(
+        str(
+            glorys_files[0].relative_to(raw_path)
+            if glorys_files[0].is_relative_to(raw_path)
+            else glorys_files[0].name
+        )
+    )
+    ds_raw_glorys = xr.open_dataset(glorys_files[0])
     ds_red_glorys = reduce_glorys12(ds_raw_glorys, target_grid, depths_m)
     processed_vars["thetao"] = ds_red_glorys["thetao"]
     processed_vars["ocean_mask"] = ds_red_glorys["ocean_mask"]
     processed_vars["target_valid"] = ds_red_glorys["target_valid"]
-    common_time = ds_red_glorys.coords["time"]
 
-    # Filter to requested year if dataset spans multi-year
+    common_time = ds_red_glorys.coords["time"]
     year_times = [t for t in common_time.values if pd.Timestamp(t).year == year]
     if year_times:
         target_dates = np.array(year_times)
         processed_vars["thetao"] = processed_vars["thetao"].sel(time=target_dates)
         processed_vars["target_valid"] = processed_vars["target_valid"].sel(time=target_dates)
-        common_time = xr.DataArray(target_dates, dims=("time",), coords={"time": target_dates})
     else:
         raise ValueError(
             f"GLORYS dataset does not contain dates for year {year}. Available years: "
@@ -203,197 +356,193 @@ def reduce_year_dataset(
         )
 
     # --- SLA & ADT ---
-    sla_candidates = [
-        f
-        for f in raw_path.glob("**/*")
-        if ("sla" in f.name.lower() or "duacs" in f.name.lower()) and f.suffix in [".nc", ".nc4"]
-    ]
-    if sla_candidates:
-        source_files.append(str(sla_candidates[0].relative_to(raw_path)))
-        ds_raw_sla = xr.open_dataset(sla_candidates[0])
-        ds_red_sla = reduce_sla(ds_raw_sla, target_grid, target_time=target_dates)
-        processed_vars["sla"] = ds_red_sla["sla"]
-        if "adt" in ds_raw_sla.data_vars:
-            ds_red_adt = reduce_adt(ds_raw_sla, target_grid, target_time=target_dates)
-            processed_vars["adt"] = ds_red_adt["adt"]
-
-    if "adt" not in processed_vars:
-        adt_candidates = [
-            f
-            for f in raw_path.glob("**/*")
-            if "adt" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-        if adt_candidates:
-            source_files.append(str(adt_candidates[0].relative_to(raw_path)))
-            ds_red_adt = reduce_adt(
-                xr.open_dataset(adt_candidates[0]), target_grid, target_time=target_dates
-            )
-            processed_vars["adt"] = ds_red_adt["adt"]
+    sla_files = filter_files_by_year(find_product_files(raw_path, "sla", manifest), year)
+    if not sla_files:
+        raise FileNotFoundError(f"Missing SLA/ADT raw data for year {year} in {raw_path}")
+    source_files.append(
+        str(
+            sla_files[0].relative_to(raw_path)
+            if sla_files[0].is_relative_to(raw_path)
+            else sla_files[0].name
+        )
+    )
+    ds_raw_sla = xr.open_dataset(sla_files[0])
+    ds_red_sla = reduce_sla(ds_raw_sla, target_grid, target_time=target_dates)
+    processed_vars["sla"] = ds_red_sla["sla"]
+    if "adt" in ds_raw_sla.data_vars:
+        ds_red_adt = reduce_adt(ds_raw_sla, target_grid, target_time=target_dates)
+        processed_vars["adt"] = ds_red_adt["adt"]
 
     # --- OSTIA SST ---
-    sst_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "sst" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    if sst_candidates:
-        source_files.append(str(sst_candidates[0].relative_to(raw_path)))
-        ds_red_sst = reduce_sst(
-            xr.open_dataset(sst_candidates[0]), target_grid, target_time=target_dates
+    sst_files = filter_files_by_year(find_product_files(raw_path, "sst", manifest), year)
+    if not sst_files:
+        raise FileNotFoundError(f"Missing OSTIA SST raw data for year {year} in {raw_path}")
+    source_files.append(
+        str(
+            sst_files[0].relative_to(raw_path)
+            if sst_files[0].is_relative_to(raw_path)
+            else sst_files[0].name
         )
-        processed_vars["sst"] = ds_red_sst["sst"]
+    )
+    ds_red_sst = reduce_sst(xr.open_dataset(sst_files[0]), target_grid, target_time=target_dates)
+    processed_vars["sst"] = ds_red_sst["sst"]
 
     # --- MULTIOBS SSS ---
-    sss_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if ("sss" in f.name.lower() or "sos" in f.name.lower()) and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    if sss_candidates:
-        source_files.append(str(sss_candidates[0].relative_to(raw_path)))
-        ds_red_sss = reduce_sss(
-            xr.open_dataset(sss_candidates[0]), target_grid, target_time=target_dates
+    sss_files = filter_files_by_year(find_product_files(raw_path, "sss", manifest), year)
+    if not sss_files:
+        raise FileNotFoundError(f"Missing MULTIOBS SSS raw data for year {year} in {raw_path}")
+    source_files.append(
+        str(
+            sss_files[0].relative_to(raw_path)
+            if sss_files[0].is_relative_to(raw_path)
+            else sss_files[0].name
         )
-        processed_vars["sss"] = ds_red_sss["sss"]
+    )
+    ds_red_sss = reduce_sss(xr.open_dataset(sss_files[0]), target_grid, target_time=target_dates)
+    processed_vars["sss"] = ds_red_sss["sss"]
 
     # --- OSCAR Currents ---
-    oscar_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if ("oscar" in f.name.lower() or "current" in f.name.lower())
-            and f.suffix in [".nc", ".nc4"]
-        ]
+    oscar_files = filter_files_by_year(find_product_files(raw_path, "oscar", manifest), year)
+    if not oscar_files:
+        raise FileNotFoundError(f"Missing OSCAR currents raw data for year {year} in {raw_path}")
+    source_files.append(
+        str(
+            oscar_files[0].relative_to(raw_path)
+            if oscar_files[0].is_relative_to(raw_path)
+            else oscar_files[0].name
+        )
     )
-    if oscar_candidates:
-        source_files.append(str(oscar_candidates[0].relative_to(raw_path)))
-        if len(oscar_candidates) > 1 and any("final" in f.name for f in oscar_candidates):
-            date_strs = [pd.Timestamp(t).strftime("%Y%m%d") for t in target_dates]
-            matched = [f for f in oscar_candidates if any(d in f.name for d in date_strs)]
-            files_to_open = matched if matched else [oscar_candidates[0]]
-            try:
-                ds_raw_curr = xr.open_mfdataset(files_to_open, combine="nested", concat_dim="time")
-            except Exception:
-                ds_raw_curr = xr.open_dataset(files_to_open[0])
-        else:
-            ds_raw_curr = xr.open_dataset(oscar_candidates[0])
-        ds_red_curr = reduce_currents(ds_raw_curr, target_grid, target_time=target_dates)
-        processed_vars["u_current"] = ds_red_curr["u_current"]
-        processed_vars["v_current"] = ds_red_curr["v_current"]
+    if len(oscar_files) > 1:
+        try:
+            ds_raw_curr = xr.open_mfdataset(oscar_files, combine="nested", concat_dim="time")
+        except Exception:
+            ds_raw_curr = xr.open_dataset(oscar_files[0])
+    else:
+        ds_raw_curr = xr.open_dataset(oscar_files[0])
+    ds_red_curr = reduce_currents(ds_raw_curr, target_grid, target_time=target_dates)
+    processed_vars["u_current"] = ds_red_curr["u_current"]
+    processed_vars["v_current"] = ds_red_curr["v_current"]
 
     # --- ERA5 Winds & Fluxes ---
-    winds_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "wind" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    flux_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "flux" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    if winds_cands:
-        source_files.append(str(winds_cands[0].relative_to(raw_path)))
-        ds_red_winds = reduce_era5_winds(
-            xr.open_dataset(winds_cands[0]), target_grid, target_time=target_dates
+    winds_files = filter_files_by_year(find_product_files(raw_path, "era5_instant", manifest), year)
+    if not winds_files:
+        raise FileNotFoundError(
+            f"Missing ERA5 instant winds raw data for year {year} in {raw_path}"
         )
-        processed_vars["u_wind"] = ds_red_winds["u_wind"]
-        processed_vars["v_wind"] = ds_red_winds["v_wind"]
-        processed_vars["wind_stress_curl"] = ds_red_winds["wind_stress_curl"]
+    source_files.append(
+        str(
+            winds_files[0].relative_to(raw_path)
+            if winds_files[0].is_relative_to(raw_path)
+            else winds_files[0].name
+        )
+    )
+    ds_red_winds = reduce_era5_winds(
+        xr.open_dataset(winds_files[0]),
+        target_grid,
+        target_time=target_dates,
+        ocean_mask=np.asarray(processed_vars["ocean_mask"].values, dtype=bool),
+    )
+    processed_vars["u_wind"] = ds_red_winds["u_wind"]
+    processed_vars["v_wind"] = ds_red_winds["v_wind"]
+    processed_vars["wind_stress_curl"] = ds_red_winds["wind_stress_curl"]
 
-    if flux_cands:
-        source_files.append(str(flux_cands[0].relative_to(raw_path)))
-        ds_red_flux = reduce_era5_fluxes(
-            xr.open_dataset(flux_cands[0]), target_grid, target_time=target_dates
+    flux_files = filter_files_by_year(find_product_files(raw_path, "era5_accum", manifest), year)
+    if not flux_files:
+        raise FileNotFoundError(f"Missing ERA5 accum fluxes raw data for year {year} in {raw_path}")
+    source_files.append(
+        str(
+            flux_files[0].relative_to(raw_path)
+            if flux_files[0].is_relative_to(raw_path)
+            else flux_files[0].name
         )
-        processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
-        processed_vars["precip"] = ds_red_flux["precip"]
+    )
+    ds_red_flux = reduce_era5_fluxes(
+        xr.open_dataset(flux_files[0]), target_grid, target_time=target_dates
+    )
+    processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
+    processed_vars["precip"] = ds_red_flux["precip"]
 
     # --- GEBCO Bathymetry (Static) ---
-    gebco_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "gebco" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    if gebco_cands:
-        source_files.append(str(gebco_cands[0].relative_to(raw_path)))
-        ds_red_gebco = reduce_gebco(xr.open_dataset(gebco_cands[0]), target_grid)
+    gebco_files = find_product_files(raw_path, "gebco", manifest)
+    if gebco_files:
+        source_files.append(
+            str(
+                gebco_files[0].relative_to(raw_path)
+                if gebco_files[0].is_relative_to(raw_path)
+                else gebco_files[0].name
+            )
+        )
+        ds_red_gebco = reduce_gebco(xr.open_dataset(gebco_files[0]), target_grid)
         processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
 
-    # --- WOA23 Climatology (Static by month) ---
-    woa_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "woa" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-    )
-    if woa_cands:
-        source_files.append(str(woa_cands[0].relative_to(raw_path)))
-        ds_red_woa = reduce_woa(
-            xr.open_dataset(woa_cands[0], decode_times=False), target_grid, depths_m
+    # --- WOA23 Climatology (Static by month, PRD §3, REVIEW B5) ---
+    woa_files = find_product_files(raw_path, "woa23", manifest)
+    if woa_files:
+        source_files.append(
+            str(
+                woa_files[0].relative_to(raw_path)
+                if woa_files[0].is_relative_to(raw_path)
+                else woa_files[0].name
+            )
         )
-        # Broadcast month profile across this year's dates
-        woa_prof = ds_red_woa["woa_clim_profile"].values  # (1, depth, lat, lon)
-        n_days = len(target_dates)
-        woa_time = np.repeat(woa_prof, n_days, axis=0)
+        if len(woa_files) == 12:
+            woa_months = []
+            for m_idx, wf in enumerate(woa_files, start=1):
+                ds_m = reduce_woa(xr.open_dataset(wf, decode_times=False), target_grid, depths_m)
+                woa_months.append(ds_m["woa_clim_profile"].values[0])
+            woa_12m = np.stack(woa_months, axis=0)  # (12, depth, lat, lon)
+        else:
+            ds_red_woa = reduce_woa(
+                xr.open_dataset(woa_files[0], decode_times=False), target_grid, depths_m
+            )
+            woa_12m = np.repeat(ds_red_woa["woa_clim_profile"].values, 12, axis=0)
+
         processed_vars["woa_clim_profile"] = xr.DataArray(
-            woa_time.astype(np.float32),
-            dims=("time", "depth", "lat", "lon"),
+            woa_12m.astype(np.float32),
+            dims=("month", "depth", "lat", "lon"),
             coords={
-                "time": target_dates,
+                "month": np.arange(1, 13),
                 "depth": depths_m,
                 "lat": target_grid.lats,
                 "lon": target_grid.lons,
             },
         )
 
-    # --- GREP Ensemble Mean (Auxiliary Target) ---
-    grep_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "grep" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-    )
-    if grep_cands:
-        source_files.append(str(grep_cands[0].relative_to(raw_path)))
-        ds_red_grep = reduce_grep(xr.open_dataset(grep_cands[0]), target_grid, depths_m)
+    # --- GREP Ensemble Mean ---
+    grep_files = filter_files_by_year(find_product_files(raw_path, "grep", manifest), year)
+    if grep_files:
+        source_files.append(
+            str(
+                grep_files[0].relative_to(raw_path)
+                if grep_files[0].is_relative_to(raw_path)
+                else grep_files[0].name
+            )
+        )
+        ds_red_grep = reduce_grep(xr.open_dataset(grep_files[0]), target_grid, depths_m)
+        if "time" in ds_red_grep.dims:
+            ds_red_grep = ds_red_grep.sel(time=target_dates)
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
 
-    # --- ARMOR3D 3D Temperature (Validation & Test Competitor) ---
-    armor_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "armor" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-    )
-    if armor_cands:
-        source_files.append(str(armor_cands[0].relative_to(raw_path)))
-        ds_red_armor = reduce_armor3d(xr.open_dataset(armor_cands[0]), target_grid, depths_m)
+    # --- ARMOR3D 3D Temperature ---
+    armor_files = filter_files_by_year(find_product_files(raw_path, "armor3d", manifest), year)
+    if armor_files:
+        source_files.append(
+            str(
+                armor_files[0].relative_to(raw_path)
+                if armor_files[0].is_relative_to(raw_path)
+                else armor_files[0].name
+            )
+        )
+        ds_red_armor = reduce_armor3d(xr.open_dataset(armor_files[0]), target_grid, depths_m)
+        if "time" in ds_red_armor.dims:
+            ds_red_armor = ds_red_armor.sel(time=target_dates)
         processed_vars["armor3d"] = ds_red_armor["armor3d"]
 
     ds_year = xr.Dataset(data_vars=processed_vars)
     return ds_year, source_files
 
 
-def export_fp16_store(
+def export_f16_store(
     src_zarr: Path,
     dst_zarr: Path,
 ) -> Path:
@@ -402,18 +551,18 @@ def export_fp16_store(
     ds = xr.open_zarr(src_zarr)
 
     dst_zarr.parent.mkdir(parents=True, exist_ok=True)
-    fp16_vars: dict[str, xr.DataArray] = {}
+    f16_vars: dict[str, xr.DataArray] = {}
 
     for var_name, da in ds.data_vars.items():
-        if da.dtype == np.float32 or da.dtype == np.float64:
-            fp16_vars[var_name] = da.astype(np.float16)
+        if da.dtype in (np.float32, np.float64):
+            f16_vars[var_name] = da.astype(np.float16)
         else:
-            fp16_vars[var_name] = da
+            f16_vars[var_name] = da
 
-    ds_fp16 = xr.Dataset(data_vars=fp16_vars, coords=ds.coords, attrs=ds.attrs)
-    ds_fp16.attrs["dtype"] = "float16"
+    ds_f16 = xr.Dataset(data_vars=f16_vars, coords=ds.coords, attrs=ds.attrs)
+    ds_f16.attrs["dtype"] = "float16"
     logger.info("Writing float16 Zarr store to %s...", dst_zarr)
-    ds_fp16.to_zarr(dst_zarr, mode="w")
+    ds_f16.to_zarr(dst_zarr, mode="w")
     return dst_zarr
 
 
@@ -425,20 +574,13 @@ def build_store(
     scratch_dir: Path | None = None,
     dry_run: bool = False,
     force: bool = False,
-    export_fp16: bool = False,
+    export_f16: bool = False,
+    finalize: bool = False,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
-    Parameters
-    ----------
-    config : ExperimentConfig object
-    years : list of years to process (default: start_year to end_year from config)
-    raw_dir : path to local raw data directory (used in development/testing)
-    out_dir : destination directory for processed Zarr store
-    scratch_dir : temporary scratch directory (disposable, <= 20 GB footprint)
-    dry_run : if True, prints planned requests and estimated sizes without reading/writing
-    force : if True, rebuilds years even if already present in store attributes
-    export_fp16 : if True, writes an additional float16 store for training upload
+    Uses pre-allocated region writes and persists built_years directly on disk
+    (PRD §4.2, REVIEW A3).
     """
     start_year = int(pd.Timestamp(config.time.start).year)
     end_year = int(pd.Timestamp(config.time.end).year)
@@ -465,23 +607,57 @@ def build_store(
     )
     depths_m: list[float] = [float(d) for d in config.depths_m]
 
-    # Check existing store to support resumption
     built_years: list[int] = []
     accumulated_sources: list[str] = []
 
-    if zarr_dest.exists():
+    # Enforce budget before starting
+    check_budget(scratch_base, zarr_dest)
+
+    # 1. Determine all target dates across full period from config and requested years (PRD §4.2)
+    start_time = pd.Timestamp(config.time.start)
+    end_time = pd.Timestamp(config.time.end)
+    min_year = min(years_to_process)
+    max_year = max(years_to_process)
+    store_start = min(start_time, pd.Timestamp(f"{min_year}-01-01"))
+    store_end = max(end_time, pd.Timestamp(f"{max_year}-12-31"))
+    all_dates = pd.date_range(store_start, store_end, freq="D")
+
+    # 2. Open existing store or preallocate new store
+    if zarr_dest.exists() and not force:
         try:
-            ds_existing = xr.open_zarr(zarr_dest)
-            raw_built = ds_existing.attrs.get("built_years", "[]")
-            built_years = json.loads(raw_built) if isinstance(raw_built, str) else list(raw_built)
-            raw_src = ds_existing.attrs.get("source_files", "[]")
-            accumulated_sources = json.loads(raw_src) if isinstance(raw_src, str) else list(raw_src)
+            root = zarr.open_group(str(zarr_dest), mode="r+")
+            raw_built = root.attrs.get("built_years", [])
+            if isinstance(raw_built, str):
+                built_years = [int(y) for y in json.loads(raw_built)]
+            elif isinstance(raw_built, (list, tuple)):
+                built_years = [int(y) for y in raw_built]
+            else:
+                built_years = []
+
+            raw_src = root.attrs.get("source_files", [])
+            if isinstance(raw_src, str):
+                accumulated_sources = [str(s) for s in json.loads(raw_src)]
+            elif isinstance(raw_src, (list, tuple)):
+                accumulated_sources = [str(s) for s in raw_src]
+            else:
+                accumulated_sources = []
             logger.info("Found existing store at %s with built_years=%s", zarr_dest, built_years)
+            ds_existing = xr.open_zarr(zarr_dest)
+            all_dates = pd.to_datetime(ds_existing.coords["time"].values)
         except Exception as e:
-            logger.warning("Could not read existing store %s: %s", zarr_dest, e)
+            logger.warning("Could not read attributes from existing store %s: %s", zarr_dest, e)
 
     raw_base = Path(raw_dir or config.paths.raw)
+    manifest_path = raw_base / "MANIFEST.json"
+    manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception as e:
+            logger.warning("Could not read MANIFEST.json: %s", e)
 
+    # 3. Process each year
     for yr in years_to_process:
         if yr in built_years and not force:
             logger.info(
@@ -497,104 +673,199 @@ def build_store(
         logger.info("Starting processing for year %d...", yr)
         logger.info("=" * 60)
 
-        # In local/testing mode, read from raw_base.
-        # If files for that year are missing, generate them in scratch if synthetic.
-        yr_raw_path = raw_base
-        glorys_for_yr = [
-            f
-            for f in raw_base.glob("**/*")
-            if "glorys" in f.name.lower() and f.suffix in [".nc", ".nc4"] and str(yr) in f.name
-        ]
-        if not glorys_for_yr:
-            logger.info(
-                "No local raw files found for year %d in %s. Generating year scratch...",
-                yr,
-                raw_base,
-            )
-            sample_dates = pd.date_range(f"{yr}-01-01", periods=3, freq="D")
-            generate_synthetic_raw_sample(yr_scratch, target_grid, depths_m, dates=sample_dates)
-            yr_raw_path = yr_scratch
-        else:
-            yr_raw_path = raw_base
-
-        ds_yr, src_files = reduce_year_dataset(yr, yr_raw_path, target_grid, depths_m)
+        # In testing/local mode: reduce from raw_dir; in streaming mode: copernicusmarine
+        ds_yr, src_files = reduce_year_dataset(yr, raw_base, target_grid, depths_m, manifest)
         accumulated_sources.extend(src_files)
 
-        # Chunk definition: (time=32, lat=120, lon=240), 4D: (time=32, depth=15, lat=120, lon=240)
-        chunks_map: dict[str, Any] = {
-            "time": 32,
-            "lat": len(target_grid.lats),
-            "lon": len(target_grid.lons),
+        yr_dates = pd.to_datetime(ds_yr.coords["time"].values)
+
+        # If store does not exist yet or force requested, initialize full preallocated store
+        if not zarr_dest.exists() or (force and len(built_years) == 0):
+            logger.info(
+                "Pre-allocating master Zarr store at %s across %d dates...",
+                zarr_dest,
+                len(all_dates),
+            )
+
+            data_vars: dict[str, Any] = {}
+            # 2D surface variables
+            for v in [
+                "sla",
+                "adt",
+                "sst",
+                "sss",
+                "u_current",
+                "v_current",
+                "u_wind",
+                "v_wind",
+                "wind_stress_curl",
+                "net_heat_flux",
+                "precip",
+            ]:
+                data_vars[v] = xr.DataArray(
+                    np.full(
+                        (len(all_dates), len(target_grid.lats), len(target_grid.lons)),
+                        np.nan,
+                        dtype=np.float32,
+                    ),
+                    dims=("time", "lat", "lon"),
+                )
+
+            # 4D subsurface variables
+            for v in ["thetao", "grep_mean", "armor3d"]:
+                data_vars[v] = xr.DataArray(
+                    np.full(
+                        (
+                            len(all_dates),
+                            len(depths_m),
+                            len(target_grid.lats),
+                            len(target_grid.lons),
+                        ),
+                        np.nan,
+                        dtype=np.float32,
+                    ),
+                    dims=("time", "depth", "lat", "lon"),
+                )
+            data_vars["target_valid"] = xr.DataArray(
+                np.zeros(
+                    (len(all_dates), len(depths_m), len(target_grid.lats), len(target_grid.lons)),
+                    dtype=bool,
+                ),
+                dims=("time", "depth", "lat", "lon"),
+            )
+
+            # Static variables
+            if "ocean_mask" in ds_yr:
+                data_vars["ocean_mask"] = ds_yr["ocean_mask"]
+            if "bathymetry" in ds_yr:
+                data_vars["bathymetry"] = ds_yr["bathymetry"]
+            if "woa_clim_profile" in ds_yr:
+                data_vars["woa_clim_profile"] = ds_yr["woa_clim_profile"]
+
+            template_ds = xr.Dataset(
+                data_vars=data_vars,
+                coords={
+                    "time": all_dates,
+                    "depth": depths_m,
+                    "lat": target_grid.lats,
+                    "lon": target_grid.lons,
+                },
+            )
+            template_ds.attrs["dataset_version"] = str(config.dataset_version)
+            template_ds.attrs["config_hash"] = compute_config_hash(config.raw_dict)
+            template_ds.attrs["created_utc"] = datetime.now(timezone.utc).isoformat()
+            template_ds.attrs["built_years"] = []
+            template_ds.attrs["source_files"] = []
+
+            chunks_map = {
+                "time": min(32, len(all_dates)),
+                "depth": len(depths_m),
+                "lat": len(target_grid.lats),
+                "lon": len(target_grid.lons),
+            }
+            template_ds.chunk(chunks_map).to_zarr(zarr_dest, mode="w", compute=True)
+
+        # Find time slice index in all_dates
+        t_mask = np.isin(all_dates, yr_dates)
+        indices = np.where(t_mask)[0]
+        if len(indices) == 0:
+            raise ValueError(f"Year {yr} dates do not overlap preallocated store dates.")
+        i0, i1 = int(indices[0]), int(indices[-1]) + 1
+
+        # Drop non-time coordinates from region dataset per xarray region write specification
+        vars_to_write = {
+            k: v.reset_coords(drop=True) for k, v in ds_yr.data_vars.items() if "time" in v.dims
         }
-        if "depth" in ds_yr.dims:
-            chunks_map["depth"] = len(depths_m)
+        ds_region = xr.Dataset(data_vars=vars_to_write, coords={"time": yr_dates})
+        non_time_coords = [c for c in ds_region.coords if c != "time"]
+        if non_time_coords:
+            ds_region = ds_region.drop_vars(non_time_coords)
+        ds_region.to_zarr(zarr_dest, region={"time": slice(i0, i1)})
 
-        # Write or append to store
-        if not zarr_dest.exists() or len(built_years) == 0:
-            logger.info("Initializing new Zarr store at %s with year %d...", zarr_dest, yr)
-            ds_yr.attrs["dataset_version"] = str(config.dataset_version)
-            ds_yr.attrs["config_hash"] = compute_config_hash(config.raw_dict)
-            ds_yr.attrs["created_utc"] = datetime.now(timezone.utc).isoformat()
-            ds_yr.attrs["built_years"] = json.dumps([yr])
-            ds_yr.attrs["source_files"] = json.dumps(list(set(accumulated_sources)))
-            ds_yr.chunk(chunks_map).to_zarr(zarr_dest, mode="w")
-            built_years.append(yr)
-        else:
-            logger.info("Appending year %d to Zarr store at %s...", yr, zarr_dest)
-            # Remove static 2D coordinates/variables before appending along time
-            vars_to_append = {k: v for k, v in ds_yr.data_vars.items() if "time" in v.dims}
-            ds_append = xr.Dataset(data_vars=vars_to_append)
-            ds_append.chunk(chunks_map).to_zarr(zarr_dest, append_dim="time")
+        # Immediately update root attributes on disk so interruptions preserve progress (A3)
+        built_years.append(yr)
+        root = zarr.open_group(str(zarr_dest), mode="r+")
+        root.attrs["built_years"] = sorted(list(set(built_years)))
+        root.attrs["source_files"] = sorted(list(set(accumulated_sources)))
+        logger.info(
+            "Persisted year %d to built_years. Total built: %s", yr, root.attrs["built_years"]
+        )
 
-            built_years.append(yr)
-            # Update root attributes with completed year
-            ds_updated = xr.open_zarr(zarr_dest)
-            ds_updated.attrs["built_years"] = json.dumps(sorted(list(set(built_years))))
-            ds_updated.attrs["source_files"] = json.dumps(list(set(accumulated_sources)))
-
-        # Clean scratch disk for this year immediately (scratch <= 20 GB rule)
+        # Check budget and clean scratch
         if yr_scratch.exists():
             shutil.rmtree(yr_scratch, ignore_errors=True)
-            logger.info("Scratch directory for year %d cleaned up.", yr)
+        check_budget(scratch_base, zarr_dest)
 
-    # Compute Climatology & Norm Stats on master store once years are assembled
-    logger.info("Updating harmonic climatology and normalization statistics on master store...")
-    ds_master = xr.open_zarr(zarr_dest)
-    time_vals = ds_master.coords["time"].values
-    t_3d = ds_master["thetao"].values
+    # 4. Finalize step: Climatology and Norm Stats (A4)
+    # Only run if finalize=True or if train split is covered
+    if finalize or set(built_years) == set(years_to_process):
+        ds_master = xr.open_zarr(zarr_dest)
+        master_dates = pd.to_datetime(ds_master.coords["time"].values)
+        train_start = pd.Timestamp(config.splits.train[0])
+        train_end = pd.Timestamp(config.splits.train[1])
+        has_train_dates = np.any((master_dates >= train_start) & (master_dates <= train_end))
 
-    clim_366 = fit_harmonic_climatology(t_3d, time_vals, n_harmonics=3)
-    ds_master["clim"] = xr.DataArray(
-        clim_366,
-        dims=("dayofyear", "depth", "lat", "lon"),
-        coords={
-            "dayofyear": np.arange(1, 367),
-            "depth": depths_m,
-            "lat": target_grid.lats,
-            "lon": target_grid.lons,
-        },
-    )
+        if has_train_dates:
+            logger.info(
+                "Computing harmonic climatology and normalization statistics on training split..."
+            )
+            check_no_test_leakage(config.splits.train, config.splits.test)
 
-    norm_stats = compute_norm_stats(
-        ds_master,
-        train_split=config.splits.train,
-        test_split=config.splits.test,
-    )
-    ds_master.attrs["norm_stats"] = json.dumps(norm_stats)
-    ds_master.attrs["split_dates"] = json.dumps(
-        {
-            "train": config.splits.train,
-            "val": config.splits.val,
-            "test": config.splits.test,
-        }
-    )
-    ds_master.attrs["built_years"] = json.dumps(sorted(list(set(built_years))))
-    ds_master.to_zarr(zarr_dest, mode="a")
-    logger.info("Master Zarr store update complete at %s (built_years=%s).", zarr_dest, built_years)
+            t_3d = ds_master["thetao"].sel(time=slice(train_start, train_end))
+            train_times = pd.to_datetime(t_3d.coords["time"].values)
 
-    if export_fp16:
-        fp16_dest = out_base / f"oceanscope_{config.dataset_version}_fp16.zarr"
-        export_fp16_store(zarr_dest, fp16_dest)
+            clim_366 = fit_harmonic_climatology(
+                t_3d.values,
+                train_times,
+                n_harmonics=3,
+                train_split=config.splits.train,
+                test_split=config.splits.test,
+            )
+
+            ds_clim_da = xr.DataArray(
+                clim_366.astype(np.float32),
+                dims=("dayofyear", "depth", "lat", "lon"),
+                coords={
+                    "dayofyear": np.arange(1, 367),
+                    "depth": depths_m,
+                    "lat": target_grid.lats,
+                    "lon": target_grid.lons,
+                },
+            )
+            root = zarr.open_group(str(zarr_dest), mode="r+")
+            existing_attrs = dict(root.attrs)
+
+            ds_clim_ds = ds_clim_da.to_dataset(name="clim")
+            ds_clim_ds.attrs = existing_attrs
+            ds_clim_ds.to_zarr(zarr_dest, mode="a")
+
+            norm_stats = compute_norm_stats(
+                ds_master,
+                train_split=config.splits.train,
+                test_split=config.splits.test,
+            )
+            root = zarr.open_group(str(zarr_dest), mode="r+")
+            root.attrs.update(existing_attrs)
+            root.attrs["built_years"] = sorted(list(set(built_years)))
+            root.attrs["norm_stats"] = norm_stats
+            root.attrs["split_dates"] = {
+                "train": config.splits.train,
+                "val": config.splits.val,
+                "test": config.splits.test,
+            }
+            logger.info("Climatology and normalization statistics successfully computed and saved.")
+        else:
+            logger.info(
+                "Store contains no training dates; marking sample_only=True "
+                "and skipping train climatology."
+            )
+            root = zarr.open_group(str(zarr_dest), mode="r+")
+            root.attrs["sample_only"] = True
+            root.attrs["built_years"] = sorted(list(set(built_years)))
+
+    if export_f16:
+        f16_dest = out_base / f"oceanscope_{config.dataset_version}_f16.zarr"
+        export_f16_store(zarr_dest, f16_dest)
 
     return zarr_dest
 
@@ -640,9 +911,16 @@ def main() -> None:
         help="Rebuild years even if already present in built_years attribute",
     )
     parser.add_argument(
+        "--f16",
         "--fp16",
+        dest="f16",
         action="store_true",
-        help="Export additional float16 store for training upload",
+        help="Export additional float16 store (oceanscope_<v>_f16.zarr) for training upload",
+    )
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="Compute train-period climatology and normalization statistics",
     )
     args = parser.parse_args()
 
@@ -661,7 +939,8 @@ def main() -> None:
         scratch_dir=Path(args.scratch_dir) if args.scratch_dir else None,
         dry_run=args.dry_run,
         force=args.force,
-        export_fp16=args.fp16,
+        export_f16=args.f16,
+        finalize=args.finalize,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")

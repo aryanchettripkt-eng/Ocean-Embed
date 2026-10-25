@@ -76,11 +76,12 @@ def compute_norm_stats(
     dict[str, Any]
         {"channels": {name: {"mean": float, "std": float}}, "sigma_d": list[float]}
     """
-    # Guard against test leakage
-    check_no_test_leakage(ds.coords["time"].values, test_split)
-
     train_start = pd.Timestamp(train_split[0])
     train_end = pd.Timestamp(train_split[1])
+
+    # Guard against test leakage: training period dates must not fall in test split
+    # (PRD §0 rule 3, rule 4)
+    check_no_test_leakage([train_start, train_end], test_split)
 
     # Subset dataset to training period only
     ds_train = ds.sel(time=slice(train_start, train_end))
@@ -89,6 +90,9 @@ def compute_norm_stats(
             f"No dates found in training period [{train_start} .. {train_end}]. "
             "Cannot compute training-only normalization statistics."
         )
+
+    # Verify sliced training dates contain no test leakage
+    check_no_test_leakage(ds_train.coords["time"].values, test_split)
 
     # Ocean mask: valid ocean cells
     if "ocean_mask" in ds_train:

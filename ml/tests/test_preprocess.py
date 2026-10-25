@@ -122,7 +122,6 @@ def test_inverse_transform() -> None:
 def test_no_test_leakage() -> None:
     """Verify stat functions raise TestLeakageError on test dates (PRD §0, §8 Test 3)."""
     test_split = ["2021-01-01", "2021-12-31"]
-    train_split = ["1993-03-02", "2017-12-01"]
 
     # Passing test dates must raise TestLeakageError
     test_dates = pd.date_range("2021-06-01", "2021-06-10", freq="D")
@@ -148,7 +147,9 @@ def test_no_test_leakage() -> None:
     )
 
     with pytest.raises(TestLeakageError):
-        compute_norm_stats(dummy_ds, train_split=train_split, test_split=test_split)
+        compute_norm_stats(
+            dummy_ds, train_split=["2020-12-25", "2021-01-05"], test_split=test_split
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -369,13 +370,23 @@ paths:
     )
 
     cfg = load_config(config_file)
+    target_grid = TargetGrid.from_bounds(
+        lon_min=cfg.region.lon_min,
+        lon_max=cfg.region.lon_max,
+        lat_min=cfg.region.lat_min,
+        lat_max=cfg.region.lat_max,
+        resolution_deg=cfg.grid.resolution_deg,
+    )
+    from tests.synthetic_data import generate_synthetic_raw_sample
 
-    # Run preprocessing with sample data generation
+    sample_dates = pd.date_range("2019-01-01", "2019-01-05", freq="D")
+    generate_synthetic_raw_sample(tmp_path / "raw", target_grid, cfg.depths_m, dates=sample_dates)
+
+    # Run preprocessing
     run_preprocessing(
         config=cfg,
         raw_dir=tmp_path / "raw",
         out_dir=tmp_path / "processed",
-        use_sample_data=True,
     )
 
     # 1. Verify Zarr store on disk
@@ -405,7 +416,7 @@ paths:
     assert extra_vars.issubset(set(ds_reloaded.data_vars))
 
     # 3. Section 6.1 required coordinates
-    assert set(ds_reloaded.coords) == {"time", "depth", "lat", "lon", "dayofyear"}
+    assert {"time", "depth", "lat", "lon", "dayofyear"}.issubset(set(ds_reloaded.coords))
     assert len(ds_reloaded.depth) == 15
     assert len(ds_reloaded.dayofyear) == 366
     assert len(ds_reloaded.lat) == 8  # 0.0 to 2.0 at 0.25 deg = 8 cells
@@ -432,3 +443,75 @@ paths:
     fig_path = tmp_path / "outputs" / "figures" / "m1_sample_day.png"
     assert fig_path.exists(), f"Milestone 1 figure missing at {fig_path}"
     assert fig_path.stat().st_size > 1000, "Figure file is empty or suspiciously small"
+
+
+def test_missing_raw_product_raises_error(tmp_path: Path) -> None:
+    """Verify run_preprocessing fails loudly when a raw product is missing (PRD §0 Rule 1)."""
+    config_file = tmp_path / "exp.yaml"
+    config_file.write_text(
+        """
+project: test-preprocess
+dataset_version: v1
+region:
+  lon_min: 40.0
+  lon_max: 42.0
+  lat_min: 0.0
+  lat_max: 2.0
+grid:
+  resolution_deg: 0.25
+time:
+  start: "2019-01-01"
+  end: "2019-01-05"
+splits:
+  train: ["2019-01-01", "2019-01-03"]
+  val: ["2019-01-04", "2019-01-05"]
+  test: ["2021-01-01", "2021-12-31"]
+depths_m:
+  - 0.494
+  - 5.078
+  - 9.573
+  - 18.496
+  - 29.445
+  - 47.374
+  - 65.807
+  - 92.326
+  - 130.666
+  - 186.126
+  - 222.475
+  - 266.040
+  - 380.213
+  - 643.567
+  - 1062.440
+paths:
+  raw: {raw_dir}
+  processed: {proc_dir}
+  outputs: {out_dir}
+""".format(
+            raw_dir=str(tmp_path / "raw").replace("\\", "/"),
+            proc_dir=str(tmp_path / "processed").replace("\\", "/"),
+            out_dir=str(tmp_path / "outputs").replace("\\", "/"),
+        )
+    )
+    cfg = load_config(config_file)
+    (tmp_path / "raw").mkdir()
+
+    with pytest.raises(FileNotFoundError, match="Missing GLORYS12 raw file"):
+        run_preprocessing(cfg, raw_dir=tmp_path / "raw", out_dir=tmp_path / "processed")
+
+
+def test_reducer_missing_variable_raises() -> None:
+    """Verify reducers fail loudly rather than falling back to arbitrary vars (REVIEW_P3 A1)."""
+    from oceanscope_ml.data.reduce import reduce_sla
+
+    target_grid = TargetGrid.from_bounds(40.0, 42.0, 0.0, 2.0, 0.25)
+    # Dataset containing only adt, passed to reduce_sla
+    ds_wrong = xr.Dataset(
+        data_vars={"adt": (("time", "lat", "lon"), np.zeros((1, 8, 8)))},
+        coords={
+            "time": [np.datetime64("2019-01-01")],
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
+    with pytest.raises(KeyError, match="Expected variable 'sla' in SLA dataset"):
+        reduce_sla(ds_wrong, target_grid)

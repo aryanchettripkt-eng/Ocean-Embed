@@ -173,7 +173,6 @@ def plot_sample_day(
         day_slice["ocean_mask"].values.astype(bool) if "ocean_mask" in day_slice.data_vars else None
     )
 
-    # 16 panel definitions: (var_name, display_title, units, colormap, depth_idx)
     panel_defs: list[dict[str, Any]] = [
         {"var": "sla", "title": "Sea Level Anomaly (SLA)", "units": "m", "cmap": "coolwarm"},
         {
@@ -249,6 +248,34 @@ def plot_sample_day(
             "d": 7,
         },
         {
+            "var": "target_valid",
+            "title": "Target Valid Mask (Depth 92.3 m)",
+            "units": "bool",
+            "cmap": "gray",
+            "d": 7,
+        },
+        {
+            "var": "woa_clim_profile",
+            "title": "WOA23 Profile (Depth 92.3 m)",
+            "units": "°C",
+            "cmap": "coolwarm",
+            "d": 7,
+        },
+        {
+            "var": "grep_mean",
+            "title": "GREP Ensemble Mean (Depth 0.49 m)",
+            "units": "°C",
+            "cmap": "coolwarm",
+            "d": 0,
+        },
+        {
+            "var": "armor3d",
+            "title": "ARMOR3D Temperature (Depth 0.49 m)",
+            "units": "°C",
+            "cmap": "coolwarm",
+            "d": 0,
+        },
+        {
             "var": "ocean_mask",
             "title": "Ocean Mask (1=Ocean, 0=Land)",
             "units": "bool",
@@ -256,8 +283,8 @@ def plot_sample_day(
         },
     ]
 
-    panel_w, panel_h = 460, 290
-    cols, rows = 4, 4
+    panel_w, panel_h = 440, 275
+    cols, rows = 5, 4
 
     header_h = 60
     total_w = cols * panel_w

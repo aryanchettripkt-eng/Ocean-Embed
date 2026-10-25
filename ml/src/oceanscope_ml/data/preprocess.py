@@ -1,8 +1,9 @@
-"""Data preprocessing stage for OceanScope AI (PRD_AI_ML §4, §4.2, §6.1).
+"""Data preprocessing and reduction pipeline for OceanScope AI.
 
-Processes raw products into the unified processed Zarr store:
-data/processed/oceanscope_<dataset_version>.zarr
-and generates outputs/figures/m1_sample_day.png for Milestone 1 acceptance.
+Implements PRD_AI_ML §3, §4, §4.2, and §6.1.
+Applies shared reduce functions to raw NetCDF/HDF5 data, fits harmonic climatology
+over training dates, computes training normalization statistics, and saves
+the processed Zarr store (oceanscope_v1.zarr) and sample-day inspection figure.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from oceanscope_ml.data.plot import plot_sample_day
 from oceanscope_ml.data.reduce import (
     TargetGrid,
     reduce_adt,
+    reduce_armor3d,
     reduce_currents,
     reduce_era5_fluxes,
     reduce_era5_winds,
@@ -41,191 +43,58 @@ from oceanscope_ml.data.transform import compute_norm_stats
 logger = logging.getLogger("oceanscope_ml.data.preprocess")
 
 
-def compute_config_hash(raw_dict: dict[str, Any]) -> str:
-    """Compute deterministic SHA-256 hash of experiment configuration."""
-    clean_dict = {k: v for k, v in raw_dict.items() if k not in ["paths"]}
-    encoded = json.dumps(clean_dict, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()[:16]
+def compute_config_hash(config_dict: dict[str, Any]) -> str:
+    """Compute deterministic SHA256 hash of configuration dictionary."""
+    cfg_json = json.dumps(config_dict, sort_keys=True, default=str)
+    return hashlib.sha256(cfg_json.encode("utf-8")).hexdigest()[:16]
 
 
-def generate_synthetic_raw_sample(
-    raw_dir: Path,
-    target_grid: TargetGrid,
-    depths_m: list[float],
-    dates: pd.DatetimeIndex,
-) -> list[str]:
-    """Generate realistic synthetic NetCDF files in raw_dir for offline testing and verification.
+def find_product_files(
+    raw_path: Path,
+    product: str,
+    manifest: dict[str, Any] | None = None,
+) -> list[Path]:
+    """Find local NetCDF files for a product using MANIFEST.json first, then directory patterns.
 
-    Returns list of generated file relative paths.
+    Never matches loose substrings or sorts smallest file first.
     """
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    generated_files: list[str] = []
+    # 1. Try MANIFEST.json if available
+    if manifest and "products" in manifest and product in manifest["products"]:
+        p_info = manifest["products"][product]
+        rel_files = [f["rel_path"] for f in p_info.get("files", []) if "rel_path" in f]
+        resolved = [(raw_path / rf) for rf in rel_files if (raw_path / rf).exists()]
+        if resolved:
+            return sorted(resolved)
 
-    n_time = len(dates)
-    n_lat = len(target_grid.lats)
-    n_lon = len(target_grid.lons)
-    lats = target_grid.lats
-    lons = target_grid.lons
+    # 2. Directory and naming patterns
+    patterns: dict[str, list[str]] = {
+        "glorys12": ["glorys12/*.nc*", "*cmems_mod_glo_phy_my_0.083deg*.nc*"],
+        "sla": ["sla/*.nc*", "*cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs*.nc*"],
+        "sst": ["sst/*.nc*", "*METOFFICE-GLO-SST-L4-REP-OBS-SST*.nc*"],
+        "sss": ["sss/*.nc*", "*cmems_obs-mob_glo_phy-sss_my_multi*.nc*"],
+        "oscar": ["oscar/*.nc*"],
+        "era5_instant": ["era5/*instant*.nc*", "era5/data_stream-oper_stepType-instant.nc"],
+        "era5_accum": ["era5/*accum*.nc*", "era5/data_stream-oper_stepType-accum.nc"],
+        "gebco": ["gebco/*sub_ice_topo*.nc*", "gebco/*.nc*"],
+        "woa23": ["woa23/*.nc*"],
+        "grep": ["grep/*.nc*", "*cmems_mod_glo_phy-mnstd_my_0.25deg*.nc*"],
+        "armor3d": ["armor3d/*.nc*", "*cmems_obs-mob_glo_phy_my_0.125deg*.nc*"],
+    }
 
-    # Create land mask for realistic geography
-    lat_2d, lon_2d = np.meshgrid(lats, lons, indexing="ij")
-    is_arabia = (lat_2d >= 13.0) & (lon_2d <= 56.0)
-    is_india = (
-        (lat_2d >= 8.0) & (lon_2d >= 69.0) & (lon_2d <= 87.0) & (lat_2d + 0.5 * lon_2d > 48.0)
-    )
-    is_africa = (lat_2d <= 12.0) & (lon_2d <= 51.0)
-    is_burma = (lat_2d >= 16.0) & (lon_2d >= 92.0)
-    ocean_mask_2d = ~(is_arabia | is_india | is_africa | is_burma)
+    matches: list[Path] = []
+    for pat in patterns.get(product, []):
+        hits = list(raw_path.glob(pat))
+        if hits:
+            matches.extend(hits)
+            break
 
-    yr_str = str(dates[0].year)
-
-    # 1. GLORYS12: (time, depth, lat, lon)
-    glorys_dir = raw_dir / "glorys"
-    glorys_dir.mkdir(parents=True, exist_ok=True)
-    glorys_path = glorys_dir / f"glorys12_{yr_str}01.nc"
-
-    n_depth = len(depths_m)
-    t_3d = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
-    depth_arr = np.array(depths_m, dtype=np.float32)
-
-    for t_idx in range(n_time):
-        doy = (
-            dates[t_idx].day_of_year
-            if hasattr(dates[t_idx], "day_of_year")
-            else dates[t_idx].dayofyear
-        )
-        annual_cycle = 1.8 * np.sin(2.0 * np.pi * (doy - 30) / 365.25)
-        for i_lat, lat in enumerate(lats):
-            surf_t = 28.5 - 0.15 * lat + annual_cycle
-            for i_lon, lon in enumerate(lons):
-                if ocean_mask_2d[i_lat, i_lon]:
-                    t_profile = 4.0 + (surf_t - 4.0) * np.exp(-depth_arr / 220.0)
-                    t_3d[t_idx, :, i_lat, i_lon] = t_profile.astype(np.float32)
-
-    ds_glorys = xr.Dataset(
-        data_vars={"thetao": (("time", "depth", "latitude", "longitude"), t_3d)},
-        coords={"time": dates, "depth": depth_arr, "latitude": lats, "longitude": lons},
-    )
-    ds_glorys.to_netcdf(glorys_path)
-    generated_files.append(str(glorys_path.relative_to(raw_dir)))
-
-    # 2. SLA & ADT
-    duacs_dir = raw_dir / "duacs"
-    duacs_dir.mkdir(parents=True, exist_ok=True)
-    sla_path = duacs_dir / f"duacs_sla_{yr_str}01.nc"
-    adt_path = duacs_dir / f"duacs_adt_{yr_str}01.nc"
-
-    sla_vals = np.where(
-        ocean_mask_2d, 0.05 * np.sin(lon_2d / 5.0) * np.cos(lat_2d / 4.0), np.nan
-    ).astype(np.float32)
-    sla_3d = np.tile(sla_vals, (n_time, 1, 1))
-    adt_3d = sla_3d + 1.2
-
-    ds_sla = xr.Dataset(
-        data_vars={"sla": (("time", "lat", "lon"), sla_3d)},
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_sla.to_netcdf(sla_path)
-    generated_files.append(str(sla_path.relative_to(raw_dir)))
-
-    ds_adt = xr.Dataset(
-        data_vars={"adt": (("time", "lat", "lon"), adt_3d)},
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_adt.to_netcdf(adt_path)
-    generated_files.append(str(adt_path.relative_to(raw_dir)))
-
-    # 3. OSTIA SST (stored in Kelvin)
-    ostia_dir = raw_dir / "ostia"
-    ostia_dir.mkdir(parents=True, exist_ok=True)
-    sst_path = ostia_dir / f"ostia_sst_{yr_str}01.nc"
-
-    sst_celsius = t_3d[:, 0, :, :]
-    sst_kelvin = np.where(~np.isnan(sst_celsius), sst_celsius + 273.15, np.nan).astype(np.float32)
-    ds_sst = xr.Dataset(
-        data_vars={"analysed_sst": (("time", "lat", "lon"), sst_kelvin)},
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_sst.to_netcdf(sst_path)
-    generated_files.append(str(sst_path.relative_to(raw_dir)))
-
-    # 4. SSS
-    sss_dir = raw_dir / "sss"
-    sss_dir.mkdir(parents=True, exist_ok=True)
-    sss_path = sss_dir / f"multiobs_sss_{yr_str}01.nc"
-
-    sss_vals = np.where(ocean_mask_2d, 35.0 - 0.05 * lat_2d + 0.02 * lon_2d, np.nan).astype(
-        np.float32
-    )
-    sss_3d = np.tile(sss_vals, (n_time, 1, 1))
-    ds_sss = xr.Dataset(
-        data_vars={"sos": (("time", "lat", "lon"), sss_3d)},
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_sss.to_netcdf(sss_path)
-    generated_files.append(str(sss_path.relative_to(raw_dir)))
-
-    # 5. OSCAR Currents
-    oscar_dir = raw_dir / "oscar"
-    oscar_dir.mkdir(parents=True, exist_ok=True)
-    oscar_path = oscar_dir / f"oscar_currents_{yr_str}01.nc"
-
-    u_curr = np.where(ocean_mask_2d, 0.2 * np.cos(lat_2d / 3.0), np.nan).astype(np.float32)
-    v_curr = np.where(ocean_mask_2d, 0.1 * np.sin(lon_2d / 4.0), np.nan).astype(np.float32)
-    ds_oscar = xr.Dataset(
-        data_vars={
-            "u": (("time", "lat", "lon"), np.tile(u_curr, (n_time, 1, 1))),
-            "v": (("time", "lat", "lon"), np.tile(v_curr, (n_time, 1, 1))),
-        },
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_oscar.to_netcdf(oscar_path)
-    generated_files.append(str(oscar_path.relative_to(raw_dir)))
-
-    # 6. ERA5 Winds
-    era5_dir = raw_dir / "era5"
-    era5_dir.mkdir(parents=True, exist_ok=True)
-    winds_path = era5_dir / f"era5_winds_{yr_str}01.nc"
-
-    u_wind = (5.0 + 2.0 * np.cos(lat_2d / 4.0)).astype(np.float32)
-    v_wind = (-3.0 + 1.5 * np.sin(lon_2d / 6.0)).astype(np.float32)
-    ds_winds = xr.Dataset(
-        data_vars={
-            "u10": (("time", "lat", "lon"), np.tile(u_wind, (n_time, 1, 1))),
-            "v10": (("time", "lat", "lon"), np.tile(v_wind, (n_time, 1, 1))),
-        },
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_winds.to_netcdf(winds_path)
-    generated_files.append(str(winds_path.relative_to(raw_dir)))
-
-    # 7. ERA5 Fluxes & Precip
-    fluxes_path = era5_dir / f"era5_fluxes_{yr_str}01.nc"
-    net_heat = np.full((n_time, n_lat, n_lon), 40.0, dtype=np.float32)
-    precip = np.full((n_time, n_lat, n_lon), 0.003, dtype=np.float32)
-    ds_fluxes = xr.Dataset(
-        data_vars={
-            "net_heat_flux": (("time", "lat", "lon"), net_heat),
-            "precip": (("time", "lat", "lon"), precip),
-        },
-        coords={"time": dates, "lat": lats, "lon": lons},
-    )
-    ds_fluxes.to_netcdf(fluxes_path)
-    generated_files.append(str(fluxes_path.relative_to(raw_dir)))
-
-    # 8. GEBCO Bathymetry
-    gebco_dir = raw_dir / "gebco"
-    gebco_dir.mkdir(parents=True, exist_ok=True)
-    gebco_path = gebco_dir / "gebco_bathymetry.nc"
-
-    elev = np.where(ocean_mask_2d, -3200.0, 500.0).astype(np.float32)
-    ds_gebco = xr.Dataset(
-        data_vars={"elevation": (("lat", "lon"), elev)}, coords={"lat": lats, "lon": lons}
-    )
-    ds_gebco.to_netcdf(gebco_path)
-    generated_files.append(str(gebco_path.relative_to(raw_dir)))
-
-    return generated_files
+    # Exclude files with 'synthetic' in name if real files exist
+    clean_matches = [
+        f
+        for f in matches
+        if not f.name.startswith("synthetic_") and not f.name.endswith("_synthetic.nc")
+    ]
+    return sorted(clean_matches)
 
 
 def run_preprocessing(
@@ -233,7 +102,6 @@ def run_preprocessing(
     raw_dir: Path | None = None,
     out_dir: Path | None = None,
     sample_day: str | None = None,
-    use_sample_data: bool = False,
 ) -> xr.Dataset:
     """Execute complete data preprocessing pipeline for OceanScope AI.
 
@@ -243,7 +111,6 @@ def run_preprocessing(
     raw_dir : path to raw data directory
     out_dir : path to processed data output directory
     sample_day : date string for m1_sample_day.png
-    use_sample_data : if True or raw dir is empty, generates synthetic sample data
 
     Returns
     -------
@@ -252,6 +119,21 @@ def run_preprocessing(
     raw_path = raw_dir or config.paths.raw
     out_path = out_dir or config.paths.processed
     out_path.mkdir(parents=True, exist_ok=True)
+
+    if not raw_path.exists():
+        raise FileNotFoundError(
+            f"Raw directory {raw_path} does not exist. "
+            "PRD §0 rule 1 requires stopping and reporting."
+        )
+
+    manifest: dict[str, Any] | None = None
+    manifest_file = raw_path / "MANIFEST.json"
+    if manifest_file.exists():
+        try:
+            with open(manifest_file, encoding="utf-8") as mf:
+                manifest = json.load(mf)
+        except Exception as e:
+            logger.warning("Could not read MANIFEST.json: %s", e)
 
     # 1. Define target grid from config
     target_grid = TargetGrid.from_bounds(
@@ -268,250 +150,230 @@ def run_preprocessing(
             "(PRD_AI_ML §2, DECISIONS 2026-10-24)."
         )
 
-    # 2. Check for raw files or synthesize sample
-    source_files: list[str] = []
-    raw_files = list(raw_path.glob("**/*.nc")) + list(raw_path.glob("**/*.nc4"))
-
-    if len(raw_files) == 0 or use_sample_data:
-        logger.info(
-            "No raw NetCDF files found in %s; generating synthetic sample dataset...", raw_path
-        )
-        dates = pd.date_range("2019-01-01", "2019-01-31", freq="D")
-        source_files = generate_synthetic_raw_sample(raw_path, target_grid, depths_m, dates)
-    else:
-        source_files = [str(f.relative_to(raw_path)) for f in raw_files]
-
-    logger.info(
-        "Processing %d source files against target grid %s...", len(source_files), target_grid
-    )
-
-    # 3. Locate product files and apply shared reduce functions
     processed_vars: dict[str, xr.DataArray] = {}
+    opened_source_files: dict[str, list[str]] = {}
 
     # --- GLORYS12 ---
-    logger.info("Step 1/10: Reducing GLORYS12 thetao and deriving ocean_mask...")
-    glorys_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "glorys" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-        reverse=True,  # prefer full multi-depth dataset
-    )
-    if glorys_candidates:
-        ds_raw_glorys = xr.open_dataset(glorys_candidates[0])
-        ds_red_glorys = reduce_glorys12(ds_raw_glorys, target_grid, depths_m)
-        processed_vars["thetao"] = ds_red_glorys["thetao"]
-        processed_vars["ocean_mask"] = ds_red_glorys["ocean_mask"]
-        processed_vars["target_valid"] = ds_red_glorys["target_valid"]
-        common_time = ds_red_glorys.coords["time"]
-    else:
-        raise FileNotFoundError(f"Missing GLORYS12 raw file in {raw_path}")
+    logger.info("Step 1/11: Reducing GLORYS12 thetao and deriving ocean_mask...")
+    glorys_files = find_product_files(raw_path, "glorys12", manifest)
+    if not glorys_files:
+        raise FileNotFoundError(
+            f"Missing GLORYS12 raw file in {raw_path}. PRD §0 rule 1 forbids synthetic stand-ins."
+        )
+    glorys_file = glorys_files[0]
+    logger.info("Opening GLORYS12 from %s...", glorys_file.name)
+    ds_raw_glorys = xr.open_dataset(glorys_file)
+    ds_red_glorys = reduce_glorys12(ds_raw_glorys, target_grid, depths_m)
+    processed_vars["thetao"] = ds_red_glorys["thetao"]
+    processed_vars["ocean_mask"] = ds_red_glorys["ocean_mask"]
+    processed_vars["target_valid"] = ds_red_glorys["target_valid"]
+    common_time = ds_red_glorys.coords["time"]
+    ocean_mask_arr = ds_red_glorys["ocean_mask"].values.astype(bool)
+
+    opened_source_files["thetao"] = [str(glorys_file.relative_to(raw_path))]
+    opened_source_files["ocean_mask"] = [str(glorys_file.relative_to(raw_path))]
+    opened_source_files["target_valid"] = [str(glorys_file.relative_to(raw_path))]
 
     # --- SLA & ADT ---
-    logger.info("Step 2/10: Reducing DUACS SLA & ADT...")
-    sla_candidates = [
-        f
-        for f in raw_path.glob("**/*")
-        if ("sla" in f.name.lower() or "duacs" in f.name.lower()) and f.suffix in [".nc", ".nc4"]
-    ]
-    if sla_candidates:
-        ds_raw_sla = xr.open_dataset(sla_candidates[0])
-        ds_red_sla = reduce_sla(ds_raw_sla, target_grid, target_time=common_time.values)
-        processed_vars["sla"] = ds_red_sla["sla"]
-        if "adt" in ds_raw_sla.data_vars:
-            ds_red_adt = reduce_adt(ds_raw_sla, target_grid, target_time=common_time.values)
-            processed_vars["adt"] = ds_red_adt["adt"]
+    logger.info("Step 2/11: Reducing DUACS SLA & ADT...")
+    sla_files = find_product_files(raw_path, "sla", manifest)
+    if not sla_files:
+        raise FileNotFoundError(
+            f"Missing DUACS SLA raw file in {raw_path}. PRD §0 rule 1 forbids synthetic stand-ins."
+        )
+    sla_file = sla_files[0]
+    logger.info("Opening SLA from %s...", sla_file.name)
+    ds_raw_sla = xr.open_dataset(sla_file)
+    ds_red_sla = reduce_sla(ds_raw_sla, target_grid, target_time=common_time.values)
+    processed_vars["sla"] = ds_red_sla["sla"]
+    opened_source_files["sla"] = [str(sla_file.relative_to(raw_path))]
 
-    if "adt" not in processed_vars:
-        adt_candidates = [
-            f
-            for f in raw_path.glob("**/*")
-            if "adt" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-        if adt_candidates:
-            ds_red_adt = reduce_adt(
-                xr.open_dataset(adt_candidates[0]), target_grid, target_time=common_time.values
-            )
+    if "adt" in ds_raw_sla.data_vars:
+        ds_red_adt = reduce_adt(ds_raw_sla, target_grid, target_time=common_time.values)
+        processed_vars["adt"] = ds_red_adt["adt"]
+        opened_source_files["adt"] = [str(sla_file.relative_to(raw_path))]
+    else:
+        adt_files = list(raw_path.glob("adt/*.nc*"))
+        if adt_files:
+            ds_raw_adt = xr.open_dataset(adt_files[0])
+            ds_red_adt = reduce_adt(ds_raw_adt, target_grid, target_time=common_time.values)
             processed_vars["adt"] = ds_red_adt["adt"]
+            opened_source_files["adt"] = [str(adt_files[0].relative_to(raw_path))]
+        else:
+            raise FileNotFoundError(f"Missing DUACS ADT in {raw_path}")
 
     # --- OSTIA SST ---
-    logger.info("Step 3/10: Reducing OSTIA SST...")
-    sst_candidates = [
-        f for f in raw_path.glob("**/*") if "sst" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-    ]
-    if sst_candidates:
-        ds_red_sst = reduce_sst(
-            xr.open_dataset(sst_candidates[0]), target_grid, target_time=common_time.values
-        )
-        processed_vars["sst"] = ds_red_sst["sst"]
+    logger.info("Step 3/11: Reducing OSTIA SST...")
+    sst_files = find_product_files(raw_path, "sst", manifest)
+    if not sst_files:
+        raise FileNotFoundError(f"Missing OSTIA SST raw file in {raw_path}")
+    sst_file = sst_files[0]
+    logger.info("Opening SST from %s...", sst_file.name)
+    ds_raw_sst = xr.open_dataset(sst_file)
+    ds_red_sst = reduce_sst(ds_raw_sst, target_grid, target_time=common_time.values)
+    processed_vars["sst"] = ds_red_sst["sst"]
+    opened_source_files["sst"] = [str(sst_file.relative_to(raw_path))]
 
     # --- MULTIOBS SSS ---
-    logger.info("Step 4/10: Reducing MULTIOBS SSS...")
-    sss_candidates = [
-        f
-        for f in raw_path.glob("**/*")
-        if ("sss" in f.name.lower() or "sos" in f.name.lower()) and f.suffix in [".nc", ".nc4"]
-    ]
-    if sss_candidates:
-        ds_red_sss = reduce_sss(
-            xr.open_dataset(sss_candidates[0]), target_grid, target_time=common_time.values
-        )
-        processed_vars["sss"] = ds_red_sss["sss"]
+    logger.info("Step 4/11: Reducing MULTIOBS SSS...")
+    sss_files = find_product_files(raw_path, "sss", manifest)
+    if not sss_files:
+        raise FileNotFoundError(f"Missing MULTIOBS SSS raw file in {raw_path}")
+    sss_file = sss_files[0]
+    logger.info("Opening SSS from %s...", sss_file.name)
+    ds_raw_sss = xr.open_dataset(sss_file)
+    ds_red_sss = reduce_sss(ds_raw_sss, target_grid, target_time=common_time.values)
+    processed_vars["sss"] = ds_red_sss["sss"]
+    opened_source_files["sss"] = [str(sss_file.relative_to(raw_path))]
 
     # --- OSCAR Currents ---
-    logger.info("Step 5/10: Reducing OSCAR currents...")
-    oscar_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if ("oscar" in f.name.lower() or "current" in f.name.lower())
-            and f.suffix in [".nc", ".nc4"]
-        ]
-    )
-    if oscar_candidates:
-        if len(oscar_candidates) > 1 and any("final" in f.name for f in oscar_candidates):
-            # Find files matching common_time dates
-            date_strs = [pd.Timestamp(t).strftime("%Y%m%d") for t in common_time.values]
-            matched = [f for f in oscar_candidates if any(d in f.name for d in date_strs)]
-            files_to_open = matched if matched else [oscar_candidates[0]]
-            try:
-                ds_raw_curr = xr.open_mfdataset(files_to_open, combine="nested", concat_dim="time")
-            except Exception:
-                ds_raw_curr = xr.open_dataset(files_to_open[0])
-        else:
-            ds_raw_curr = xr.open_dataset(oscar_candidates[0])
-        ds_red_curr = reduce_currents(ds_raw_curr, target_grid, target_time=common_time.values)
-        processed_vars["u_current"] = ds_red_curr["u_current"]
-        processed_vars["v_current"] = ds_red_curr["v_current"]
+    logger.info("Step 5/11: Reducing OSCAR currents...")
+    oscar_files = find_product_files(raw_path, "oscar", manifest)
+    if not oscar_files:
+        raise FileNotFoundError(f"Missing OSCAR currents raw files in {raw_path}")
+
+    # Match files covering common_time dates if daily files
+    date_strs = [pd.Timestamp(t).strftime("%Y%m%d") for t in common_time.values]
+    matched_oscar = [f for f in oscar_files if any(d in f.name for d in date_strs)]
+    files_to_open = matched_oscar if matched_oscar else oscar_files
+    logger.info("Opening %d OSCAR daily files...", len(files_to_open))
+    if len(files_to_open) > 1:
+        ds_raw_curr = xr.open_mfdataset(files_to_open, combine="nested", concat_dim="time")
+    else:
+        ds_raw_curr = xr.open_dataset(files_to_open[0])
+
+    ds_red_curr = reduce_currents(ds_raw_curr, target_grid, target_time=common_time.values)
+    processed_vars["u_current"] = ds_red_curr["u_current"]
+    processed_vars["v_current"] = ds_red_curr["v_current"]
+    opened_source_files["u_current"] = [str(f.relative_to(raw_path)) for f in files_to_open]
+    opened_source_files["v_current"] = [str(f.relative_to(raw_path)) for f in files_to_open]
 
     # --- ERA5 Winds & Fluxes ---
-    logger.info("Step 6/10: Reducing ERA5 winds & fluxes...")
-    era5_zip_candidates = [
-        f for f in raw_path.glob("**/*") if "era5" in f.name.lower() and f.suffix in [".nc", ".zip"]
-    ]
-    instant_p: Path | None = None
-    accum_p: Path | None = None
+    logger.info("Step 6/11: Reducing ERA5 winds & fluxes...")
+    era5_inst_files = find_product_files(raw_path, "era5_instant", manifest)
+    if not era5_inst_files:
+        # Fallback to merged era5 file if present
+        era5_merged = list(raw_path.glob("era5/*era5*.nc*"))
+        if era5_merged:
+            era5_inst_files = era5_merged
+        else:
+            raise FileNotFoundError(f"Missing ERA5 instant wind file in {raw_path}")
 
-    for f_cand in era5_zip_candidates:
-        inst = f_cand.parent / "data_stream-oper_stepType-instant.nc"
-        acc = f_cand.parent / "data_stream-oper_stepType-accum.nc"
-        if inst.exists() and acc.exists():
-            instant_p = inst
-            accum_p = acc
-            break
-        try:
-            with open(f_cand, "rb") as check_f:
-                magic = check_f.read(4)
-            if magic == b"PK\x03\x04":
-                import zipfile
-
-                with zipfile.ZipFile(f_cand, "r") as z:
-                    z.extractall(f_cand.parent)
-                if inst.exists():
-                    instant_p = inst
-                if acc.exists():
-                    accum_p = acc
-                break
-        except Exception:
-            pass
-
-    winds_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "wind" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
+    inst_file = era5_inst_files[0]
+    logger.info("Opening ERA5 winds from %s...", inst_file.name)
+    ds_winds = xr.open_dataset(inst_file)
+    ds_red_winds = reduce_era5_winds(
+        ds_winds, target_grid, target_time=common_time.values, ocean_mask=ocean_mask_arr
     )
-    if winds_cands:
-        ds_winds = xr.open_dataset(winds_cands[0])
-    elif instant_p is not None:
-        ds_winds = xr.open_dataset(instant_p)
-    else:
-        ds_winds = None
+    processed_vars["u_wind"] = ds_red_winds["u_wind"]
+    processed_vars["v_wind"] = ds_red_winds["v_wind"]
+    processed_vars["wind_stress_curl"] = ds_red_winds["wind_stress_curl"]
+    opened_source_files["u_wind"] = [str(inst_file.relative_to(raw_path))]
+    opened_source_files["v_wind"] = [str(inst_file.relative_to(raw_path))]
+    opened_source_files["wind_stress_curl"] = [str(inst_file.relative_to(raw_path))]
 
-    if ds_winds is not None:
-        ds_red_winds = reduce_era5_winds(ds_winds, target_grid, target_time=common_time.values)
-        processed_vars["u_wind"] = ds_red_winds["u_wind"]
-        processed_vars["v_wind"] = ds_red_winds["v_wind"]
-        processed_vars["wind_stress_curl"] = ds_red_winds["wind_stress_curl"]
+    era5_acc_files = find_product_files(raw_path, "era5_accum", manifest)
+    if not era5_acc_files:
+        era5_merged = list(raw_path.glob("era5/*era5*.nc*"))
+        if era5_merged:
+            era5_acc_files = era5_merged
+        else:
+            raise FileNotFoundError(f"Missing ERA5 accum fluxes file in {raw_path}")
 
-    flux_cands = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "flux" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,
-    )
-    if flux_cands:
-        ds_flux = xr.open_dataset(flux_cands[0])
-    elif accum_p is not None:
-        ds_flux = xr.open_dataset(accum_p)
-    else:
-        ds_flux = None
-
-    if ds_flux is not None:
-        ds_red_flux = reduce_era5_fluxes(ds_flux, target_grid, target_time=common_time.values)
-        processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
-        processed_vars["precip"] = ds_red_flux["precip"]
+    acc_file = era5_acc_files[0]
+    logger.info("Opening ERA5 fluxes from %s...", acc_file.name)
+    ds_flux = xr.open_dataset(acc_file)
+    ds_red_flux = reduce_era5_fluxes(ds_flux, target_grid, target_time=common_time.values)
+    processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
+    processed_vars["precip"] = ds_red_flux["precip"]
+    opened_source_files["net_heat_flux"] = [str(acc_file.relative_to(raw_path))]
+    opened_source_files["precip"] = [str(acc_file.relative_to(raw_path))]
 
     # --- GEBCO Bathymetry ---
-    logger.info("Step 7/10: Reducing GEBCO bathymetry...")
-    gebco_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "gebco" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ],
-        key=lambda f: f.stat().st_size,  # smaller/pre-cropped file first
-    )
-    if gebco_candidates:
-        ds_raw_gebco = xr.open_dataset(gebco_candidates[0])
-        # If massive global grid, subset bounds first
-        if "lat" in ds_raw_gebco.coords and len(ds_raw_gebco.coords["lat"]) > 1000:
-            ds_raw_gebco = ds_raw_gebco.sel(
-                lat=slice(config.region.lat_min - 1.0, config.region.lat_max + 1.0),
-                lon=slice(config.region.lon_min - 1.0, config.region.lon_max + 1.0),
-            )
-        ds_red_gebco = reduce_gebco(ds_raw_gebco, target_grid)
-        processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
+    logger.info("Step 7/11: Reducing GEBCO bathymetry...")
+    gebco_files = find_product_files(raw_path, "gebco", manifest)
+    if not gebco_files:
+        raise FileNotFoundError(f"Missing GEBCO bathymetry file in {raw_path}")
+    gebco_file = gebco_files[0]
+    logger.info("Opening GEBCO from %s...", gebco_file.name)
+    ds_raw_gebco = xr.open_dataset(gebco_file)
+    ds_red_gebco = reduce_gebco(ds_raw_gebco, target_grid)
+    processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
+    opened_source_files["bathymetry"] = [str(gebco_file.relative_to(raw_path))]
 
-    # --- WOA23 Monthly Climatology (Optional) ---
-    logger.info("Step 8/10: Reducing WOA23 climatological profile...")
-    woa_candidates = sorted(
-        [
-            f
-            for f in raw_path.glob("**/*")
-            if "woa" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-        ]
-    )
-    if woa_candidates:
-        ds_red_woa = reduce_woa(
-            xr.open_dataset(woa_candidates[0], decode_times=False), target_grid, depths_m
-        )
-        processed_vars["woa_clim_profile"] = ds_red_woa["woa_clim_profile"]
+    # --- WOA23 Monthly Climatology ---
+    logger.info("Step 8/11: Reducing WOA23 climatological profile...")
+    woa_files = find_product_files(raw_path, "woa23", manifest)
+    if woa_files:
+        logger.info("Found %d WOA23 monthly files...", len(woa_files))
+        woa_monthly_ds: list[xr.Dataset] = []
+        for woa_file in sorted(woa_files):
+            ds_woa_single = xr.open_dataset(woa_file, decode_times=False)
+            woa_monthly_ds.append(reduce_woa(ds_woa_single, target_grid, depths_m))
+        if len(woa_monthly_ds) == 1:
+            processed_vars["woa_clim_profile"] = woa_monthly_ds[0]["woa_clim_profile"]
+        else:
+            ds_woa_all = xr.concat([d["woa_clim_profile"] for d in woa_monthly_ds], dim="month")
+            ds_woa_all = ds_woa_all.assign_coords(month=np.arange(1, len(woa_monthly_ds) + 1))
+            processed_vars["woa_clim_profile"] = ds_woa_all
+        opened_source_files["woa_clim_profile"] = [str(f.relative_to(raw_path)) for f in woa_files]
 
-    # --- GREP Ensemble Mean (Optional) ---
-    logger.info("Step 9/10: Reducing GREP ensemble mean...")
-    grep_candidates = [
-        f for f in raw_path.glob("**/*") if "grep" in f.name.lower() and f.suffix in [".nc", ".nc4"]
-    ]
-    if grep_candidates:
-        ds_red_grep = reduce_grep(xr.open_dataset(grep_candidates[0]), target_grid, depths_m)
+    # --- GREP Ensemble Mean ---
+    logger.info("Step 9/11: Reducing GREP ensemble mean...")
+    grep_files = find_product_files(raw_path, "grep", manifest)
+    if grep_files:
+        grep_file = grep_files[0]
+        logger.info("Opening GREP from %s...", grep_file.name)
+        ds_raw_grep = xr.open_dataset(grep_file)
+        ds_red_grep = reduce_grep(ds_raw_grep, target_grid, depths_m)
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
+        opened_source_files["grep_mean"] = [str(grep_file.relative_to(raw_path))]
 
-    # 4. Harmonic Climatology: compute on train dates (PRD_AI_ML §0 rule 4, §5.2)
-    logger.info("Step 10/10: Fitting harmonic climatology (mean + 3 harmonics)...")
+    # --- ARMOR3D Baseline Competitor ---
+    logger.info("Step 10/11: Reducing ARMOR3D competitor...")
+    armor_files = find_product_files(raw_path, "armor3d", manifest)
+    if armor_files:
+        armor_file = armor_files[0]
+        logger.info("Opening ARMOR3D from %s...", armor_file.name)
+        ds_raw_armor = xr.open_dataset(armor_file)
+        ds_red_armor = reduce_armor3d(ds_raw_armor, target_grid, depths_m)
+        processed_vars["armor3d"] = ds_red_armor["armor3d"]
+        opened_source_files["armor3d"] = [str(armor_file.relative_to(raw_path))]
+
+    # --- Harmonic Climatology ---
+    logger.info("Step 11/11: Fitting harmonic climatology (mean + 3 harmonics)...")
     time_coords = common_time.values
-    t_3d = processed_vars["thetao"].values  # (time, depth, lat, lon)
+    t_3d = processed_vars["thetao"].values
 
-    # For 1-month development sample, dates fall in 2019 (within train or val range)
-    clim_366 = fit_harmonic_climatology(t_3d, time_coords, n_harmonics=3)
+    time_series = pd.to_datetime(common_time.values)
+    min_date = time_series.min().strftime("%Y-%m-%d")
+    max_date = time_series.max().strftime("%Y-%m-%d")
 
-    # Build clim DataArray with dayofyear coordinate 1..366
+    # Check whether store dates fall in train split
+    is_in_train = pd.Timestamp(min_date) >= pd.Timestamp(config.splits.train[0]) and pd.Timestamp(
+        max_date
+    ) <= pd.Timestamp(config.splits.train[1])
+
+    if is_in_train:
+        clim_366 = fit_harmonic_climatology(
+            t_3d,
+            time_coords,
+            n_harmonics=3,
+            train_split=config.splits.train,
+            test_split=config.splits.test,
+        )
+        sample_only = False
+    else:
+        # Development sample month outside training split (e.g. January 2019 in validation)
+        # Labelled clearly as sample_only (REVIEW_P3 A4)
+        clim_366 = fit_harmonic_climatology(
+            t_3d,
+            time_coords,
+            n_harmonics=3,
+            test_split=config.splits.test,
+        )
+        sample_only = True
+
     processed_vars["clim"] = xr.DataArray(
         clim_366,
         dims=("dayofyear", "depth", "lat", "lon"),
@@ -523,47 +385,49 @@ def run_preprocessing(
         },
     )
 
-    # 5. Assemble Dataset
-    ds_processed = xr.Dataset(
-        data_vars=processed_vars,
-        coords={
-            "time": common_time,
-            "depth": np.array(depths_m, dtype=np.float64),
-            "lat": target_grid.lats,
-            "lon": target_grid.lons,
-            "dayofyear": np.arange(1, 367),
-        },
-    )
+    # Assemble Dataset
+    coords_dict: dict[str, Any] = {
+        "time": common_time,
+        "depth": np.array(depths_m, dtype=np.float64),
+        "lat": target_grid.lats,
+        "lon": target_grid.lons,
+        "dayofyear": np.arange(1, 367),
+    }
+    if (
+        "woa_clim_profile" in processed_vars
+        and "month" in processed_vars["woa_clim_profile"].coords
+    ):
+        coords_dict["month"] = processed_vars["woa_clim_profile"].coords["month"].values
 
-    # 6. Compute Normalization Statistics (Train-only; PRD_AI_ML §0 rule 4, §6.1)
-    # Check if dataset dates fall into train split; if sample dates are e.g. Jan 2019,
-    # use sample dates as train slice for this M1 run without test leakage.
-    time_series = pd.to_datetime(common_time.values)
-    min_date = time_series.min().strftime("%Y-%m-%d")
-    max_date = time_series.max().strftime("%Y-%m-%d")
+    ds_processed = xr.Dataset(data_vars=processed_vars, coords=coords_dict)
 
-    # If dataset spans only sample month, use sample date range as train slice for M1
-    train_range = (
-        config.splits.train
-        if (
-            pd.Timestamp(min_date) >= pd.Timestamp(config.splits.train[0])
-            and pd.Timestamp(max_date) <= pd.Timestamp(config.splits.train[1])
+    # Compute Normalization Statistics (Train-only or sample-labelled; PRD_AI_ML §0 rule 4, §6.1)
+    if is_in_train:
+        norm_stats = compute_norm_stats(
+            ds_processed,
+            train_split=config.splits.train,
+            test_split=config.splits.test,
         )
-        else [min_date, max_date]
-    )
+    else:
+        # Compute sample stats for inspection, labelled as sample_only
+        norm_stats = compute_norm_stats(
+            ds_processed,
+            train_split=[min_date, max_date],
+            test_split=config.splits.test,
+        )
 
-    norm_stats = compute_norm_stats(
-        ds_processed,
-        train_split=train_range,
-        test_split=config.splits.test,
-    )
-
-    # 7. Root Attributes (PRD_AI_ML §6.1)
+    # Root Attributes (PRD_AI_ML §6.1, REVIEW_P3 A1, A4)
+    all_unique_files = sorted(list({f for flist in opened_source_files.values() for f in flist}))
     ds_processed.attrs["dataset_version"] = str(config.dataset_version)
     ds_processed.attrs["config_hash"] = compute_config_hash(config.raw_dict)
     ds_processed.attrs["created_utc"] = datetime.now(timezone.utc).isoformat()
-    ds_processed.attrs["source_files"] = json.dumps(source_files)
+    ds_processed.attrs["source_files"] = json.dumps(all_unique_files)
+    ds_processed.attrs["source_files_by_var"] = json.dumps(opened_source_files)
     ds_processed.attrs["norm_stats"] = json.dumps(norm_stats)
+    ds_processed.attrs["sample_only"] = sample_only
+    ds_processed.attrs["synthetic"] = False
+    if sample_only:
+        ds_processed.attrs["norm_stats_sample_only"] = True
     ds_processed.attrs["split_dates"] = json.dumps(
         {
             "train": config.splits.train,
@@ -572,15 +436,16 @@ def run_preprocessing(
         }
     )
 
-    # 8. Save Processed Zarr Store
+    # Save Processed Zarr Store
     zarr_filename = f"oceanscope_{config.dataset_version}.zarr"
     zarr_dest = out_path / zarr_filename
     logger.info("Writing processed Zarr store to %s...", zarr_dest)
     ds_processed.to_zarr(zarr_dest, mode="w")
 
-    # 9. Generate Milestone 1 Sample Day Figure (PRD_AI_ML M1)
+    # Generate Milestone 1 Sample Day Figure (PRD_AI_ML M1)
     chosen_day = sample_day or min_date
     fig_dest = config.paths.outputs / "figures" / "m1_sample_day.png"
+    fig_dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Generating sample day figure for %s to %s...", chosen_day, fig_dest)
     plot_sample_day(ds_processed, chosen_day, fig_dest)
 
@@ -612,11 +477,6 @@ def main() -> None:
         default=None,
         help="Date to plot in outputs/figures/m1_sample_day.png (default: first available date)",
     )
-    parser.add_argument(
-        "--sample-data",
-        action="store_true",
-        help="Generate synthetic raw sample data if raw files are missing",
-    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -629,7 +489,6 @@ def main() -> None:
         raw_dir=Path(args.raw_dir) if args.raw_dir else None,
         out_dir=Path(args.out_dir) if args.out_dir else None,
         sample_day=args.sample_day,
-        use_sample_data=args.sample_data,
     )
     print("\n[OK] Preprocessing complete. Processed store and m1_sample_day.png generated.")
 

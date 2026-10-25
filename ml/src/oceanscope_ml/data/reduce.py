@@ -35,10 +35,10 @@ class TargetGrid:
     @classmethod
     def from_bounds(
         cls,
-        lon_min: float = 40.0,
-        lon_max: float = 100.0,
-        lat_min: float = 0.0,
-        lat_max: float = 30.0,
+        lon_min: float,
+        lon_max: float,
+        lat_min: float,
+        lat_max: float,
         resolution_deg: float = 0.25,
     ) -> TargetGrid:
         """Construct target grid with cell centres matching PRD_AI_ML §2."""
@@ -60,17 +60,25 @@ class TargetGrid:
 
 
 def standardize_coords(ds: T) -> T:
-    """Standardize dimension and coordinate names to (time, depth, lat, lon)."""
-    # 1. Check if coords exist that need to be swapped with dims (e.g. lon on longitude dim)
+    """Standardize coordinate names, order, and ranges across heterogeneous datasets.
+
+    Rules applied:
+    - Latitude names (latitude, nav_lat) -> lat, sorted ascending
+    - Longitude names (longitude, nav_lon) -> lon, mapped to [-180, 180] convention
+    - Depth names (deptht, lev, level, depth_levels) -> depth
+    - Time names (time_counter, valid_time) -> time
+    - Dim order: (..., lat, lon)
+    """
+    # 1. Check if dimensions need swap
     swap_map: dict[str, str] = {}
-    if hasattr(ds, "dims") and hasattr(ds, "coords"):
-        for dim in ds.dims:
-            d_str = str(dim)
+    if hasattr(ds, "dims"):
+        for d in ds.dims:
+            d_str = str(d)
             d_lower = d_str.lower()
-            if d_lower in ["longitude", "nav_lon"] and "lon" in ds.coords and d_str != "lon":
-                swap_map[d_str] = "lon"
-            elif d_lower in ["latitude", "nav_lat"] and "lat" in ds.coords and d_str != "lat":
+            if d_lower in ["latitude", "nav_lat"] and "lat" in ds.coords and d_str != "lat":
                 swap_map[d_str] = "lat"
+            elif d_lower in ["longitude", "nav_lon"] and "lon" in ds.coords and d_str != "lon":
+                swap_map[d_str] = "lon"
             elif (
                 d_lower in ["deptht", "lev", "level", "depth_levels"]
                 and "depth" in ds.coords
@@ -83,11 +91,11 @@ def standardize_coords(ds: T) -> T:
                 and d_str != "time"
             ):
                 swap_map[d_str] = "time"
-    if swap_map:
+    if swap_map and hasattr(ds, "swap_dims"):
         try:
             ds = ds.swap_dims(swap_map)
-        except Exception:
-            pass
+        except (ValueError, KeyError) as e:
+            logger.debug("swap_dims skipped: %s", e)
 
     # 2. Check rename for coordinates or dimensions
     rename_map: dict[str, str] = {}
@@ -148,8 +156,8 @@ def standardize_coords(ds: T) -> T:
     if rename_map:
         try:
             ds = ds.rename(rename_map)
-        except Exception:
-            pass
+        except (ValueError, KeyError) as e:
+            logger.debug("rename skipped: %s", e)
 
     # Standardize longitude convention to -180..180 if in 0..360
     if "lon" in ds.coords:
@@ -169,10 +177,32 @@ def standardize_coords(ds: T) -> T:
     if "lat" in ds.dims and "lon" in ds.dims:
         try:
             ds = ds.transpose(..., "lat", "lon")
-        except Exception:
-            pass
+        except (ValueError, KeyError) as e:
+            logger.debug("transpose skipped: %s", e)
 
     return ds
+
+
+def to_clean_datetime_index(times: Any) -> pd.DatetimeIndex:
+    """Safely convert any times (including cftime objects) to normalized calendar dates."""
+    if hasattr(times, "__iter__") and not isinstance(times, (str, bytes)):
+        str_dates = [str(t)[:10] for t in times]
+        return pd.to_datetime(str_dates).floor("D")
+    return pd.to_datetime([str(times)[:10]]).floor("D")
+
+
+def match_time_indices(
+    src_times: np.ndarray,
+    target_times: np.ndarray,
+) -> list[int]:
+    """Find index in src_times for each target time by exact calendar day.
+
+    Returns -1 for any target day missing in src_times (PRD §0 rule 5: no silent gap filling).
+    """
+    src_days = to_clean_datetime_index(src_times)
+    target_days = to_clean_datetime_index(target_times)
+    mapping = {d: i for i, d in enumerate(src_days)}
+    return [mapping.get(t, -1) for t in target_days]
 
 
 def area_mean_regrid_2d(
@@ -249,7 +279,6 @@ def area_mean_regrid_2d(
     # Fallback if source resolution is coarser than target resolution (e.g. 1/3 deg)
     # where some target cells receive 0 total sub-cells:
     if np.any(total_counts == 0) and len(src_lats) > 1 and len(src_lons) > 1:
-        # Interpolate missing interior target cells using regular grid interpolator
         unfilled_mask = total_counts.reshape((n_tgt_lat, n_tgt_lon)) == 0
         if np.any(unfilled_mask):
             try:
@@ -273,20 +302,32 @@ def interpolate_depths_1d(
     src_depths: np.ndarray,
     target_depths: list[float],
 ) -> np.ndarray:
-    """Interpolate 3D array (depth, lat, lon) along depth axis without extrapolation."""
+    """Interpolate 3D array (depth, lat, lon) along depth axis without extrapolation.
+
+    Per DECISIONS 2026-10-25, if target depth is within 2 cm above min_d (e.g. 0.494 m
+    vs 0.506 m for GREP), the first source level (~1 cm offset) is used to avoid
+    dropping the surface level.
+    """
     tgt_depth_arr = np.array(target_depths, dtype=np.float64)
     n_tgt = len(tgt_depth_arr)
     _, n_lat, n_lon = values_by_depth.shape
 
-    # Fast path if source depths exactly match target depths
+    # Fast path if source depths match target depths exactly
     if len(src_depths) == n_tgt and np.allclose(src_depths, tgt_depth_arr, atol=0.01):
         return values_by_depth.astype(np.float32)
 
-    # 1D vertical interpolation per spatial cell
     out = np.full((n_tgt, n_lat, n_lon), np.nan, dtype=np.float32)
-    # Clip valid range: no extrapolation beyond min/max native depth
     min_d, max_d = float(np.min(src_depths)), float(np.max(src_depths))
-    valid_tgt_mask = (tgt_depth_arr >= min_d) & (tgt_depth_arr <= max_d)
+
+    # Clamp target depth within 2 cm of surface to min_d (DECISIONS 2026-10-25
+    # for GREP 0.494 m vs 0.506 m)
+    eval_depths = tgt_depth_arr.copy()
+    near_surface = (eval_depths < min_d) & (min_d - eval_depths <= 0.02)
+    eval_depths[near_surface] = min_d
+
+    valid_tgt_mask = (eval_depths >= min_d) & (eval_depths <= max_d)
+    if not np.any(valid_tgt_mask):
+        return out
 
     interp_fn = scipy.interpolate.interp1d(
         src_depths,
@@ -296,7 +337,7 @@ def interpolate_depths_1d(
         bounds_error=False,
         fill_value=np.nan,
     )
-    interpolated = interp_fn(tgt_depth_arr[valid_tgt_mask])
+    interpolated = interp_fn(eval_depths[valid_tgt_mask])
     out[valid_tgt_mask] = interpolated.astype(np.float32)
     return out
 
@@ -316,8 +357,11 @@ def reduce_glorys12(
     Cell is valid if >= 50% native ocean sub-cells are valid (PRD_AI_ML §3).
     """
     ds = standardize_coords(ds)
-    var_name = "thetao" if "thetao" in ds.data_vars else list(ds.data_vars.keys())[0]
-    da = ds[var_name]
+    if "thetao" not in ds.data_vars:
+        raise KeyError(
+            f"Expected variable 'thetao' in GLORYS12 dataset, found: {list(ds.data_vars)}"
+        )
+    da = ds["thetao"]
 
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
@@ -335,10 +379,8 @@ def reduce_glorys12(
     n_lat = len(target_grid.lats)
     n_lon = len(target_grid.lons)
 
-    # 4D output array: (time, depth, lat, lon)
     out_arr = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    # Reshape source to (time, depth, lat, lon)
     vals = da.values
     if vals.ndim == 3:  # (depth, lat, lon)
         vals = vals[np.newaxis, ...]
@@ -346,8 +388,7 @@ def reduce_glorys12(
         vals = vals[np.newaxis, np.newaxis, ...]
 
     for t_idx in range(n_time):
-        t_slice = vals[t_idx]  # (src_depth, src_lat, src_lon)
-        # Regrid each native depth layer spatially first
+        t_slice = vals[t_idx]
         regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
         for d_idx in range(len(src_depths)):
             regrid_by_depth[d_idx] = area_mean_regrid_2d(
@@ -357,11 +398,8 @@ def reduce_glorys12(
                 target_grid,
                 valid_frac_threshold=0.5,
             )
-        # Vertically interpolate/select the 15 configured depths
         out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
 
-    # Derive ocean_mask: 1 where GLORYS surface level is valid (PRD §5.1, §6.1)
-    # Check over all time slices or the first time slice
     surface_layer = out_arr[:, 0, :, :]
     ocean_mask = np.any(~np.isnan(surface_layer), axis=0)
     target_valid = ~np.isnan(out_arr)
@@ -388,30 +426,27 @@ def reduce_sla(
 ) -> xr.Dataset:
     """Reduce DUACS L4 SLA to 0.25° target grid with >= 50% valid rule."""
     ds = standardize_coords(ds)
-    var_name = "sla" if "sla" in ds.data_vars else list(ds.data_vars.keys())[0]
-    da = ds[var_name]
+    if "sla" not in ds.data_vars:
+        raise KeyError(f"Expected variable 'sla' in SLA dataset, found: {list(ds.data_vars)}")
+    da = ds["sla"]
     if "depth" in da.dims:
         da = da.squeeze("depth")
 
-    if target_time is not None and "time" in da.coords:
-        try:
-            da = da.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
-    time_vals = (
-        target_time
-        if target_time is not None
-        else (
+
+    if target_time is not None and "time" in da.coords:
+        time_vals = target_time
+        time_indices = match_time_indices(da.coords["time"].values, time_vals)
+    else:
+        time_vals = (
             ds.coords["time"].values
             if "time" in ds.coords
             else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
         )
-    )
-    if np.ndim(time_vals) == 0:
-        time_vals = np.array([time_vals])
+        if np.ndim(time_vals) == 0:
+            time_vals = np.array([time_vals])
+        time_indices = list(range(len(time_vals)))
 
     vals = da.values
     while vals.ndim > 3:
@@ -424,10 +459,11 @@ def reduce_sla(
     n_lon = len(target_grid.lons)
     out_arr = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        t_val = vals[t_idx] if t_idx < vals.shape[0] else vals[-1]
+    for t_idx, src_idx in enumerate(time_indices):
+        if src_idx < 0 or src_idx >= vals.shape[0]:
+            continue
         out_arr[t_idx] = area_mean_regrid_2d(
-            t_val,
+            vals[src_idx],
             src_lats,
             src_lons,
             target_grid,
@@ -447,30 +483,27 @@ def reduce_adt(
 ) -> xr.Dataset:
     """Reduce DUACS L4 ADT to 0.25° target grid with >= 50% valid rule."""
     ds = standardize_coords(ds)
-    var_name = "adt" if "adt" in ds.data_vars else list(ds.data_vars.keys())[0]
-    da = ds[var_name]
+    if "adt" not in ds.data_vars:
+        raise KeyError(f"Expected variable 'adt' in ADT dataset, found: {list(ds.data_vars)}")
+    da = ds["adt"]
     if "depth" in da.dims:
         da = da.squeeze("depth")
 
-    if target_time is not None and "time" in da.coords:
-        try:
-            da = da.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
-    time_vals = (
-        target_time
-        if target_time is not None
-        else (
+
+    if target_time is not None and "time" in da.coords:
+        time_vals = target_time
+        time_indices = match_time_indices(da.coords["time"].values, time_vals)
+    else:
+        time_vals = (
             ds.coords["time"].values
             if "time" in ds.coords
             else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
         )
-    )
-    if np.ndim(time_vals) == 0:
-        time_vals = np.array([time_vals])
+        if np.ndim(time_vals) == 0:
+            time_vals = np.array([time_vals])
+        time_indices = list(range(len(time_vals)))
 
     vals = da.values
     while vals.ndim > 3:
@@ -483,10 +516,11 @@ def reduce_adt(
     n_lon = len(target_grid.lons)
     out_arr = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        t_val = vals[t_idx] if t_idx < vals.shape[0] else vals[-1]
+    for t_idx, src_idx in enumerate(time_indices):
+        if src_idx < 0 or src_idx >= vals.shape[0]:
+            continue
         out_arr[t_idx] = area_mean_regrid_2d(
-            t_val,
+            vals[src_idx],
             src_lats,
             src_lons,
             target_grid,
@@ -506,34 +540,36 @@ def reduce_sst(
 ) -> xr.Dataset:
     """Reduce OSTIA L4 SST to 0.25° target grid, converting Kelvin to °C."""
     ds = standardize_coords(ds)
-    var_name = (
-        "analysed_sst"
-        if "analysed_sst" in ds.data_vars
-        else ("sst" if "sst" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
+    var_name = None
+    for cand in ["analysed_sst", "sst"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(
+            "Expected SST variable ('analysed_sst' or 'sst') not found in dataset: "
+            f"{list(ds.data_vars)}"
+        )
+
     da = ds[var_name]
     if "depth" in da.dims:
         da = da.squeeze("depth")
 
-    if target_time is not None and "time" in da.coords:
-        try:
-            da = da.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
-    time_vals = (
-        target_time
-        if target_time is not None
-        else (
+
+    if target_time is not None and "time" in da.coords:
+        time_vals = target_time
+        time_indices = match_time_indices(da.coords["time"].values, time_vals)
+    else:
+        time_vals = (
             ds.coords["time"].values
             if "time" in ds.coords
             else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
         )
-    )
-    if np.ndim(time_vals) == 0:
-        time_vals = np.array([time_vals])
+        if np.ndim(time_vals) == 0:
+            time_vals = np.array([time_vals])
+        time_indices = list(range(len(time_vals)))
 
     vals = da.values
     while vals.ndim > 3:
@@ -541,9 +577,15 @@ def reduce_sst(
     if vals.ndim == 2:
         vals = vals[np.newaxis, ...]
 
-    # Convert Kelvin to Celsius if necessary (PRD_AI_ML §3)
-    sample_valid = vals[~np.isnan(vals)]
-    if len(sample_valid) > 0 and np.mean(sample_valid[:1000]) > 100.0:
+    # Convert Kelvin to Celsius (PRD_AI_ML §3, REVIEW_P3 B3)
+    units_attr = str(da.attrs.get("units", "")).lower()
+    is_kelvin = "kelvin" in units_attr or units_attr == "k"
+    if not is_kelvin and units_attr == "":
+        valid_sample = vals[~np.isnan(vals)]
+        if len(valid_sample) > 0 and float(np.mean(valid_sample[:1000])) > 100.0:
+            is_kelvin = True
+
+    if is_kelvin:
         vals = vals - 273.15
 
     n_time = len(time_vals)
@@ -551,10 +593,11 @@ def reduce_sst(
     n_lon = len(target_grid.lons)
     out_arr = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        t_val = vals[t_idx] if t_idx < vals.shape[0] else vals[-1]
+    for t_idx, src_idx in enumerate(time_indices):
+        if src_idx < 0 or src_idx >= vals.shape[0]:
+            continue
         out_arr[t_idx] = area_mean_regrid_2d(
-            t_val,
+            vals[src_idx],
             src_lats,
             src_lons,
             target_grid,
@@ -574,34 +617,35 @@ def reduce_sss(
 ) -> xr.Dataset:
     """Reduce MULTIOBS SSS to 0.25° target grid with >= 50% valid rule."""
     ds = standardize_coords(ds)
-    var_name = (
-        "sos"
-        if "sos" in ds.data_vars
-        else ("sss" if "sss" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
+    var_name = None
+    for cand in ["sos", "sss", "so"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(
+            f"Expected SSS variable ('sos' or 'sss') not found in dataset: {list(ds.data_vars)}"
+        )
+
     da = ds[var_name]
     if "depth" in da.dims:
         da = da.squeeze("depth")
 
-    if target_time is not None and "time" in da.coords:
-        try:
-            da = da.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
-    time_vals = (
-        target_time
-        if target_time is not None
-        else (
+
+    if target_time is not None and "time" in da.coords:
+        time_vals = target_time
+        time_indices = match_time_indices(da.coords["time"].values, time_vals)
+    else:
+        time_vals = (
             ds.coords["time"].values
             if "time" in ds.coords
             else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
         )
-    )
-    if np.ndim(time_vals) == 0:
-        time_vals = np.array([time_vals])
+        if np.ndim(time_vals) == 0:
+            time_vals = np.array([time_vals])
+        time_indices = list(range(len(time_vals)))
 
     vals = da.values
     while vals.ndim > 3:
@@ -614,10 +658,11 @@ def reduce_sss(
     n_lon = len(target_grid.lons)
     out_arr = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        t_val = vals[t_idx] if t_idx < vals.shape[0] else vals[-1]
+    for t_idx, src_idx in enumerate(time_indices):
+        if src_idx < 0 or src_idx >= vals.shape[0]:
+            continue
         out_arr[t_idx] = area_mean_regrid_2d(
-            t_val,
+            vals[src_idx],
             src_lats,
             src_lons,
             target_grid,
@@ -637,40 +682,43 @@ def reduce_currents(
 ) -> xr.Dataset:
     """Reduce OSCAR surface currents (u, v) to 0.25° target grid."""
     ds = standardize_coords(ds)
-    u_name = "u" if "u" in ds.data_vars else ("u_current" if "u_current" in ds.data_vars else None)
-    v_name = "v" if "v" in ds.data_vars else ("v_current" if "v_current" in ds.data_vars else None)
+    u_var = None
+    v_var = None
+    for cand_u in ["u", "u_current", "ug"]:
+        if cand_u in ds.data_vars:
+            u_var = cand_u
+            break
+    for cand_v in ["v", "v_current", "vg"]:
+        if cand_v in ds.data_vars:
+            v_var = cand_v
+            break
+    if u_var is None or v_var is None:
+        raise KeyError(
+            "Expected surface currents variables ('u'/'v') not found in dataset: "
+            f"{list(ds.data_vars)}"
+        )
 
-    if u_name is None or v_name is None:
-        keys = list(ds.data_vars.keys())
-        u_name = str(keys[0])
-        v_name = str(keys[1]) if len(keys) > 1 else str(keys[0])
-
-    da_u = ds[u_name]
-    da_v = ds[v_name]
+    da_u = ds[u_var]
+    da_v = ds[v_var]
     if "depth" in da_u.dims:
         da_u = da_u.squeeze("depth")
         da_v = da_v.squeeze("depth")
 
-    if target_time is not None and "time" in da_u.coords:
-        try:
-            da_u = da_u.sel(time=pd.to_datetime(target_time), method="nearest")
-            da_v = da_v.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
-    time_vals = (
-        target_time
-        if target_time is not None
-        else (
+
+    if target_time is not None and "time" in da_u.coords:
+        time_vals = target_time
+        time_indices = match_time_indices(da_u.coords["time"].values, time_vals)
+    else:
+        time_vals = (
             ds.coords["time"].values
             if "time" in ds.coords
             else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
         )
-    )
-    if np.ndim(time_vals) == 0:
-        time_vals = np.array([time_vals])
+        if np.ndim(time_vals) == 0:
+            time_vals = np.array([time_vals])
+        time_indices = list(range(len(time_vals)))
 
     u_vals = da_u.values
     v_vals = da_v.values
@@ -685,19 +733,31 @@ def reduce_currents(
     n_lat = len(target_grid.lats)
     n_lon = len(target_grid.lons)
 
-    out_u = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
-    out_v = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
+    regrid_u = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
+    regrid_v = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        u_t = u_vals[t_idx] if t_idx < u_vals.shape[0] else u_vals[-1]
-        v_t = v_vals[t_idx] if t_idx < v_vals.shape[0] else v_vals[-1]
-        out_u[t_idx] = area_mean_regrid_2d(u_t, src_lats, src_lons, target_grid)
-        out_v[t_idx] = area_mean_regrid_2d(v_t, src_lats, src_lons, target_grid)
+    for t_idx, src_idx in enumerate(time_indices):
+        if src_idx < 0 or src_idx >= u_vals.shape[0]:
+            continue
+        regrid_u[t_idx] = area_mean_regrid_2d(
+            u_vals[src_idx],
+            src_lats,
+            src_lons,
+            target_grid,
+            valid_frac_threshold=0.5,
+        )
+        regrid_v[t_idx] = area_mean_regrid_2d(
+            v_vals[src_idx],
+            src_lats,
+            src_lons,
+            target_grid,
+            valid_frac_threshold=0.5,
+        )
 
     return xr.Dataset(
         data_vars={
-            "u_current": (("time", "lat", "lon"), out_u),
-            "v_current": (("time", "lat", "lon"), out_v),
+            "u_current": (("time", "lat", "lon"), regrid_u),
+            "v_current": (("time", "lat", "lon"), regrid_v),
         },
         coords={"time": time_vals, "lat": target_grid.lats, "lon": target_grid.lons},
     )
@@ -707,25 +767,29 @@ def compute_wind_stress_and_curl(
     u10: np.ndarray,
     v10: np.ndarray,
     target_grid: TargetGrid,
+    ocean_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute wind stress (tau_x, tau_y) and spherical curl using Large & Pond (1981).
+    """Compute wind stress vector and spherical curl from 10m wind components (PRD_AI_ML §3).
 
-    Parameters
-    ----------
-    u10, v10 : np.ndarray, shape (n_time, n_lat, n_lon)
-    target_grid : TargetGrid
+    Bulk formula:
+    rho_air = 1.22 kg/m³
+    Cd per Large & Pond (1981):
+      Cd = 1.2e-3 for |U| < 11 m/s
+      Cd = (0.49 + 0.065 * |U|) * 1e-3 for 11 <= |U| <= 25 m/s
+      Cd capped at 25 m/s value above 25 m/s
+    tau = rho_air * Cd * |U| * U
 
-    Returns
-    -------
-    tuple of (u_wind, v_wind, wind_stress_curl), all shape (n_time, n_lat, n_lon)
+    Spherical curl:
+    curl(tau) = 1/(R * cos(phi)) * d(tau_y)/d(lon) - 1/R * d(tau_x)/d(lat)
+
+    Per REVIEW_P3 B4, wind stress curl is masked at the coast and land (requires cell
+    and all 4 stencil neighbors to be ocean).
     """
     n_time, n_lat, n_lon = u10.shape
     curl_out = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    # Wind speed
     speed = np.sqrt(u10**2 + v10**2)
 
-    # Drag coefficient Cd per Large & Pond (1981)
     cd = np.where(
         speed < 11.0,
         1.2e-3,
@@ -736,31 +800,38 @@ def compute_wind_stress_and_curl(
         ),
     )
 
-    # Surface wind stress vector tau = rho_air * Cd * |U| * U
     tau_x = (AIR_DENSITY_KG_M3 * cd * speed * u10).astype(np.float32)
     tau_y = (AIR_DENSITY_KG_M3 * cd * speed * v10).astype(np.float32)
 
-    # Spherical coordinates curl(tau) = 1/(R cos phi) * d(tau_y)/d_lambda - 1/R * d(tau_x)/d_phi
-    lat_rad = np.radians(target_grid.lats)  # (n_lat,)
+    lat_rad = np.radians(target_grid.lats)
     cos_lat = np.cos(lat_rad)
-    cos_lat_safe = np.where(np.abs(cos_lat) < 1e-4, 1e-4, cos_lat)  # avoid div by zero at poles
+    cos_lat_safe = np.where(np.abs(cos_lat) < 1e-4, 1e-4, cos_lat)
 
     delta_lat_rad = np.radians(target_grid.resolution_deg)
     delta_lon_rad = np.radians(target_grid.resolution_deg)
 
+    # Valid ocean stencil mask for coast masking (REVIEW_P3 B4)
+    valid_ocean_interior: np.ndarray | None = None
+    if ocean_mask is not None:
+        om = np.asarray(ocean_mask, dtype=bool)
+        valid_ocean_interior = (
+            om[1:-1, 1:-1] & om[:-2, 1:-1] & om[2:, 1:-1] & om[1:-1, :-2] & om[1:-1, 2:]
+        )
+
     for t_idx in range(n_time):
-        tx = tau_x[t_idx]  # (n_lat, n_lon)
+        tx = tau_x[t_idx]
         ty = tau_y[t_idx]
 
-        # Centred differences on interior points
-        d_ty_d_lon = (ty[:, 2:] - ty[:, :-2]) / (2.0 * delta_lon_rad)  # (n_lat, n_lon-2)
-        d_tx_d_lat = (tx[2:, :] - tx[:-2, :]) / (2.0 * delta_lat_rad)  # (n_lat-2, n_lon)
+        d_ty_d_lon = (ty[:, 2:] - ty[:, :-2]) / (2.0 * delta_lon_rad)
+        d_tx_d_lat = (tx[2:, :] - tx[:-2, :]) / (2.0 * delta_lat_rad)
 
-        # Interior region (1:-1, 1:-1)
         term1 = d_ty_d_lon[1:-1, :] / (EARTH_RADIUS_M * cos_lat_safe[1:-1, np.newaxis])
         term2 = d_tx_d_lat[:, 1:-1] / EARTH_RADIUS_M
 
         curl_interior = term1 - term2
+        if valid_ocean_interior is not None:
+            curl_interior = np.where(valid_ocean_interior, curl_interior, np.nan)
+
         curl_out[t_idx, 1:-1, 1:-1] = curl_interior.astype(np.float32)
 
     return u10.astype(np.float32), v10.astype(np.float32), curl_out
@@ -770,42 +841,31 @@ def reduce_era5_winds(
     ds: xr.Dataset,
     target_grid: TargetGrid,
     target_time: np.ndarray | None = None,
+    ocean_mask: np.ndarray | None = None,
 ) -> xr.Dataset:
-    """Reduce ERA5 10m winds to 0.25° grid, computing stress and curl (PRD_AI_ML §3)."""
+    """Reduce ERA5 10m winds to 0.25° grid, computing stress and curl (PRD_AI_ML §3).
+
+    Requires >= 18 of 24 valid hours for daily means when processing hourly files.
+    """
     ds = standardize_coords(ds)
-    if target_time is not None and "time" in ds.coords:
-        try:
-            t_min = pd.to_datetime(target_time).min() - pd.Timedelta(days=1)
-            t_max = pd.to_datetime(target_time).max() + pd.Timedelta(days=1)
-            ds = ds.sel(time=slice(t_min, t_max))
-        except Exception:
-            pass
-
-    if "time" in ds.coords and len(ds.coords["time"]) > 60:
-        try:
-            ds = ds.resample(time="1D").mean()
-        except Exception:
-            pass
-
-    if target_time is not None and "time" in ds.coords:
-        try:
-            ds = ds.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
-
-    u_var = (
-        "u10"
-        if "u10" in ds.data_vars
-        else ("10m_u_component_of_wind" if "10m_u_component_of_wind" in ds.data_vars else "u_wind")
-    )
-    v_var = (
-        "v10"
-        if "v10" in ds.data_vars
-        else ("10m_v_component_of_wind" if "10m_v_component_of_wind" in ds.data_vars else "v_wind")
-    )
+    u_var = None
+    v_var = None
+    for cand_u in ["u10", "10m_u_component_of_wind", "u_wind", "u"]:
+        if cand_u in ds.data_vars:
+            u_var = cand_u
+            break
+    for cand_v in ["v10", "10m_v_component_of_wind", "v_wind", "v"]:
+        if cand_v in ds.data_vars:
+            v_var = cand_v
+            break
+    if u_var is None or v_var is None:
+        raise KeyError(
+            f"Expected wind variables ('u10'/'v10') not found in dataset: {list(ds.data_vars)}"
+        )
 
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
+
     time_vals = (
         target_time
         if target_time is not None
@@ -818,15 +878,6 @@ def reduce_era5_winds(
     if np.ndim(time_vals) == 0:
         time_vals = np.array([time_vals])
 
-    u_data = ds[u_var].values
-    v_data = ds[v_var].values
-    while u_data.ndim > 3:
-        u_data = np.squeeze(u_data, axis=1)
-        v_data = np.squeeze(v_data, axis=1)
-    if u_data.ndim == 2:
-        u_data = u_data[np.newaxis, ...]
-        v_data = v_data[np.newaxis, ...]
-
     n_time = len(time_vals)
     n_lat = len(target_grid.lats)
     n_lon = len(target_grid.lons)
@@ -834,13 +885,56 @@ def reduce_era5_winds(
     regrid_u = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
     regrid_v = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        u_t = u_data[t_idx] if t_idx < u_data.shape[0] else u_data[-1]
-        v_t = v_data[t_idx] if t_idx < v_data.shape[0] else v_data[-1]
-        regrid_u[t_idx] = area_mean_regrid_2d(u_t, src_lats, src_lons, target_grid)
-        regrid_v[t_idx] = area_mean_regrid_2d(v_t, src_lats, src_lons, target_grid)
+    is_hourly = False
+    if "time" in ds.coords and len(ds.coords["time"]) > 1:
+        time_diffs = np.diff(pd.to_datetime(ds.coords["time"].values[:10]))
+        median_hours = pd.Series(time_diffs).median().total_seconds() / 3600.0
+        if median_hours < 12.0:
+            is_hourly = True
 
-    u_wind, v_wind, curl = compute_wind_stress_and_curl(regrid_u, regrid_v, target_grid)
+    if is_hourly and "time" in ds.coords:
+        src_days = to_clean_datetime_index(ds.coords["time"].values)
+        target_days = to_clean_datetime_index(time_vals)
+        for t_idx, t in enumerate(target_days):
+            day_mask = src_days == t
+            n_hours = int(np.sum(day_mask))
+            if n_hours >= 18:
+                u_slice = ds[u_var].isel(time=np.where(day_mask)[0]).values
+                v_slice = ds[v_var].isel(time=np.where(day_mask)[0]).values
+                while u_slice.ndim > 3:
+                    u_slice = np.squeeze(u_slice, axis=1)
+                    v_slice = np.squeeze(v_slice, axis=1)
+                u_mean = np.nanmean(u_slice, axis=0)
+                v_mean = np.nanmean(v_slice, axis=0)
+                regrid_u[t_idx] = area_mean_regrid_2d(u_mean, src_lats, src_lons, target_grid)
+                regrid_v[t_idx] = area_mean_regrid_2d(v_mean, src_lats, src_lons, target_grid)
+    else:
+        src_times = (
+            ds.coords["time"].values
+            if "time" in ds.coords
+            else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
+        )
+        time_indices = match_time_indices(src_times, time_vals)
+        u_data = ds[u_var].values
+        v_data = ds[v_var].values
+        while u_data.ndim > 3:
+            u_data = np.squeeze(u_data, axis=1)
+            v_data = np.squeeze(v_data, axis=1)
+        if u_data.ndim == 2:
+            u_data = u_data[np.newaxis, ...]
+            v_data = v_data[np.newaxis, ...]
+
+        for t_idx, src_idx in enumerate(time_indices):
+            if src_idx < 0 or src_idx >= u_data.shape[0]:
+                continue
+            u_t = u_data[src_idx]
+            v_t = v_data[src_idx]
+            regrid_u[t_idx] = area_mean_regrid_2d(u_t, src_lats, src_lons, target_grid)
+            regrid_v[t_idx] = area_mean_regrid_2d(v_t, src_lats, src_lons, target_grid)
+
+    u_wind, v_wind, curl = compute_wind_stress_and_curl(
+        regrid_u, regrid_v, target_grid, ocean_mask=ocean_mask
+    )
 
     return xr.Dataset(
         data_vars={
@@ -857,30 +951,34 @@ def reduce_era5_fluxes(
     target_grid: TargetGrid,
     target_time: np.ndarray | None = None,
 ) -> xr.Dataset:
-    """Reduce ERA5 net heat flux and precipitation to 0.25° target grid."""
+    """Reduce ERA5 net heat flux and precipitation to 0.25° target grid.
+
+    Net heat flux Q_net = ssr + str + sshf + slhf (PRD_AI_ML §3).
+    ERA5 hourly accum fields (J m**-2) are converted to W m**-2 (divided by 3600 s)
+    and daily averaged requiring >= 18 of 24 valid hours.
+    Precipitation tp (hourly meters) is daily summed requiring >= 18 of 24 valid hours.
+    """
     ds = standardize_coords(ds)
-    if target_time is not None and "time" in ds.coords:
-        try:
-            t_min = pd.to_datetime(target_time).min() - pd.Timedelta(days=1)
-            t_max = pd.to_datetime(target_time).max() + pd.Timedelta(days=1)
-            ds = ds.sel(time=slice(t_min, t_max))
-        except Exception:
-            pass
+    has_components = all(k in ds.data_vars for k in ["ssr", "str", "sshf", "slhf"])
+    if not has_components and "net_heat_flux" not in ds.data_vars:
+        raise KeyError(
+            "Expected flux components ('ssr', 'str', 'sshf', 'slhf') or 'net_heat_flux' "
+            f"in dataset: {list(ds.data_vars)}"
+        )
 
-    if "time" in ds.coords and len(ds.coords["time"]) > 60:
-        try:
-            ds = ds.resample(time="1D").mean()
-        except Exception:
-            pass
-
-    if target_time is not None and "time" in ds.coords:
-        try:
-            ds = ds.sel(time=pd.to_datetime(target_time), method="nearest")
-        except Exception:
-            pass
+    tp_var = None
+    for cand in ["tp", "precip", "total_precipitation"]:
+        if cand in ds.data_vars:
+            tp_var = cand
+            break
+    if tp_var is None:
+        raise KeyError(
+            f"Expected precipitation ('tp' or 'precip') in dataset: {list(ds.data_vars)}"
+        )
 
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
+
     time_vals = (
         target_time
         if target_time is not None
@@ -893,48 +991,98 @@ def reduce_era5_fluxes(
     if np.ndim(time_vals) == 0:
         time_vals = np.array([time_vals])
 
-    # Net heat flux Q_net = ssr + str + sshf + slhf
-    has_components = all(k in ds.data_vars for k in ["ssr", "str", "sshf", "slhf"])
-    if has_components:
-        heat_flux = (
-            ds["ssr"].values + ds["str"].values + ds["sshf"].values + ds["slhf"].values
-        ).astype(np.float32)
-    elif "net_heat_flux" in ds.data_vars:
-        heat_flux = ds["net_heat_flux"].values.astype(np.float32)
-    else:
-        heat_flux = np.zeros_like(ds[list(ds.data_vars.keys())[0]].values, dtype=np.float32)
-
-    tp_var = (
-        "tp"
-        if "tp" in ds.data_vars
-        else ("precip" if "precip" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
-    precip = ds[tp_var].values.astype(np.float32)
-
-    while heat_flux.ndim > 3:
-        heat_flux = np.squeeze(heat_flux, axis=1)
-        precip = np.squeeze(precip, axis=1)
-    if heat_flux.ndim == 2:
-        heat_flux = heat_flux[np.newaxis, ...]
-        precip = precip[np.newaxis, ...]
-
     n_time = len(time_vals)
     n_lat = len(target_grid.lats)
     n_lon = len(target_grid.lons)
 
-    out_hf = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
-    out_tp = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
+    out_heat = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
+    out_precip = np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        hf_t = heat_flux[t_idx] if t_idx < heat_flux.shape[0] else heat_flux[-1]
-        tp_t = precip[t_idx] if t_idx < precip.shape[0] else precip[-1]
-        out_hf[t_idx] = area_mean_regrid_2d(hf_t, src_lats, src_lons, target_grid)
-        out_tp[t_idx] = area_mean_regrid_2d(tp_t, src_lats, src_lons, target_grid)
+    is_hourly = False
+    if "time" in ds.coords and len(ds.coords["time"]) > 1:
+        time_diffs = np.diff(pd.to_datetime(ds.coords["time"].values[:10]))
+        median_hours = pd.Series(time_diffs).median().total_seconds() / 3600.0
+        if median_hours < 12.0:
+            is_hourly = True
+
+    is_joules = False
+    if has_components:
+        ssr_units = str(ds["ssr"].attrs.get("units", "")).lower()
+        if "j" in ssr_units:
+            is_joules = True
+
+    if is_hourly and "time" in ds.coords:
+        src_days = to_clean_datetime_index(ds.coords["time"].values)
+        target_days = to_clean_datetime_index(time_vals)
+        for t_idx, t in enumerate(target_days):
+            day_mask = src_days == t
+            n_hours = int(np.sum(day_mask))
+            if n_hours >= 18:
+                if has_components:
+                    ssr_vals = ds["ssr"].isel(time=np.where(day_mask)[0]).values
+                    str_vals = ds["str"].isel(time=np.where(day_mask)[0]).values
+                    sshf_vals = ds["sshf"].isel(time=np.where(day_mask)[0]).values
+                    slhf_vals = ds["slhf"].isel(time=np.where(day_mask)[0]).values
+                    q_hour = ssr_vals + str_vals + sshf_vals + slhf_vals
+                    if is_joules:
+                        q_hour = q_hour / 3600.0
+                    q_day = np.nanmean(q_hour, axis=0)
+                else:
+                    q_vals = ds["net_heat_flux"].isel(time=np.where(day_mask)[0]).values
+                    q_day = np.nanmean(q_vals, axis=0)
+
+                tp_vals = ds[tp_var].isel(time=np.where(day_mask)[0]).values
+                tp_day = np.nansum(tp_vals, axis=0)
+
+                while q_day.ndim > 2:
+                    q_day = np.squeeze(q_day, axis=0)
+                while tp_day.ndim > 2:
+                    tp_day = np.squeeze(tp_day, axis=0)
+
+                out_heat[t_idx] = area_mean_regrid_2d(
+                    q_day.astype(np.float32), src_lats, src_lons, target_grid
+                )
+                out_precip[t_idx] = area_mean_regrid_2d(
+                    tp_day.astype(np.float32), src_lats, src_lons, target_grid
+                )
+    else:
+        src_times = (
+            ds.coords["time"].values
+            if "time" in ds.coords
+            else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
+        )
+        time_indices = match_time_indices(src_times, time_vals)
+        if has_components:
+            q_all = ds["ssr"].values + ds["str"].values + ds["sshf"].values + ds["slhf"].values
+            if is_joules:
+                q_all = q_all / 3600.0
+        else:
+            q_all = ds["net_heat_flux"].values
+
+        tp_all = ds[tp_var].values
+        while q_all.ndim > 3:
+            q_all = np.squeeze(q_all, axis=1)
+            tp_all = np.squeeze(tp_all, axis=1)
+        if q_all.ndim == 2:
+            q_all = q_all[np.newaxis, ...]
+            tp_all = tp_all[np.newaxis, ...]
+
+        for t_idx, src_idx in enumerate(time_indices):
+            if src_idx < 0 or src_idx >= q_all.shape[0]:
+                continue
+            q_t = q_all[src_idx]
+            tp_t = tp_all[src_idx]
+            out_heat[t_idx] = area_mean_regrid_2d(
+                q_t.astype(np.float32), src_lats, src_lons, target_grid
+            )
+            out_precip[t_idx] = area_mean_regrid_2d(
+                tp_t.astype(np.float32), src_lats, src_lons, target_grid
+            )
 
     return xr.Dataset(
         data_vars={
-            "net_heat_flux": (("time", "lat", "lon"), out_hf),
-            "precip": (("time", "lat", "lon"), out_tp),
+            "net_heat_flux": (("time", "lat", "lon"), out_heat),
+            "precip": (("time", "lat", "lon"), out_precip),
         },
         coords={"time": time_vals, "lat": target_grid.lats, "lon": target_grid.lons},
     )
@@ -943,13 +1091,27 @@ def reduce_era5_fluxes(
 def reduce_gebco(ds: xr.Dataset, target_grid: TargetGrid) -> xr.Dataset:
     """Reduce GEBCO 15 arc-sec bathymetry to 0.25° grid, storing log(1 + depth)."""
     ds = standardize_coords(ds)
-    var_name = (
-        "elevation"
-        if "elevation" in ds.data_vars
-        else ("z" if "z" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
-    elev = ds[var_name].values.astype(np.float32)
+    var_name = None
+    for cand in ["elevation", "z", "bathymetry"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(
+            "Expected bathymetry variable ('elevation' or 'z') in GEBCO dataset, "
+            f"found: {list(ds.data_vars)}"
+        )
 
+    # Spatial subset before loading large global grids into memory
+    lat_min = float(target_grid.lats.min()) - 0.5
+    lat_max = float(target_grid.lats.max()) + 0.5
+    lon_min = float(target_grid.lons.min()) - 0.5
+    lon_max = float(target_grid.lons.max()) + 0.5
+
+    if "lat" in ds.coords and len(ds.coords["lat"]) > len(target_grid.lats) * 4:
+        ds = ds.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
+
+    elev = ds[var_name].values.astype(np.float32)
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
 
@@ -973,18 +1135,22 @@ def reduce_woa(
 ) -> xr.Dataset:
     """Reduce World Ocean Atlas (WOA23) monthly climatology to 15 depths and 0.25° grid."""
     ds = standardize_coords(ds)
-    var_name = (
-        "t_an"
-        if "t_an" in ds.data_vars
-        else ("temperature" if "temperature" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
-    da = ds[var_name]
+    var_name = None
+    for cand in ["t_an", "temperature", "t_mn"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(
+            f"Expected temperature variable ('t_an') in WOA dataset, found: {list(ds.data_vars)}"
+        )
 
+    da = ds[var_name]
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
     src_depths = np.asarray(ds.coords["depth"].values, dtype=np.float64)
 
-    vals = da.values  # could be (depth, lat, lon) or (time/month, depth, lat, lon)
+    vals = da.values
     if vals.ndim == 3:
         vals = vals[np.newaxis, ...]
 
@@ -1011,12 +1177,12 @@ def reduce_woa(
         "lat": target_grid.lats,
         "lon": target_grid.lons,
     }
-    if "time" in ds.coords:
-        coords["time"] = ds.coords["time"].values
-        dims = ("time", "depth", "lat", "lon")
-    elif "month" in ds.coords:
+    if "month" in ds.coords:
         coords["month"] = ds.coords["month"].values
         dims = ("month", "depth", "lat", "lon")
+    elif "time" in ds.coords:
+        coords["time"] = ds.coords["time"].values
+        dims = ("time", "depth", "lat", "lon")
     else:
         coords["month"] = np.arange(1, n_slices + 1)
         dims = ("month", "depth", "lat", "lon")
@@ -1034,9 +1200,17 @@ def reduce_grep(
 ) -> xr.Dataset:
     """Reduce GREP ensemble mean thetao_mean to 15 depths and target 0.25° grid."""
     ds = standardize_coords(ds)
-    var_name = "thetao_mean" if "thetao_mean" in ds.data_vars else list(ds.data_vars.keys())[0]
-    da = ds[var_name]
+    var_name = None
+    for cand in ["thetao_mean", "thetao", "temperature"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(
+            f"Expected variable ('thetao_mean') in GREP dataset, found: {list(ds.data_vars)}"
+        )
 
+    da = ds[var_name]
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
     src_depths = np.asarray(ds.coords["depth"].values, dtype=np.float64)
@@ -1087,19 +1261,17 @@ def reduce_armor3d(
     target_grid: TargetGrid,
     depths_m: list[float],
 ) -> xr.Dataset:
-    """Reduce ARMOR3D observation-based 3D temperature to 15 depths and target 0.25° grid.
-
-    Product: MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012
-    (dataset cmems_obs-mob_glo_phy_my_0.125deg_P1D-m, variable 'to')
-    """
+    """Reduce ARMOR3D observation-based 3D temperature to 15 depths and target 0.25° grid."""
     ds = standardize_coords(ds)
-    var_name = (
-        "to"
-        if "to" in ds.data_vars
-        else ("temperature" if "temperature" in ds.data_vars else list(ds.data_vars.keys())[0])
-    )
-    da = ds[var_name]
+    var_name = None
+    for cand in ["to", "temperature", "thetao"]:
+        if cand in ds.data_vars:
+            var_name = cand
+            break
+    if var_name is None:
+        raise KeyError(f"Expected variable ('to') in ARMOR3D dataset, found: {list(ds.data_vars)}")
 
+    da = ds[var_name]
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
     src_depths = np.asarray(ds.coords["depth"].values, dtype=np.float64)

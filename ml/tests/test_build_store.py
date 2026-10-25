@@ -8,24 +8,26 @@ Implements PRD_AI_ML §4.2 and §8 (Test 13):
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
+import zarr
 
 from oceanscope_ml.data.build_store import (
     build_store,
-    export_fp16_store,
+    check_budget,
+    export_f16_store,
     parse_year_spec,
     plan_store_build,
 )
 from oceanscope_ml.data.preprocess import (
-    generate_synthetic_raw_sample,
     run_preprocessing,
 )
 from oceanscope_ml.data.reduce import TargetGrid
+from tests.synthetic_data import generate_synthetic_raw_sample
 
 
 class MockConfig:
@@ -40,7 +42,7 @@ class MockConfig:
             {"lon_min": 40.0, "lon_max": 42.0, "lat_min": 0.0, "lat_max": 2.0},
         )()
         self.grid = type("Grid", (), {"resolution_deg": 0.25})()
-        self.time = type("Time", (), {"start": "2019-01-01", "end": "2019-01-03"})()
+        self.time = type("Time", (), {"start": "2018-01-01", "end": "2019-12-31"})()
         self.splits = type(
             "Splits",
             (),
@@ -103,6 +105,8 @@ def test_dry_run_plan() -> None:
     assert plan["total_store_growth_mb"] > 0
     assert len(plan["years_detail"]) == 2
     assert plan["years_detail"][0]["year"] == 2018
+    assert "requests" in plan
+    assert len(plan["requests"]) >= 8
 
 
 def test_build_preprocess_parity_test_13(tmp_path: Path) -> None:
@@ -125,10 +129,9 @@ def test_build_preprocess_parity_test_13(tmp_path: Path) -> None:
 
     # 1. Run preprocess.py pipeline
     prep_zarr = run_preprocessing(
-        config=cfg,
+        config=cfg,  # type: ignore[arg-type]
         raw_dir=raw_dir,
         out_dir=prep_out_dir,
-        use_sample_data=False,
     )
 
     # 2. Run build_store.py pipeline for 2019
@@ -146,34 +149,38 @@ def test_build_preprocess_parity_test_13(tmp_path: Path) -> None:
     ds_prep = prep_zarr
     ds_build = xr.open_zarr(build_zarr)
 
-    # Both datasets must have same coordinates and dimensions
-    assert set(ds_prep.dims) == set(ds_build.dims)
+    # Compare values on common time-dependent variables
+    common_vars = [
+        v
+        for v in ds_prep.data_vars
+        if v in ds_build.data_vars and "time" in ds_prep[v].dims and "time" in ds_build[v].dims
+    ]
+    assert len(common_vars) >= 8
 
-    # Compare values on day 0
-    common_vars = [v for v in ds_prep.data_vars if v in ds_build.data_vars]
-    assert len(common_vars) >= 10
-
+    # Compare across the 3 days
     for var in common_vars:
-        prep_arr = ds_prep[var].values
-        build_arr = ds_build[var].values
+        for t in sample_dates:
+            t_str = t.strftime("%Y-%m-%d")
+            prep_arr = ds_prep[var].sel(time=t_str).values
+            build_arr = ds_build[var].sel(time=t_str).values
 
-        assert prep_arr.shape == build_arr.shape, f"Shape mismatch on {var}"
+            assert prep_arr.shape == build_arr.shape, f"Shape mismatch on {var}"
 
-        if np.issubdtype(prep_arr.dtype, np.bool_):
-            assert np.array_equal(prep_arr, build_arr), f"Boolean mismatch on {var}"
-        else:
-            valid_mask = (~np.isnan(prep_arr)) & (~np.isnan(build_arr))
-            assert np.array_equal(np.isnan(prep_arr), np.isnan(build_arr)), (
-                f"NaN pattern mismatch on {var}"
-            )
+            if np.issubdtype(prep_arr.dtype, np.bool_):
+                assert np.array_equal(prep_arr, build_arr), f"Boolean mismatch on {var}"
+            else:
+                valid_mask = (~np.isnan(prep_arr)) & (~np.isnan(build_arr))
+                assert np.array_equal(np.isnan(prep_arr), np.isnan(build_arr)), (
+                    f"NaN pattern mismatch on {var}"
+                )
 
-            if np.any(valid_mask):
-                max_diff = float(np.max(np.abs(prep_arr[valid_mask] - build_arr[valid_mask])))
-                assert max_diff <= 1e-4, f"Parity violated on {var}: max diff {max_diff} > 1e-4"
+                if np.any(valid_mask):
+                    max_diff = float(np.max(np.abs(prep_arr[valid_mask] - build_arr[valid_mask])))
+                    assert max_diff <= 1e-4, f"Parity violated on {var}: max diff {max_diff} > 1e-4"
 
 
 def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
-    """Test 13 (part 2): A second run after an interruption skips finished years."""
+    """Test 13 (part 2): Run after interruption skips finished years without wiping attrs."""
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     out_dir = tmp_path / "out"
@@ -185,10 +192,15 @@ def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
 
     cfg = MockConfig(raw_dir, out_dir, outputs_dir)
     grid = TargetGrid.from_bounds(40.0, 42.0, 0.0, 2.0, 0.25)
-    sample_dates = pd.date_range("2018-01-01", periods=3, freq="D")
-    generate_synthetic_raw_sample(raw_dir, grid, cfg.depths_m, dates=sample_dates)
 
-    # Build year 2018 first
+    # Generate genuine test data for BOTH 2018 and 2019 in raw_dir
+    dates_2018 = pd.date_range("2018-01-01", periods=2, freq="D")
+    generate_synthetic_raw_sample(raw_dir, grid, cfg.depths_m, dates=dates_2018)
+
+    dates_2019 = pd.date_range("2019-01-01", periods=2, freq="D")
+    generate_synthetic_raw_sample(raw_dir, grid, cfg.depths_m, dates=dates_2019)
+
+    # Step 1: Build year 2018
     store_path = build_store(
         config=cfg,
         years=[2018],
@@ -198,12 +210,14 @@ def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
         dry_run=False,
     )
 
-    ds_first = xr.open_zarr(store_path)
-    built_years = json.loads(ds_first.attrs.get("built_years", "[]"))
+    # Verify 2018 was completed and recorded on disk
+    root = zarr.open_group(str(store_path), mode="r")
+    built_years = root.attrs.get("built_years", [])
     assert built_years == [2018]
-    time_len_1 = len(ds_first.coords["time"])
+    assert "dataset_version" in root.attrs
+    assert "config_hash" in root.attrs
 
-    # Simulate continuation: call build_store with [2018, 2019]
+    # Step 2: Resume with [2018, 2019] - should skip 2018 and complete 2019 without wiping attrs
     store_path_2 = build_store(
         config=cfg,
         years=[2018, 2019],
@@ -212,18 +226,47 @@ def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
         scratch_dir=scratch_dir,
         dry_run=False,
     )
-
-    ds_second = xr.open_zarr(store_path_2)
-    built_years_2 = json.loads(ds_second.attrs.get("built_years", "[]"))
+    root2 = zarr.open_group(str(store_path_2), mode="r")
+    built_years_2 = root2.attrs.get("built_years", [])
     assert built_years_2 == [2018, 2019]
-
-    # Time dimension must have expanded with 2019 data
-    time_len_2 = len(ds_second.coords["time"])
-    assert time_len_2 > time_len_1
+    assert "dataset_version" in root2.attrs
 
 
-def test_export_fp16_store(tmp_path: Path) -> None:
-    """Verify export_fp16_store creates valid float16 Zarr store."""
+def test_missing_raw_product_raises_no_synthetic(tmp_path: Path) -> None:
+    """Test that missing raw files raise FileNotFoundError and never fabricate synthetic data."""
+    empty_raw = tmp_path / "empty_raw"
+    empty_raw.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    cfg = MockConfig(empty_raw, out_dir, tmp_path / "outputs")
+    with pytest.raises(FileNotFoundError):
+        build_store(
+            config=cfg,
+            years=[2018],
+            raw_dir=empty_raw,
+            out_dir=out_dir,
+        )
+
+
+def test_budget_enforcement(tmp_path: Path) -> None:
+    """Test that exceeding scratch or store budget raises RuntimeError."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    store = tmp_path / "store"
+    store.mkdir()
+
+    # Create dummy file of 100 bytes
+    dummy = scratch / "dummy.bin"
+    dummy.write_bytes(b"0" * 100)
+
+    # Budget limit 1e-9 GB (~1 byte) should trigger
+    with pytest.raises(RuntimeError, match="budget exceeded"):
+        check_budget(scratch, store, max_scratch_gb=1e-9)
+
+
+def test_export_f16_store(tmp_path: Path) -> None:
+    """Verify export_f16_store creates valid float16 Zarr store with _f16.zarr naming."""
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     out_dir = tmp_path / "out"
@@ -245,10 +288,10 @@ def test_export_fp16_store(tmp_path: Path) -> None:
         dry_run=False,
     )
 
-    fp16_zarr = out_dir / "oceanscope_v1_fp16.zarr"
-    export_fp16_store(master_zarr, fp16_zarr)
+    f16_zarr = out_dir / "oceanscope_v1_f16.zarr"
+    export_f16_store(master_zarr, f16_zarr)
 
-    ds_fp16 = xr.open_zarr(fp16_zarr)
-    assert ds_fp16["thetao"].dtype == np.float16
-    assert ds_fp16["sst"].dtype == np.float16
-    assert ds_fp16.attrs["dtype"] == "float16"
+    ds_f16 = xr.open_zarr(f16_zarr)
+    assert ds_f16["thetao"].dtype == np.float16
+    assert ds_f16["sst"].dtype == np.float16
+    assert ds_f16.attrs["dtype"] == "float16"

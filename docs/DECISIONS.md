@@ -81,3 +81,14 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Reason: CCMP V3.0 from Remote Sensing Systems is one 66 MB global file per day and the server ran at ~30 KB/s from Aryan's connection: over two days for the 91-day sample and roughly 600+ GB for 1993–2021. ERA5 is subset server-side and uses an account we already have.
 - Trade-off: ERA5 winds are model reanalysis rather than satellite-blended (CCMP); acceptable for a 0.25° daily input. CCMP stays in `download.py` as an optional product (only fetched when named), not part of the default download.
 - Proposed by Claude; approved by Aryan on the decision card ("ERA5 10 m winds"), 2026-10-24.
+
+## 2026-10-25 — Remaining M1 configuration (P1-M3)
+- **Region:** 40–100°E, 0–30°N (unchanged).
+- **Period:** 1993-01-01 to 2021-12-31; start stays 1993 (not 2004). ARGO input channels are empty before 2004 by design (`argo_input.min_year`).
+- **Splits:** train 1993-03-02 → 2017-12-01, val 2018-01-01 → 2020-12-01, test 2021-01-01 → 2021-12-31 (sealed), 30-day gaps (unchanged).
+- **GREP end date:** taken as 2020-12-15 (catalogue) unless `copernicusmarine describe` shows later data. The 2021 headline then compares the model with GLORYS12 and ARMOR3D only; GREP is reported as "n/a" for the test year (PRD_AI_ML §1.1).
+- **GREP top level:** GREP has no level at 0.494 m (its first is ~0.506 m). Its first level is used for the 0.494 m level (≈1 cm offset). GREP is also requested down to the first level below 1062.44 m so the deepest level can be interpolated (REVIEW_P3 A6).
+- **ARGO source:** Argo GDAC via ERDDAP (already used for the January sample).
+- `publish.hf_dataset_repo` = `zenzone3/oceanscope-outputs` (in use since P2).
+- Still `[CONFIRM]`, to be settled by validation experiments in P4: `history_days`, `long_history.days`, `aux_weight`, `depth_weights.in_band`, `finetune_argo.lambda`.
+- Proposed by Claude (REVIEW_P3 A8); approved by Aryan ("approved"), 2026-10-25.

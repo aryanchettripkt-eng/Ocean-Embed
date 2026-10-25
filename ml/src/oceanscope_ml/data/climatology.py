@@ -56,8 +56,12 @@ def fit_harmonic_climatology(
     n_harmonics: int = 3,
     period_days: float = 365.25,
     min_valid_samples: int = 7,
+    train_split: list[str] | None = None,
+    test_split: list[str] | None = None,
 ) -> np.ndarray:
     """Fit ordinary least squares harmonic climatology per cell and depth.
+
+    Must only use training period dates (PRD_AI_ML §0 rule 4).
 
     Parameters
     ----------
@@ -66,19 +70,50 @@ def fit_harmonic_climatology(
     n_harmonics : int, default 3
     period_days : float, default 365.25
     min_valid_samples : int, minimum observations required to fit (default 7)
+    train_split : [train_start, train_end] (optional guard)
+    test_split : [test_start, test_end] (optional guard against test leakage)
 
     Returns
     -------
     np.ndarray, shape (366, n_depth, n_lat, n_lon), float32
         Climatology evaluated at dayofyear 1..366.
     """
+    dt_series = pd.to_datetime(time_coords)
+
+    # Test leakage guard (PRD §0 rule 3, rule 4)
+    if test_split is not None and len(test_split) == 2:
+        test_start = pd.Timestamp(test_split[0])
+        test_end = pd.Timestamp(test_split[1])
+        leak_mask = (dt_series >= test_start) & (dt_series <= test_end)
+        if np.any(leak_mask):
+            first_leaked = dt_series[leak_mask][0].strftime("%Y-%m-%d")
+            raise ValueError(
+                f"Test leakage detected in climatology fit! Dates fall inside sealed test split "
+                f"[{test_start.strftime('%Y-%m-%d')} .. {test_end.strftime('%Y-%m-%d')}]. "
+                f"First leaked date: {first_leaked}."
+            )
+
+    if train_split is not None and len(train_split) == 2:
+        train_start = pd.Timestamp(train_split[0])
+        train_end = pd.Timestamp(train_split[1])
+        train_mask = (dt_series >= train_start) & (dt_series <= train_end)
+        if not np.any(train_mask):
+            raise ValueError(
+                f"No dates found in training period [{train_start} .. {train_end}] for climatology."
+            )
+        if not np.all(train_mask):
+            # Select only train dates
+            dt_series = dt_series[train_mask]
+            if isinstance(thetao, xr.DataArray):
+                thetao = thetao.isel(time=np.where(train_mask)[0])
+            else:
+                thetao = np.asarray(thetao)[train_mask]
     if isinstance(thetao, xr.DataArray):
         t_arr = thetao.values
     else:
         t_arr = np.asarray(thetao)
 
     n_time, n_depth, n_lat, n_lon = t_arr.shape
-    dt_series = pd.to_datetime(time_coords)
     day_of_years = dt_series.day_of_year.values.astype(np.float64)
 
     # Design matrix for training dates
