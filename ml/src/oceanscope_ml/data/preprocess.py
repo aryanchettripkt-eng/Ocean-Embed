@@ -77,10 +77,12 @@ def generate_synthetic_raw_sample(
     is_burma = (lat_2d >= 16.0) & (lon_2d >= 92.0)
     ocean_mask_2d = ~(is_arabia | is_india | is_africa | is_burma)
 
+    yr_str = str(dates[0].year)
+
     # 1. GLORYS12: (time, depth, lat, lon)
     glorys_dir = raw_dir / "glorys"
     glorys_dir.mkdir(parents=True, exist_ok=True)
-    glorys_path = glorys_dir / "glorys12_201901.nc"
+    glorys_path = glorys_dir / f"glorys12_{yr_str}01.nc"
 
     n_depth = len(depths_m)
     t_3d = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
@@ -110,8 +112,8 @@ def generate_synthetic_raw_sample(
     # 2. SLA & ADT
     duacs_dir = raw_dir / "duacs"
     duacs_dir.mkdir(parents=True, exist_ok=True)
-    sla_path = duacs_dir / "duacs_sla_201901.nc"
-    adt_path = duacs_dir / "duacs_adt_201901.nc"
+    sla_path = duacs_dir / f"duacs_sla_{yr_str}01.nc"
+    adt_path = duacs_dir / f"duacs_adt_{yr_str}01.nc"
 
     sla_vals = np.where(
         ocean_mask_2d, 0.05 * np.sin(lon_2d / 5.0) * np.cos(lat_2d / 4.0), np.nan
@@ -136,7 +138,7 @@ def generate_synthetic_raw_sample(
     # 3. OSTIA SST (stored in Kelvin)
     ostia_dir = raw_dir / "ostia"
     ostia_dir.mkdir(parents=True, exist_ok=True)
-    sst_path = ostia_dir / "ostia_sst_201901.nc"
+    sst_path = ostia_dir / f"ostia_sst_{yr_str}01.nc"
 
     sst_celsius = t_3d[:, 0, :, :]
     sst_kelvin = np.where(~np.isnan(sst_celsius), sst_celsius + 273.15, np.nan).astype(np.float32)
@@ -150,7 +152,7 @@ def generate_synthetic_raw_sample(
     # 4. SSS
     sss_dir = raw_dir / "sss"
     sss_dir.mkdir(parents=True, exist_ok=True)
-    sss_path = sss_dir / "multiobs_sss_201901.nc"
+    sss_path = sss_dir / f"multiobs_sss_{yr_str}01.nc"
 
     sss_vals = np.where(ocean_mask_2d, 35.0 - 0.05 * lat_2d + 0.02 * lon_2d, np.nan).astype(
         np.float32
@@ -166,7 +168,7 @@ def generate_synthetic_raw_sample(
     # 5. OSCAR Currents
     oscar_dir = raw_dir / "oscar"
     oscar_dir.mkdir(parents=True, exist_ok=True)
-    oscar_path = oscar_dir / "oscar_currents_201901.nc"
+    oscar_path = oscar_dir / f"oscar_currents_{yr_str}01.nc"
 
     u_curr = np.where(ocean_mask_2d, 0.2 * np.cos(lat_2d / 3.0), np.nan).astype(np.float32)
     v_curr = np.where(ocean_mask_2d, 0.1 * np.sin(lon_2d / 4.0), np.nan).astype(np.float32)
@@ -183,7 +185,7 @@ def generate_synthetic_raw_sample(
     # 6. ERA5 Winds
     era5_dir = raw_dir / "era5"
     era5_dir.mkdir(parents=True, exist_ok=True)
-    winds_path = era5_dir / "era5_winds_201901.nc"
+    winds_path = era5_dir / f"era5_winds_{yr_str}01.nc"
 
     u_wind = (5.0 + 2.0 * np.cos(lat_2d / 4.0)).astype(np.float32)
     v_wind = (-3.0 + 1.5 * np.sin(lon_2d / 6.0)).astype(np.float32)
@@ -198,7 +200,7 @@ def generate_synthetic_raw_sample(
     generated_files.append(str(winds_path.relative_to(raw_dir)))
 
     # 7. ERA5 Fluxes & Precip
-    fluxes_path = era5_dir / "era5_fluxes_201901.nc"
+    fluxes_path = era5_dir / f"era5_fluxes_{yr_str}01.nc"
     net_heat = np.full((n_time, n_lat, n_lon), 40.0, dtype=np.float32)
     precip = np.full((n_time, n_lat, n_lon), 0.003, dtype=np.float32)
     ds_fluxes = xr.Dataset(
