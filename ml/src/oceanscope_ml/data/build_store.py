@@ -42,6 +42,7 @@ from oceanscope_ml.data.reduce import (
     reduce_sss,
     reduce_sst,
     reduce_woa,
+    standardize_coords,
 )
 from oceanscope_ml.data.transform import check_no_test_leakage, compute_norm_stats
 
@@ -328,7 +329,10 @@ def stream_era5_daily(
     """Request and download ERA5 daily-statistics dataset from CDS into scratch_dir."""
     out_file = scratch_dir / f"era5_daily_{year}.nc"
     if out_file.exists() and out_file.stat().st_size > 0:
-        return xr.open_dataset(out_file)
+        ds = xr.open_dataset(out_file)
+        ds.attrs["daily_statistic"] = "daily_mean"
+        ds.attrs["is_daily_mean"] = True
+        return ds
 
     try:
         import cdsapi
@@ -363,7 +367,10 @@ def stream_era5_daily(
         },
         str(out_file),
     )
-    return xr.open_dataset(out_file)
+    ds = xr.open_dataset(out_file)
+    ds.attrs["daily_statistic"] = "daily_mean"
+    ds.attrs["is_daily_mean"] = True
+    return ds
 
 
 def stream_oscar(
@@ -475,9 +482,11 @@ def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
             matched.append(f)
         elif not years_found and not re.search(r"(?<!\d)(19|20)\d\d", name):
             # File has no 4-digit year in filename (e.g. data_stream-oper_stepType-instant.nc)
-            # Check the file's time range coordinate
+            # Check the file's time range coordinate after standardizing coordinates
+            # (e.g. CDS ERA5 files often name time coordinate valid_time)
             try:
-                with xr.open_dataset(f) as ds:
+                with xr.open_dataset(f) as ds_raw:
+                    ds = standardize_coords(ds_raw)
                     if "time" in ds.coords and len(ds.coords["time"]) > 0:
                         t_min = pd.Timestamp(ds.coords["time"].values[0])
                         t_max = pd.Timestamp(ds.coords["time"].values[-1])
@@ -829,7 +838,18 @@ def reduce_year_dataset(
     if ds_raw_grep is not None:
         ds_red_grep = reduce_grep(ds_raw_grep, target_grid, depths_m)
         if "time" in ds_red_grep.dims:
-            ds_red_grep = ds_red_grep.sel(time=target_dates)
+            # Reindex to target_dates so partial-year coverage (e.g. GREP ending on 2020-12-15)
+            # fills missing days with NaN without raising KeyError
+            if len(ds_red_grep.coords["time"]) > 0:
+                grep_dt = pd.to_datetime(ds_red_grep.coords["time"].values).floor("D")
+                target_dt = pd.to_datetime(target_dates).floor("D")
+                ds_red_grep = (
+                    ds_red_grep.assign_coords(time=grep_dt)
+                    .reindex(time=target_dt)
+                    .assign_coords(time=target_dates)
+                )
+            else:
+                ds_red_grep = ds_red_grep.reindex(time=target_dates)
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
 
     # --- ARMOR3D 3D Temperature ---
@@ -860,7 +880,16 @@ def reduce_year_dataset(
 
     ds_red_armor = reduce_armor3d(ds_raw_armor, target_grid, depths_m)
     if "time" in ds_red_armor.dims:
-        ds_red_armor = ds_red_armor.sel(time=target_dates)
+        if len(ds_red_armor.coords["time"]) > 0:
+            armor_dt = pd.to_datetime(ds_red_armor.coords["time"].values).floor("D")
+            target_dt = pd.to_datetime(target_dates).floor("D")
+            ds_red_armor = (
+                ds_red_armor.assign_coords(time=armor_dt)
+                .reindex(time=target_dt)
+                .assign_coords(time=target_dates)
+            )
+        else:
+            ds_red_armor = ds_red_armor.reindex(time=target_dates)
     processed_vars["armor3d"] = ds_red_armor["armor3d"]
 
     ds_year = xr.Dataset(data_vars=processed_vars)

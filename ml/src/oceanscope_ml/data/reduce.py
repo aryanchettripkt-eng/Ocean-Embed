@@ -993,6 +993,7 @@ def reduce_era5_fluxes(
     ds: xr.Dataset,
     target_grid: TargetGrid,
     target_time: np.ndarray | None = None,
+    is_daily_mean: bool | None = None,
 ) -> xr.Dataset:
     """Reduce ERA5 net heat flux and precipitation to 0.25° target grid.
 
@@ -1000,6 +1001,8 @@ def reduce_era5_fluxes(
     ERA5 hourly accum fields (J m**-2) are converted to W m**-2 (divided by 3600 s)
     and daily averaged requiring >= 18 of 24 valid hours.
     Precipitation tp (hourly meters) is daily summed requiring >= 18 of 24 valid hours.
+    For non-hourly daily inputs, if flagged as a daily mean (e.g. from CDS daily statistics
+    request or rate units), tp is scaled by 24 to convert mean rate to daily accumulation.
     """
     ds = standardize_coords(ds)
     has_components = all(k in ds.data_vars for k in ["ssr", "str", "sshf", "slhf"])
@@ -1017,6 +1020,19 @@ def reduce_era5_fluxes(
     if tp_var is None:
         raise KeyError(
             f"Expected precipitation ('tp' or 'precip') in dataset: {list(ds.data_vars)}"
+        )
+
+    if is_daily_mean is None:
+        tp_units = str(ds[tp_var].attrs.get("units", "")).lower()
+        is_daily_mean = bool(
+            ds.attrs.get("daily_statistic") == "daily_mean"
+            or ds.attrs.get("is_daily_mean") is True
+            or ds[tp_var].attrs.get("daily_statistic") == "daily_mean"
+            or ds[tp_var].attrs.get("is_daily_mean") is True
+            or any(
+                u in tp_units
+                for u in ["m/s", "m s**-1", "m s-1", "m/hr", "m hr-1", "m h**-1", "m/h"]
+            )
         )
 
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
@@ -1123,8 +1139,11 @@ def reduce_era5_fluxes(
             if src_idx < 0 or src_idx >= q_all.shape[0]:
                 continue
             q_t = q_all[src_idx]
-            # Non-hourly (daily mean) tp needs x24 to match daily accumulation sum
-            tp_t = tp_all[src_idx] * 24.0
+            # Scale daily mean rates (from CDS daily request or rate units) by 24
+            # to convert to daily accumulation sum.
+            # Local pre-accumulated daily files (without daily_mean flag) are not scaled.
+            scale_precip = 24.0 if is_daily_mean else 1.0
+            tp_t = tp_all[src_idx] * scale_precip
             out_heat[t_idx] = area_mean_regrid_2d(
                 q_t.astype(np.float32), src_lats, src_lons, target_grid
             )

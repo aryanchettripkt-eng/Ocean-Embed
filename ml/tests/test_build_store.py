@@ -532,7 +532,8 @@ def test_era5_hourly_and_daily_precipitation_parity() -> None:
         ds_hourly[v].attrs["units"] = "W m**-2"
     ds_hourly["tp"].attrs["units"] = "m"
 
-    # Daily dataset: 1 daily value with mean rate 0.001 m/hr
+    # Daily dataset: 1 daily value with mean rate 0.001 m/hr,
+    # flagged with daily_statistic='daily_mean'
     daily_times = pd.date_range("2019-01-01", periods=1, freq="D")
     ds_daily = xr.Dataset(
         data_vars={
@@ -543,6 +544,7 @@ def test_era5_hourly_and_daily_precipitation_parity() -> None:
             "tp": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 0.001, dtype=np.float32)),
         },
         coords={"time": daily_times, "lat": lats, "lon": lons},
+        attrs={"daily_statistic": "daily_mean"},
     )
     for v in ["ssr", "str", "sshf", "slhf"]:
         ds_daily[v].attrs["units"] = "W m**-2"
@@ -560,6 +562,14 @@ def test_era5_hourly_and_daily_precipitation_parity() -> None:
         red_hourly["net_heat_flux"].values, red_daily["net_heat_flux"].values, atol=1e-5
     )
 
+    # Verify that a daily file without daily_mean flag (already daily accumulation)
+    # is NOT multiplied by 24
+    ds_daily_accum = ds_daily.copy()
+    del ds_daily_accum.attrs["daily_statistic"]
+    ds_daily_accum["tp"].values[:] = 0.024
+    red_accum = reduce_era5_fluxes(ds_daily_accum, grid, target_time=target_time)
+    assert np.allclose(red_accum["precip"].values, 0.024, atol=1e-5)
+
 
 def test_filter_files_by_year_time_range(tmp_path: Path) -> None:
     """Verify filter_files_by_year inspects NetCDF time range for non-year-named ERA5 files."""
@@ -569,19 +579,26 @@ def test_filter_files_by_year_time_range(tmp_path: Path) -> None:
     ds = xr.Dataset(coords={"time": pd.date_range("2019-01-01", "2019-12-31")})
     ds.to_netcdf(era5_file)
 
+    # CDS ERA5 files with valid_time coordinate
+    era5_valid_time_file = tmp_path / "data_stream-oper_stepType-accum.nc"
+    ds_vt = xr.Dataset(coords={"valid_time": pd.date_range("2019-01-01", "2019-12-31")})
+    ds_vt.to_netcdf(era5_valid_time_file)
+
     files = [
         Path("/data/raw/glorys/glorys_2018.nc"),
         Path("/data/raw/glorys/glorys_2019.nc"),
         era5_file,
+        era5_valid_time_file,
     ]
 
-    # For 2019: glorys_2019.nc and era5_file (covers 2019) match
+    # For 2019: glorys_2019.nc, era5_file and era5_valid_time_file (both cover 2019) match
     m_2019 = filter_files_by_year(files, 2019)
     assert Path("/data/raw/glorys/glorys_2019.nc") in m_2019
     assert era5_file in m_2019
+    assert era5_valid_time_file in m_2019
     assert Path("/data/raw/glorys/glorys_2018.nc") not in m_2019
 
-    # For 2020: era5_file ends in 2019, so nothing matches
+    # For 2020: era5 files end in 2019, so nothing matches
     assert filter_files_by_year(files, 2020) == []
 
 
@@ -645,3 +662,180 @@ def test_stream_silent_failures_raise(tmp_path: Path, monkeypatch: pytest.Monkey
             stream=True,
             scratch_dir=tmp_path / "scratch",
         )
+
+
+def test_grep_ends_partway_through_year(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify building 2020 succeeds when GREP ends on 2020-12-15 without KeyError.
+
+    Implements PRD_AI_ML §4.2: GREP cutoff at 2020-12-15 fills remaining days with NaN via reindex.
+    """
+    import oceanscope_ml.data.build_store as bs_mod
+
+    cfg = MockConfig(tmp_path / "raw", tmp_path / "out", tmp_path / "outputs")
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+
+    # 2020 is a leap year (366 days)
+    full_dates_2020 = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+    grep_dates = pd.date_range("2020-01-01", "2020-12-15", freq="D")
+
+    n_t_full = len(full_dates_2020)
+    n_t_grep = len(grep_dates)
+    n_d = len(cfg.depths_m)
+    n_lat = len(grid.lats)
+    n_lon = len(grid.lons)
+
+    ds_mock_glorys = xr.Dataset(
+        data_vars={
+            "thetao": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t_full, n_d, n_lat, n_lon), 25.0, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": full_dates_2020,
+            "depth": cfg.depths_m,
+            "lat": grid.lats,
+            "lon": grid.lons,
+        },
+    )
+    ds_mock_grep = xr.Dataset(
+        data_vars={
+            "thetao_mean": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t_grep, n_d, n_lat, n_lon), 23.5, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": grep_dates,
+            "depth": cfg.depths_m,
+            "lat": grid.lats,
+            "lon": grid.lons,
+        },
+    )
+    ds_mock_armor = xr.Dataset(
+        data_vars={
+            "to": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t_full, n_d, n_lat, n_lon), 24.0, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": full_dates_2020,
+            "depth": cfg.depths_m,
+            "lat": grid.lats,
+            "lon": grid.lons,
+        },
+    )
+    ds_mock_2d = xr.Dataset(
+        data_vars={
+            "sla": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 0.05, dtype=np.float32),
+            ),
+            "adt": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 0.85, dtype=np.float32),
+            ),
+            "analysed_sst": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 299.0, dtype=np.float32),
+            ),
+            "sos": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 35.0, dtype=np.float32),
+            ),
+            "u": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 0.1, dtype=np.float32),
+            ),
+            "v": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), -0.1, dtype=np.float32),
+            ),
+            "u10": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 5.0, dtype=np.float32),
+            ),
+            "v10": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), -3.0, dtype=np.float32),
+            ),
+            "ssr": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 30.0, dtype=np.float32),
+            ),
+            "str": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 10.0, dtype=np.float32),
+            ),
+            "sshf": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 5.0, dtype=np.float32),
+            ),
+            "slhf": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 5.0, dtype=np.float32),
+            ),
+            "tp": (
+                ("time", "lat", "lon"),
+                np.full((n_t_full, n_lat, n_lon), 0.001, dtype=np.float32),
+            ),
+        },
+        coords={"time": full_dates_2020, "lat": grid.lats, "lon": grid.lons},
+        attrs={"daily_statistic": "daily_mean"},
+    )
+    for v in ["ssr", "str", "sshf", "slhf"]:
+        ds_mock_2d[v].attrs["units"] = "W m**-2"
+    ds_mock_2d["tp"].attrs["units"] = "m"
+    ds_mock_2d["analysed_sst"].attrs["units"] = "Kelvin"
+
+    da_mock_gebco = xr.DataArray(
+        np.full((n_lat, n_lon), 1500.0, dtype=np.float32),
+        dims=("lat", "lon"),
+        coords={"lat": grid.lats, "lon": grid.lons},
+    )
+    da_mock_woa = xr.DataArray(
+        np.full((12, n_d, n_lat, n_lon), 25.0, dtype=np.float32),
+        dims=("month", "depth", "lat", "lon"),
+        coords={
+            "month": np.arange(1, 13),
+            "depth": cfg.depths_m,
+            "lat": grid.lats,
+            "lon": grid.lons,
+        },
+    )
+
+    def mock_stream(dataset_id: str, **kwargs: Any) -> xr.Dataset:
+        if dataset_id == PRODUCT_SPECS["glorys12"]["dataset_id"]:
+            return ds_mock_glorys
+        if dataset_id == PRODUCT_SPECS["grep"]["dataset_id"]:
+            return ds_mock_grep
+        if dataset_id == PRODUCT_SPECS["armor3d"]["dataset_id"]:
+            return ds_mock_armor
+        return ds_mock_2d
+
+    monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream)
+    monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_2d)
+    monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_2d)
+
+    ds_year, _ = bs_mod.reduce_year_dataset(
+        year=2020,
+        raw_path=tmp_path / "raw",
+        target_grid=grid,
+        depths_m=cfg.depths_m,
+        stream=True,
+        scratch_dir=tmp_path / "scratch",
+        cached_bathymetry=da_mock_gebco,
+        cached_woa_profile=da_mock_woa,
+    )
+
+    assert "grep_mean" in ds_year
+    assert ds_year["grep_mean"].sizes["time"] == 366
+    # Days up to 2020-12-15 should have valid non-NaN values
+    dec_15_vals = ds_year["grep_mean"].sel(time="2020-12-15").values
+    assert not np.isnan(dec_15_vals).all()
+    # Days after 2020-12-15 must be entirely NaN
+    dec_16_vals = ds_year["grep_mean"].sel(time="2020-12-16").values
+    assert np.isnan(dec_16_vals).all()
+    dec_31_vals = ds_year["grep_mean"].sel(time="2020-12-31").values
+    assert np.isnan(dec_31_vals).all()
