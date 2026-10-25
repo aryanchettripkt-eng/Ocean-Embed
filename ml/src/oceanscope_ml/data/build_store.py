@@ -29,6 +29,7 @@ from oceanscope_ml.data.preprocess import (
 from oceanscope_ml.data.reduce import (
     TargetGrid,
     reduce_adt,
+    reduce_armor3d,
     reduce_currents,
     reduce_era5_fluxes,
     reduce_era5_winds,
@@ -374,6 +375,19 @@ def reduce_year_dataset(
         source_files.append(str(grep_cands[0].relative_to(raw_path)))
         ds_red_grep = reduce_grep(xr.open_dataset(grep_cands[0]), target_grid, depths_m)
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
+
+    # --- ARMOR3D 3D Temperature (Validation & Test Competitor) ---
+    armor_cands = sorted(
+        [
+            f
+            for f in raw_path.glob("**/*")
+            if "armor" in f.name.lower() and f.suffix in [".nc", ".nc4"]
+        ]
+    )
+    if armor_cands:
+        source_files.append(str(armor_cands[0].relative_to(raw_path)))
+        ds_red_armor = reduce_armor3d(xr.open_dataset(armor_cands[0]), target_grid, depths_m)
+        processed_vars["armor3d"] = ds_red_armor["armor3d"]
 
     ds_year = xr.Dataset(data_vars=processed_vars)
     return ds_year, source_files

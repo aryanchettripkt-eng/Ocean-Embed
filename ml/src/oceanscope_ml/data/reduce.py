@@ -1080,3 +1080,66 @@ def reduce_grep(
             "lon": target_grid.lons,
         },
     )
+
+
+def reduce_armor3d(
+    ds: xr.Dataset,
+    target_grid: TargetGrid,
+    depths_m: list[float],
+) -> xr.Dataset:
+    """Reduce ARMOR3D observation-based 3D temperature to 15 depths and target 0.25° grid.
+
+    Product: MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012
+    (dataset cmems_obs-mob_glo_phy_my_0.125deg_P1D-m, variable 'to')
+    """
+    ds = standardize_coords(ds)
+    var_name = (
+        "to"
+        if "to" in ds.data_vars
+        else ("temperature" if "temperature" in ds.data_vars else list(ds.data_vars.keys())[0])
+    )
+    da = ds[var_name]
+
+    src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
+    src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
+    src_depths = np.asarray(ds.coords["depth"].values, dtype=np.float64)
+    time_vals = (
+        ds.coords["time"].values
+        if "time" in ds.coords
+        else np.array(["2020-01-01T00:00:00"], dtype="datetime64[ns]")
+    )
+    if np.ndim(time_vals) == 0:
+        time_vals = np.array([time_vals])
+
+    vals = da.values
+    if vals.ndim == 3:
+        vals = vals[np.newaxis, ...]
+
+    n_time = len(time_vals)
+    n_depth = len(depths_m)
+    n_lat = len(target_grid.lats)
+    n_lon = len(target_grid.lons)
+
+    out_arr = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
+
+    for t_idx in range(n_time):
+        regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+        for d_idx in range(len(src_depths)):
+            regrid_by_depth[d_idx] = area_mean_regrid_2d(
+                vals[t_idx, d_idx],
+                src_lats,
+                src_lons,
+                target_grid,
+                valid_frac_threshold=0.5,
+            )
+        out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+
+    return xr.Dataset(
+        data_vars={"armor3d": (("time", "depth", "lat", "lon"), out_arr)},
+        coords={
+            "time": time_vals,
+            "depth": np.array(depths_m, dtype=np.float64),
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
