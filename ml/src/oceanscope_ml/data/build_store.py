@@ -277,6 +277,7 @@ def stream_copernicus(
     dates: tuple[str, str],
     variables: list[str] | None = None,
     depths: tuple[float, float] | None = None,
+    depth_levels: list[float] | None = None,
 ) -> xr.Dataset:
     """Stream a remote Copernicus Marine dataset via copernicusmarine.open_dataset."""
     try:
@@ -299,29 +300,157 @@ def stream_copernicus(
     if depths:
         kwargs["minimum_depth"] = depths[0]
         kwargs["maximum_depth"] = depths[1]
+    elif depth_levels:
+        kwargs["minimum_depth"] = float(min(depth_levels))
+        kwargs["maximum_depth"] = float(max(depth_levels))
 
     logger.info("Streaming remote dataset %s for %s..%s...", dataset_id, dates[0], dates[1])
-    return copernicusmarine.open_dataset(**kwargs)
+    ds = copernicusmarine.open_dataset(**kwargs)
+    if depth_levels is not None and "depth" in ds.coords:
+        ds_depths = np.asarray(ds.coords["depth"].values)
+        matched_idx: list[int] = []
+        for dl in depth_levels:
+            diffs = np.abs(ds_depths - dl)
+            idx = int(np.argmin(diffs))
+            if diffs[idx] <= 0.05 and idx not in matched_idx:
+                matched_idx.append(idx)
+        if len(matched_idx) == len(depth_levels):
+            ds = ds.isel(depth=matched_idx)
+    return ds
+
+
+def stream_era5_daily(
+    year: int,
+    bbox: tuple[float, float, float, float],
+    scratch_dir: Path,
+) -> xr.Dataset:
+    """Request and download ERA5 daily-statistics dataset from CDS into scratch_dir."""
+    out_file = scratch_dir / f"era5_daily_{year}.nc"
+    if out_file.exists() and out_file.stat().st_size > 0:
+        return xr.open_dataset(out_file)
+
+    try:
+        import cdsapi
+    except ImportError as e:
+        raise RuntimeError("cdsapi package is required to stream ERA5 data from CDS.") from e
+
+    lon_min, lon_max, lat_min, lat_max = bbox
+    area = [lat_max + 1.0, lon_min - 1.0, lat_min - 1.0, lon_max + 1.0]
+
+    c = cdsapi.Client()
+    c.retrieve(
+        "derived-era5-single-levels-daily-statistics",
+        {
+            "product_type": "reanalysis",
+            "variable": [
+                "10m_u_component_of_wind",
+                "10m_v_component_of_wind",
+                "surface_net_solar_radiation",
+                "surface_net_thermal_radiation",
+                "surface_sensible_heat_flux",
+                "surface_latent_heat_flux",
+                "total_precipitation",
+            ],
+            "year": str(year),
+            "month": [f"{m:02d}" for m in range(1, 13)],
+            "day": [f"{d:02d}" for d in range(1, 32)],
+            "daily_statistic": "daily_mean",
+            "time_zone": "utc+00:00",
+            "frequency": "1_hourly",
+            "area": area,
+            "format": "netcdf",
+        },
+        str(out_file),
+    )
+    return xr.open_dataset(out_file)
+
+
+def stream_oscar(
+    year: int,
+    bbox: tuple[float, float, float, float],
+    scratch_dir: Path,
+) -> xr.Dataset:
+    """Download OSCAR ocean currents from NASA Earthdata into scratch_dir."""
+    out_dir = scratch_dir / "oscar"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import earthaccess
+    except ImportError as e:
+        raise RuntimeError("earthaccess package is required to stream OSCAR currents.") from e
+
+    earthaccess.login(strategy="environment")
+    results = earthaccess.search_data(
+        short_name="OSCAR_L4_OC_FINAL_V2.0",
+        temporal=(f"{year}-01-01", f"{year}-12-31"),
+        bounding_box=bbox,
+    )
+    if not results:
+        raise FileNotFoundError(f"No OSCAR granules found for year {year} in bbox {bbox}")
+    downloaded = earthaccess.download(results, str(out_dir))
+    if len(downloaded) == 1:
+        return xr.open_dataset(downloaded[0])
+    return xr.open_mfdataset(downloaded, combine="nested", concat_dim="time")
+
+
+def stream_gebco(target_grid: TargetGrid, scratch_dir: Path) -> xr.Dataset:
+    """Download regional GEBCO bathymetry into scratch_dir."""
+    import urllib.request
+
+    out_file = scratch_dir / "gebco_sub_ice_topo.nc"
+    if out_file.exists() and out_file.stat().st_size > 0:
+        return xr.open_dataset(out_file)
+
+    ceda_url = (
+        "https://data.ceda.ac.uk/bodc/gebco/global/gebco_2023/sub_ice_topo/netcdf/"
+        "gebco_2023_sub_ice_topo.nc"
+    )
+    req = urllib.request.Request(ceda_url, headers={"User-Agent": "OceanScope-AI/1.0"})
+    with urllib.request.urlopen(req, timeout=300) as resp, open(out_file, "wb") as dst:
+        shutil.copyfileobj(resp, dst, length=65536)
+    return xr.open_dataset(out_file)
+
+
+def stream_woa(target_grid: TargetGrid, depths_m: list[float]) -> xr.DataArray:
+    """Stream WOA23 0.25° monthly temperature climatology over OPeNDAP."""
+    url_base = (
+        "https://www.ncei.noaa.gov/thredds-ocean/dodsC/woa23/DATA/temperature/netcdf/decav/0.25"
+    )
+    woa_months = []
+    for m in range(1, 13):
+        url = f"{url_base}/woa23_decav_t{m:02d}_04.nc"
+        ds_m_raw = xr.open_dataset(url, decode_times=False)
+        ds_m = reduce_woa(ds_m_raw, target_grid, depths_m, month=m)
+        woa_months.append(ds_m["woa_clim_profile"].values[0])
+    woa_12m = np.stack(woa_months, axis=0)
+    return xr.DataArray(
+        woa_12m.astype(np.float32),
+        dims=("month", "depth", "lat", "lon"),
+        coords={
+            "month": np.arange(1, 13),
+            "depth": depths_m,
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
 
 
 def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
-    """Filter list of files to those containing the specified year in name or path.
+    r"""Filter list of files to those matching the specified year in their filename.
 
-    Excludes files that explicitly contain a different 4-digit year (REVIEW_P3 R3).
+    Uses regex (?<!\d)(19|20)\d\d(?!\d) on f.name only, or returns [] when nothing matches.
     """
     import re
 
+    pattern = re.compile(r"(?<!\d)(19|20)\d\d(?!\d)")
     yr_str = str(year)
-    matched = [f for f in files if yr_str in f.name or yr_str in str(f)]
-    if matched:
-        return matched
-
-    # If any file in files contains another 4-digit year, do not fall back
-    has_other_year = any(re.search(r"\b(19\d\d|20\d\d)\b", f.name) for f in files)
-    if has_other_year:
-        return []
-
-    return files
+    matched: list[Path] = []
+    for f in files:
+        name = f.name
+        years_found = [m.group(0) for m in pattern.finditer(name)]
+        if yr_str in years_found or re.search(r"(?<!\d)" + yr_str + r"(\d{2}|\d{4})?(?!\d)", name):
+            matched.append(f)
+    return matched
 
 
 def reduce_year_dataset(
@@ -368,6 +497,7 @@ def reduce_year_dataset(
             dates=(start_date, end_date),
             variables=["thetao"],
             depths=(float(min(depths_m)), float(max(depths_m))),
+            depth_levels=depths_m,
         )
         source_files.append(f"copernicusmarine:cmems_mod_glo_phy_my_0.083deg_P1D-m:{year}")
     else:
@@ -390,18 +520,31 @@ def reduce_year_dataset(
             f"{sorted(list({pd.Timestamp(t).year for t in common_time.values}))}"
         )
 
+    effective_scratch = scratch_dir or (raw_path / "scratch")
+    effective_scratch.mkdir(parents=True, exist_ok=True)
+
     # --- SLA & ADT ---
     sla_files = filter_files_by_year(find_product_files(raw_path, "sla", manifest), year)
-    if not sla_files:
-        raise FileNotFoundError(f"Missing SLA/ADT raw data for year {year} in {raw_path}")
-    source_files.append(
-        str(
-            sla_files[0].relative_to(raw_path)
-            if sla_files[0].is_relative_to(raw_path)
-            else sla_files[0].name
+    if sla_files:
+        source_files.append(
+            str(
+                sla_files[0].relative_to(raw_path)
+                if sla_files[0].is_relative_to(raw_path)
+                else sla_files[0].name
+            )
         )
-    )
-    ds_raw_sla = xr.open_dataset(sla_files[0])
+        ds_raw_sla = xr.open_dataset(sla_files[0])
+    elif stream:
+        ds_raw_sla = stream_copernicus(
+            dataset_id="cmems_obs-sl_glo_phy-ssh_my_0.25deg_P1D-m",
+            bbox=bbox,
+            dates=(start_date, end_date),
+            variables=["sla", "adt"],
+        )
+        source_files.append(f"copernicusmarine:cmems_obs-sl_glo_phy-ssh_my_0.25deg_P1D-m:{year}")
+    else:
+        raise FileNotFoundError(f"Missing SLA/ADT raw data for year {year} in {raw_path}")
+
     ds_red_sla = reduce_sla(ds_raw_sla, target_grid, target_time=target_dates)
     processed_vars["sla"] = ds_red_sla["sla"]
     if "adt" in ds_raw_sla.data_vars:
@@ -410,69 +553,115 @@ def reduce_year_dataset(
 
     # --- OSTIA SST ---
     sst_files = filter_files_by_year(find_product_files(raw_path, "sst", manifest), year)
-    if not sst_files:
-        raise FileNotFoundError(f"Missing OSTIA SST raw data for year {year} in {raw_path}")
-    source_files.append(
-        str(
-            sst_files[0].relative_to(raw_path)
-            if sst_files[0].is_relative_to(raw_path)
-            else sst_files[0].name
+    if sst_files:
+        source_files.append(
+            str(
+                sst_files[0].relative_to(raw_path)
+                if sst_files[0].is_relative_to(raw_path)
+                else sst_files[0].name
+            )
         )
-    )
-    ds_red_sst = reduce_sst(xr.open_dataset(sst_files[0]), target_grid, target_time=target_dates)
+        ds_raw_sst = xr.open_dataset(sst_files[0])
+    elif stream:
+        ds_raw_sst = stream_copernicus(
+            dataset_id="METOFFICE-GLO-SST-L4-REP-OBS-SST",
+            bbox=bbox,
+            dates=(start_date, end_date),
+            variables=["analysed_sst"],
+        )
+        source_files.append(f"copernicusmarine:METOFFICE-GLO-SST-L4-REP-OBS-SST:{year}")
+    else:
+        raise FileNotFoundError(f"Missing OSTIA SST raw data for year {year} in {raw_path}")
+
+    ds_red_sst = reduce_sst(ds_raw_sst, target_grid, target_time=target_dates)
     processed_vars["sst"] = ds_red_sst["sst"]
 
     # --- MULTIOBS SSS ---
     sss_files = filter_files_by_year(find_product_files(raw_path, "sss", manifest), year)
-    if not sss_files:
-        raise FileNotFoundError(f"Missing MULTIOBS SSS raw data for year {year} in {raw_path}")
-    source_files.append(
-        str(
-            sss_files[0].relative_to(raw_path)
-            if sss_files[0].is_relative_to(raw_path)
-            else sss_files[0].name
+    if sss_files:
+        source_files.append(
+            str(
+                sss_files[0].relative_to(raw_path)
+                if sss_files[0].is_relative_to(raw_path)
+                else sss_files[0].name
+            )
         )
-    )
-    ds_red_sss = reduce_sss(xr.open_dataset(sss_files[0]), target_grid, target_time=target_dates)
+        ds_raw_sss = xr.open_dataset(sss_files[0])
+    elif stream:
+        ds_raw_sss = stream_copernicus(
+            dataset_id="MULTIOBS_GLO_PHY_SSS_L4_MY_015_015",
+            bbox=bbox,
+            dates=(start_date, end_date),
+            variables=["sos"],
+        )
+        source_files.append(f"copernicusmarine:MULTIOBS_GLO_PHY_SSS_L4_MY_015_015:{year}")
+    else:
+        raise FileNotFoundError(f"Missing MULTIOBS SSS raw data for year {year} in {raw_path}")
+
+    ds_red_sss = reduce_sss(ds_raw_sss, target_grid, target_time=target_dates)
     processed_vars["sss"] = ds_red_sss["sss"]
 
     # --- OSCAR Currents ---
     oscar_files = filter_files_by_year(find_product_files(raw_path, "oscar", manifest), year)
-    if not oscar_files:
-        raise FileNotFoundError(f"Missing OSCAR currents raw data for year {year} in {raw_path}")
-    source_files.append(
-        str(
-            oscar_files[0].relative_to(raw_path)
-            if oscar_files[0].is_relative_to(raw_path)
-            else oscar_files[0].name
+    if oscar_files:
+        source_files.append(
+            str(
+                oscar_files[0].relative_to(raw_path)
+                if oscar_files[0].is_relative_to(raw_path)
+                else oscar_files[0].name
+            )
         )
-    )
-    if len(oscar_files) > 1:
-        try:
-            ds_raw_curr = xr.open_mfdataset(oscar_files, combine="nested", concat_dim="time")
-        except Exception:
+        if len(oscar_files) > 1:
+            try:
+                ds_raw_curr = xr.open_mfdataset(oscar_files, combine="nested", concat_dim="time")
+            except Exception:
+                ds_raw_curr = xr.open_dataset(oscar_files[0])
+        else:
             ds_raw_curr = xr.open_dataset(oscar_files[0])
+    elif stream:
+        ds_raw_curr = stream_oscar(year, bbox, effective_scratch)
+        source_files.append(f"podaac:OSCAR_L4_OC_FINAL_V2.0:{year}")
     else:
-        ds_raw_curr = xr.open_dataset(oscar_files[0])
+        raise FileNotFoundError(f"Missing OSCAR currents raw data for year {year} in {raw_path}")
+
     ds_red_curr = reduce_currents(ds_raw_curr, target_grid, target_time=target_dates)
     processed_vars["u_current"] = ds_red_curr["u_current"]
     processed_vars["v_current"] = ds_red_curr["v_current"]
 
     # --- ERA5 Winds & Fluxes ---
     winds_files = filter_files_by_year(find_product_files(raw_path, "era5_instant", manifest), year)
-    if not winds_files:
-        raise FileNotFoundError(
-            f"Missing ERA5 instant winds raw data for year {year} in {raw_path}"
+    flux_files = filter_files_by_year(find_product_files(raw_path, "era5_accum", manifest), year)
+    if winds_files and flux_files:
+        source_files.append(
+            str(
+                winds_files[0].relative_to(raw_path)
+                if winds_files[0].is_relative_to(raw_path)
+                else winds_files[0].name
+            )
         )
-    source_files.append(
-        str(
-            winds_files[0].relative_to(raw_path)
-            if winds_files[0].is_relative_to(raw_path)
-            else winds_files[0].name
+        source_files.append(
+            str(
+                flux_files[0].relative_to(raw_path)
+                if flux_files[0].is_relative_to(raw_path)
+                else flux_files[0].name
+            )
         )
-    )
+        ds_raw_winds = xr.open_dataset(winds_files[0])
+        ds_raw_flux = xr.open_dataset(flux_files[0])
+    elif stream:
+        ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch)
+        source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
+        ds_raw_winds = ds_raw_era5
+        ds_raw_flux = ds_raw_era5
+    else:
+        if not winds_files:
+            raise FileNotFoundError(
+                f"Missing ERA5 instant winds raw data for year {year} in {raw_path}"
+            )
+        raise FileNotFoundError(f"Missing ERA5 accum fluxes raw data for year {year} in {raw_path}")
+
     ds_red_winds = reduce_era5_winds(
-        xr.open_dataset(winds_files[0]),
+        ds_raw_winds,
         target_grid,
         target_time=target_dates,
         ocean_mask=np.asarray(processed_vars["ocean_mask"].values, dtype=bool),
@@ -481,19 +670,7 @@ def reduce_year_dataset(
     processed_vars["v_wind"] = ds_red_winds["v_wind"]
     processed_vars["wind_stress_curl"] = ds_red_winds["wind_stress_curl"]
 
-    flux_files = filter_files_by_year(find_product_files(raw_path, "era5_accum", manifest), year)
-    if not flux_files:
-        raise FileNotFoundError(f"Missing ERA5 accum fluxes raw data for year {year} in {raw_path}")
-    source_files.append(
-        str(
-            flux_files[0].relative_to(raw_path)
-            if flux_files[0].is_relative_to(raw_path)
-            else flux_files[0].name
-        )
-    )
-    ds_red_flux = reduce_era5_fluxes(
-        xr.open_dataset(flux_files[0]), target_grid, target_time=target_dates
-    )
+    ds_red_flux = reduce_era5_fluxes(ds_raw_flux, target_grid, target_time=target_dates)
     processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
     processed_vars["precip"] = ds_red_flux["precip"]
 
@@ -509,6 +686,14 @@ def reduce_year_dataset(
         )
         ds_red_gebco = reduce_gebco(xr.open_dataset(gebco_files[0]), target_grid)
         processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
+    elif stream:
+        try:
+            ds_raw_gebco = stream_gebco(target_grid, effective_scratch)
+            ds_red_gebco = reduce_gebco(ds_raw_gebco, target_grid)
+            processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
+            source_files.append("bodc:gebco_2023_sub_ice_topo")
+        except Exception as e:
+            logger.warning("Could not stream GEBCO bathymetry: %s", e)
 
     # --- WOA23 Climatology (Static by month, PRD §3, REVIEW B5) ---
     woa_files = find_product_files(raw_path, "woa23", manifest)
@@ -550,6 +735,12 @@ def reduce_year_dataset(
                 "lon": target_grid.lons,
             },
         )
+    elif stream:
+        try:
+            processed_vars["woa_clim_profile"] = stream_woa(target_grid, depths_m)
+            source_files.append("opendap:ncei.noaa.gov:woa23_decav_0.25")
+        except Exception as e:
+            logger.warning("Could not stream WOA23 dataset over OPeNDAP: %s", e)
 
     # --- GREP Ensemble Mean ---
     grep_files = filter_files_by_year(find_product_files(raw_path, "grep", manifest), year)
@@ -561,7 +752,26 @@ def reduce_year_dataset(
                 else grep_files[0].name
             )
         )
-        ds_red_grep = reduce_grep(xr.open_dataset(grep_files[0]), target_grid, depths_m)
+        ds_raw_grep = xr.open_dataset(grep_files[0])
+    elif stream:
+        try:
+            # Request GREP down to >= 1250 m so 1062 m level is covered (PRD §4.2)
+            ds_raw_grep = stream_copernicus(
+                dataset_id="cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m",
+                bbox=bbox,
+                dates=(start_date, end_date),
+                variables=["thetao_mean"],
+                depths=(0.0, 1250.0),
+            )
+            source_files.append(f"copernicusmarine:cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m:{year}")
+        except Exception as e:
+            logger.warning("Could not stream GREP dataset: %s", e)
+            ds_raw_grep = None
+    else:
+        ds_raw_grep = None
+
+    if ds_raw_grep is not None:
+        ds_red_grep = reduce_grep(ds_raw_grep, target_grid, depths_m)
         if "time" in ds_red_grep.dims:
             ds_red_grep = ds_red_grep.sel(time=target_dates)
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
@@ -576,7 +786,25 @@ def reduce_year_dataset(
                 else armor_files[0].name
             )
         )
-        ds_red_armor = reduce_armor3d(xr.open_dataset(armor_files[0]), target_grid, depths_m)
+        ds_raw_armor = xr.open_dataset(armor_files[0])
+    elif stream:
+        try:
+            ds_raw_armor = stream_copernicus(
+                dataset_id="dataset-armor-3d-rep-weekly",
+                bbox=bbox,
+                dates=(start_date, end_date),
+                variables=["to"],
+                depths=(0.0, 1100.0),
+            )
+            source_files.append(f"copernicusmarine:dataset-armor-3d-rep-weekly:{year}")
+        except Exception as e:
+            logger.warning("Could not stream ARMOR3D dataset: %s", e)
+            ds_raw_armor = None
+    else:
+        ds_raw_armor = None
+
+    if ds_raw_armor is not None:
+        ds_red_armor = reduce_armor3d(ds_raw_armor, target_grid, depths_m)
         if "time" in ds_red_armor.dims:
             ds_red_armor = ds_red_armor.sel(time=target_dates)
         processed_vars["armor3d"] = ds_red_armor["armor3d"]
@@ -868,7 +1096,7 @@ def build_store(
             train_times = pd.to_datetime(t_3d.coords["time"].values)
 
             clim_366 = fit_harmonic_climatology(
-                t_3d.values,
+                t_3d,
                 train_times,
                 n_harmonics=3,
                 train_split=config.splits.train,

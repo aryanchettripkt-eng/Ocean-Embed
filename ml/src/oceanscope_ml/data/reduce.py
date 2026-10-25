@@ -392,12 +392,6 @@ def reduce_glorys12(
 
     out_arr = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    vals = da.values
-    if vals.ndim == 3:  # (depth, lat, lon)
-        vals = vals[np.newaxis, ...]
-    elif vals.ndim == 2:  # (lat, lon)
-        vals = vals[np.newaxis, np.newaxis, ...]
-
     # Match configured depths to GLORYS native levels with tolerance (atol=0.05)
     matched_indices: list[int] = []
     for td in depths_m:
@@ -410,30 +404,44 @@ def reduce_glorys12(
             break
     direct_depth_slicing = len(matched_indices) == n_depth
 
-    for t_idx in range(n_time):
-        t_slice = vals[t_idx]
-        if direct_depth_slicing:
-            # Regrid only the 15 selected depth slices directly (REVIEW_P3 R2)
-            t_slice_15 = t_slice[matched_indices]
-            for d_idx in range(n_depth):
-                out_arr[t_idx, d_idx] = area_mean_regrid_2d(
-                    t_slice_15[d_idx],
-                    src_lats,
-                    src_lons,
-                    target_grid,
-                    valid_frac_threshold=0.5,
-                )
-        else:
-            regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
-            for d_idx in range(len(src_depths)):
-                regrid_by_depth[d_idx] = area_mean_regrid_2d(
-                    t_slice[d_idx],
-                    src_lats,
-                    src_lons,
-                    target_grid,
-                    valid_frac_threshold=0.5,
-                )
-            out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+    # Select only the 15 matched levels on the DataArray before loading into memory
+    if direct_depth_slicing and "depth" in da.dims:
+        da = da.isel(depth=matched_indices)
+
+    # Process in monthly chunks (<= 31 days) to prevent RAM explosion
+    chunk_size = 31
+    for start_t in range(0, n_time, chunk_size):
+        end_t = min(start_t + chunk_size, n_time)
+        da_chunk = da.isel(time=slice(start_t, end_t)) if "time" in da.dims else da
+        chunk_vals = da_chunk.values
+        if chunk_vals.ndim == 3:  # (depth, lat, lon)
+            chunk_vals = chunk_vals[np.newaxis, ...]
+        elif chunk_vals.ndim == 2:  # (lat, lon)
+            chunk_vals = chunk_vals[np.newaxis, np.newaxis, ...]
+
+        for offset in range(end_t - start_t):
+            t_idx = start_t + offset
+            t_slice = chunk_vals[offset]
+            if direct_depth_slicing:
+                for d_idx in range(n_depth):
+                    out_arr[t_idx, d_idx] = area_mean_regrid_2d(
+                        t_slice[d_idx],
+                        src_lats,
+                        src_lons,
+                        target_grid,
+                        valid_frac_threshold=0.5,
+                    )
+            else:
+                regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+                for d_idx in range(len(src_depths)):
+                    regrid_by_depth[d_idx] = area_mean_regrid_2d(
+                        t_slice[d_idx],
+                        src_lats,
+                        src_lons,
+                        target_grid,
+                        valid_frac_threshold=0.5,
+                    )
+                out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
 
     surface_layer = out_arr[:, 0, :, :]
     ocean_mask = np.any(~np.isnan(surface_layer), axis=0)
@@ -1047,7 +1055,10 @@ def reduce_era5_fluxes(
             is_joules = True
 
     if is_hourly and "time" in ds.coords:
-        src_days = to_clean_datetime_index(ds.coords["time"].values)
+        # ERA5 accumulations are labelled by the end of the hour, so the 00 UTC value
+        # belongs to the previous day. Shift backward by 1 hour before grouping by day.
+        shifted_times = pd.to_datetime(ds.coords["time"].values) - pd.Timedelta(hours=1)
+        src_days = to_clean_datetime_index(shifted_times.values)
         target_days = to_clean_datetime_index(time_vals)
         for t_idx, t in enumerate(target_days):
             day_mask = src_days == t

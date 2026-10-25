@@ -147,29 +147,49 @@ def compute_norm_stats(
             }
 
     # Per-depth anomaly standard deviation sigma_d: std(thetao - clim) over train dates
+    # Computed via streaming running sums over time chunks (REVIEW_P3 R3 / memory)
     sigma_d_list: list[float] = []
     if "thetao" in ds_train.data_vars and "clim" in ds_train.data_vars:
-        thetao_train = ds_train["thetao"].values  # (time, depth, lat, lon)
-        n_depths = thetao_train.shape[1]
-
-        # Extract or evaluate climatology for training dates
+        da_thetao = ds_train["thetao"]
         clim_train_vals = ds_train["clim"].values
-        if clim_train_vals.shape[0] == 366:
-            # Evaluate clim for train dates
-            train_dates = pd.to_datetime(ds_train.coords["time"].values)
-            doy_indices = train_dates.day_of_year.values - 1
-            clim_on_dates = clim_train_vals[doy_indices]
-        else:
-            clim_on_dates = clim_train_vals
+        train_dates = pd.to_datetime(ds_train.coords["time"].values)
+        n_time = len(train_dates)
+        n_depths = (
+            len(ds_train.coords["depth"]) if "depth" in ds_train.coords else da_thetao.shape[1]
+        )
 
-        anomaly_train = thetao_train - clim_on_dates
+        count_d = np.zeros(n_depths, dtype=np.int64)
+        sum_d = np.zeros(n_depths, dtype=np.float64)
+        sum_sq_d = np.zeros(n_depths, dtype=np.float64)
+
+        chunk_size = 365
+        for start_t in range(0, n_time, chunk_size):
+            end_t = min(start_t + chunk_size, n_time)
+            chunk_dates = train_dates[start_t:end_t]
+            thetao_chunk = da_thetao.isel(time=slice(start_t, end_t)).values
+
+            if clim_train_vals.shape[0] == 366:
+                doy_idx = chunk_dates.day_of_year.values - 1
+                clim_chunk = clim_train_vals[doy_idx]
+            else:
+                clim_chunk = clim_train_vals[start_t:end_t]
+
+            anom_chunk = thetao_chunk - clim_chunk
+
+            for d_idx in range(n_depths):
+                depth_anom = anom_chunk[:, d_idx, :, :]
+                ocean_anom = depth_anom[:, ocean_mask]
+                valid_anom = ocean_anom[np.isfinite(ocean_anom)]
+                if len(valid_anom) > 0:
+                    count_d[d_idx] += len(valid_anom)
+                    sum_d[d_idx] += float(np.sum(valid_anom, dtype=np.float64))
+                    sum_sq_d[d_idx] += float(np.sum(valid_anom**2, dtype=np.float64))
 
         for d_idx in range(n_depths):
-            depth_anom = anomaly_train[:, d_idx, :, :]
-            depth_ocean_anom = depth_anom[:, ocean_mask]
-            valid_anom = depth_ocean_anom[~np.isnan(depth_ocean_anom)]
-            if len(valid_anom) > 0:
-                sig_d = float(np.std(valid_anom))
+            if count_d[d_idx] > 0:
+                mean_d = sum_d[d_idx] / count_d[d_idx]
+                var_d = (sum_sq_d[d_idx] / count_d[d_idx]) - (mean_d**2)
+                sig_d = float(np.sqrt(max(var_d, 0.0)))
                 if not np.isfinite(sig_d) or sig_d < 1e-6:
                     sig_d = 1.0
             else:

@@ -9,6 +9,7 @@ Implements PRD_AI_ML §4.2 and §8 (Test 13):
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -307,3 +308,198 @@ def test_export_f16_store(tmp_path: Path) -> None:
     assert ds_f16["thetao"].dtype == np.float16
     assert ds_f16["sst"].dtype == np.float16
     assert ds_f16.attrs["dtype"] == "float16"
+
+
+def test_filter_files_by_year() -> None:
+    r"""Verify filter_files_by_year uses regex (?<!\d)(19|20)\d\d(?!\d) on filename only."""
+    from oceanscope_ml.data.build_store import filter_files_by_year
+
+    files = [
+        Path("/data/raw/glorys/glorys_2018.nc"),
+        Path("/data/raw/glorys/glorys_2019.nc"),
+        Path("/data/raw/glorys/glorys_20190101.nc"),
+        Path("/data/raw/2019/unnamed_file.nc"),
+        Path("/data/raw/sla/sla_2018-11-02-2019-01-31.nc"),
+    ]
+    # For 2019: matches glorys_2019.nc and sla_2018-11-02-2019-01-31.nc
+    m_2019 = filter_files_by_year(files, 2019)
+    assert Path("/data/raw/glorys/glorys_2019.nc") in m_2019
+    assert Path("/data/raw/sla/sla_2018-11-02-2019-01-31.nc") in m_2019
+    # /data/raw/2019/unnamed_file.nc must NOT match:
+    # 2019 is only in parent path, not filename
+    assert Path("/data/raw/2019/unnamed_file.nc") not in m_2019
+    # 2018 file must not be included
+    assert Path("/data/raw/glorys/glorys_2018.nc") not in m_2019
+
+    # When looking for 2020: nothing matches -> returns []
+    assert filter_files_by_year(files, 2020) == []
+
+
+def test_stream_build_store_full_year_mocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify build_store with stream=True builds full year from empty raw folder."""
+    import oceanscope_ml.data.build_store as bs_mod
+
+    empty_raw = tmp_path / "empty_raw"
+    empty_raw.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+
+    cfg = MockConfig(empty_raw, out_dir, tmp_path / "outputs")
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    sample_dates = pd.date_range("2019-01-01", periods=3, freq="D")
+
+    lats = grid.lats
+    lons = grid.lons
+    n_t = len(sample_dates)
+    n_d = len(cfg.depths_m)
+    n_lat = len(lats)
+    n_lon = len(lons)
+
+    ds_mock_glorys = xr.Dataset(
+        data_vars={
+            "thetao": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t, n_d, n_lat, n_lon), 24.0, dtype=np.float32),
+            )
+        },
+        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
+    )
+    ds_mock_sla = xr.Dataset(
+        data_vars={
+            "sla": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.05, dtype=np.float32)),
+            "adt": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.85, dtype=np.float32)),
+        },
+        coords={"time": sample_dates, "lat": lats, "lon": lons},
+    )
+    ds_mock_sst = xr.Dataset(
+        data_vars={
+            "analysed_sst": (
+                ("time", "lat", "lon"),
+                np.full((n_t, n_lat, n_lon), 299.15, dtype=np.float32),
+            )
+        },
+        coords={"time": sample_dates, "lat": lats, "lon": lons},
+    )
+    ds_mock_sst["analysed_sst"].attrs["units"] = "Kelvin"
+    ds_mock_sss = xr.Dataset(
+        data_vars={
+            "sos": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 35.0, dtype=np.float32))
+        },
+        coords={"time": sample_dates, "lat": lats, "lon": lons},
+    )
+    ds_mock_grep = xr.Dataset(
+        data_vars={
+            "thetao_mean": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t, n_d, n_lat, n_lon), 23.5, dtype=np.float32),
+            )
+        },
+        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
+    )
+    ds_mock_armor = xr.Dataset(
+        data_vars={
+            "to": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t, n_d, n_lat, n_lon), 24.2, dtype=np.float32),
+            )
+        },
+        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
+    )
+    ds_mock_era5 = xr.Dataset(
+        data_vars={
+            "u10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -3.0, dtype=np.float32)),
+            "v10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -4.0, dtype=np.float32)),
+            "ssr": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 15.0, dtype=np.float32)),
+            "str": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 10.0, dtype=np.float32)),
+            "sshf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "slhf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "tp": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.002, dtype=np.float32)),
+        },
+        coords={"time": sample_dates, "lat": lats, "lon": lons},
+    )
+    for v in ["ssr", "str", "sshf", "slhf"]:
+        ds_mock_era5[v].attrs["units"] = "W m**-2"
+    ds_mock_era5["tp"].attrs["units"] = "m"
+
+    ds_mock_oscar = xr.Dataset(
+        data_vars={
+            "u": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.1, dtype=np.float32)),
+            "v": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -0.05, dtype=np.float32)),
+        },
+        coords={"time": sample_dates, "lat": lats, "lon": lons},
+    )
+    ds_mock_gebco = xr.Dataset(
+        data_vars={
+            "elevation": (("lat", "lon"), np.full((n_lat, n_lon), -1500.0, dtype=np.float32))
+        },
+        coords={"lat": lats, "lon": lons},
+    )
+    da_mock_woa = xr.DataArray(
+        np.full((12, n_d, n_lat, n_lon), 25.0, dtype=np.float32),
+        dims=("month", "depth", "lat", "lon"),
+        coords={"month": np.arange(1, 13), "depth": cfg.depths_m, "lat": lats, "lon": lons},
+    )
+
+    def mock_stream_copernicus(dataset_id: str, **kwargs: Any) -> xr.Dataset:
+        if "glo_phy_my" in dataset_id:
+            return ds_mock_glorys
+        elif "obs-sl" in dataset_id:
+            return ds_mock_sla
+        elif "SST" in dataset_id:
+            return ds_mock_sst
+        elif "SSS" in dataset_id:
+            return ds_mock_sss
+        elif "mnstd" in dataset_id:
+            return ds_mock_grep
+        elif "armor" in dataset_id:
+            return ds_mock_armor
+        raise ValueError(f"Unknown dataset_id: {dataset_id}")
+
+    monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream_copernicus)
+    monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_era5)
+    monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_oscar)
+    monkeypatch.setattr(bs_mod, "stream_gebco", lambda *args, **kwargs: ds_mock_gebco)
+    monkeypatch.setattr(bs_mod, "stream_woa", lambda *args, **kwargs: da_mock_woa)
+
+    # Build store in streaming mode from empty raw folder
+    store_dest = build_store(
+        config=cfg,
+        years=[2019],
+        raw_dir=empty_raw,
+        out_dir=out_dir,
+        scratch_dir=scratch_dir,
+        stream=True,
+    )
+
+    assert store_dest.exists()
+    ds_built = xr.open_zarr(store_dest)
+    root = zarr.open_group(str(store_dest), mode="r")
+
+    assert root.attrs["built_years"] == [2019]
+    for required_var in [
+        "thetao",
+        "ocean_mask",
+        "target_valid",
+        "sla",
+        "adt",
+        "sst",
+        "sss",
+        "u_current",
+        "v_current",
+        "u_wind",
+        "v_wind",
+        "wind_stress_curl",
+        "net_heat_flux",
+        "precip",
+        "bathymetry",
+        "woa_clim_profile",
+        "grep_mean",
+        "armor3d",
+    ]:
+        assert required_var in ds_built.data_vars
+        val = ds_built[required_var].values
+        assert np.sum(np.isfinite(val)) > 0

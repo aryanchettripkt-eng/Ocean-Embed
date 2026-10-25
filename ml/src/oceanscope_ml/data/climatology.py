@@ -166,15 +166,16 @@ def fit_harmonic_climatology(
         0
     ]
     if len(partial_cells) > 0:
-        # Load only partial cells across all time steps
-        if isinstance(thetao, xr.DataArray):
-            t_full_partial = thetao.values.reshape((n_time, n_cells))[:, partial_cells].astype(
-                np.float64
-            )
-        else:
-            t_full_partial = (
-                np.asarray(thetao).reshape((n_time, n_cells))[:, partial_cells].astype(np.float64)
-            )
+        # Read only partial cells chunk by chunk without loading full thetao into memory
+        t_full_partial = np.full((n_time, len(partial_cells)), np.nan, dtype=np.float64)
+        for s_i in range(0, n_time, chunk_size):
+            e_i = min(s_i + chunk_size, n_time)
+            if isinstance(thetao, xr.DataArray):
+                c_data = thetao.isel(time=slice(s_i, e_i)).values
+            else:
+                c_data = thetao[s_i:e_i]
+            c_flat = c_data.reshape((e_i - s_i, n_cells))
+            t_full_partial[s_i:e_i] = c_flat[:, partial_cells]
 
         for idx_in_partial, cell_idx in enumerate(partial_cells):
             y_col = t_full_partial[:, idx_in_partial]

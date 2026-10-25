@@ -288,8 +288,8 @@ def plan_download(
         }
 
         if spec.get("depth_subset"):
-            # 15 depths +- neighbours: 0 m to just past GLORYS level 1062.44 m (~1000 m tier)
-            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1100.0}
+            # 15 depths: 0 m to at least 1250 m (covers GREP 1062 m layer, PRD §4.2)
+            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1250.0}
 
         plan[prod_key] = plan_item
 
