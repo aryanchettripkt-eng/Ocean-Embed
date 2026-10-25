@@ -2,7 +2,7 @@
  * React Query hooks for OceanScope AI API endpoints (PRD_FRONTEND §2, §4, §5).
  */
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   apiClient,
   type ArgoProfilesResponse,
@@ -13,6 +13,7 @@ import {
   type MetricsResponse,
   type ProfileResponse,
   type RegionSummaryResponse,
+  type SectionResponse,
   type TimeseriesResponse,
 } from "./client";
 
@@ -44,9 +45,38 @@ export function useMap(
   return useQuery<MapResponse>({
     queryKey: ["map", params.date, params.depth_m, params.depth_index, params.field ?? "pred"],
     queryFn: () => apiClient.getMap(params),
-    placeholderData: keepPreviousData,
     staleTime: Infinity,
     enabled: options?.enabled !== false && !!params.date,
+  });
+}
+
+/**
+ * Vertical slice through all 15 depths along one grid row or column (PRD_FRONTEND §3.1b, PRD_BACKEND §4.11).
+ */
+export function useSection(
+  params: {
+    date?: string;
+    field?: "pred" | "glorys" | "error";
+    lat?: number;
+    lon?: number;
+  },
+  options?: { enabled?: boolean }
+) {
+  return useQuery<SectionResponse>({
+    queryKey: ["section", params.date, params.field ?? "pred", params.lat, params.lon],
+    queryFn: () =>
+      apiClient.getSection({
+        date: params.date!,
+        field: params.field,
+        lat: params.lat,
+        lon: params.lon,
+      }),
+    staleTime: Infinity,
+    enabled:
+      options?.enabled !== false &&
+      !!params.date &&
+      ((params.lat !== undefined && params.lon === undefined) ||
+        (params.lat === undefined && params.lon !== undefined)),
   });
 }
 

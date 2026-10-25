@@ -75,6 +75,13 @@ export interface paths {
      */
     get: operations["get_region_summary_api_v1_region_summary_get"];
   };
+  "/api/v1/section": {
+    /**
+     * Vertical temperature section slice
+     * @description Returns vertical slice through all 15 depths along one grid row or column.
+     */
+    get: operations["get_section_api_v1_section_get"];
+  };
   "/api/v1/timeseries": {
     /**
      * Time series of temperature at a point and depth
@@ -555,6 +562,63 @@ export interface components {
       synthetic: boolean;
     };
     /**
+     * SectionResponse
+     * @description Response model for GET /section (PRD_BACKEND §4.11).
+     */
+    SectionResponse: {
+      /**
+       * Axis
+       * @description The varying coordinate: 'lon' when lat was given, 'lat' when lon was given
+       * @enum {string}
+       */
+      axis: "lat" | "lon";
+      /**
+       * Coverage
+       * @description Coverage codes [position] along the section line
+       */
+      coverage: number[];
+      /** Date */
+      date: string;
+      /**
+       * Depths M
+       * @description All 15 model depths in meters
+       */
+      depths_m: number[];
+      /**
+       * Field
+       * @enum {string}
+       */
+      field: "pred" | "glorys" | "error";
+      /**
+       * Fixed
+       * @description The snapped fixed coordinate (e.g. {'lat': 15.125} or {'lon': 65.125})
+       */
+      fixed: {
+        [key: string]: number;
+      };
+      /**
+       * Positions
+       * @description Coordinates along the varying axis (lon or lat)
+       */
+      positions: number[];
+      /** Run Id */
+      run_id: string;
+      /** Split */
+      split?: string | null;
+      /** Synthetic */
+      synthetic: boolean;
+      /**
+       * Units
+       * @default degC
+       */
+      units?: string;
+      /**
+       * Values
+       * @description Vertical section slice [depth][position], null where unavailable
+       */
+      values: ((number | null)[])[];
+    };
+    /**
      * Splits
      * @description Start and end dates for train, validation, and test splits.
      */
@@ -870,6 +934,38 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["RegionSummaryResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Vertical temperature section slice
+   * @description Returns vertical slice through all 15 depths along one grid row or column.
+   */
+  get_section_api_v1_section_get: {
+    parameters: {
+      query: {
+        /** @description Date formatted as YYYY-MM-DD */
+        date: string;
+        /** @description Field to return */
+        field?: "pred" | "glorys" | "error";
+        /** @description Latitude north for east-west section */
+        lat?: number | null;
+        /** @description Longitude east for north-south section */
+        lon?: number | null;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SectionResponse"];
         };
       };
       /** @description Validation Error */

@@ -39,7 +39,7 @@ export function Header() {
   };
 
   const navLinks = [
-    { href: "/", label: "Explorer", icon: Waves },
+    { href: "/explore", label: "Explorer", icon: Waves },
     { href: "/validation", label: "Validation", icon: BarChart3 },
     { href: "/about", label: "About", icon: Info },
   ];
@@ -50,7 +50,7 @@ export function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
         {/* Brand */}
         <div className="flex items-center gap-6">
-          <Link href="/" className="flex items-center gap-2 group">
+          <Link href="/" className="flex items-center gap-2 group" aria-label="OceanScope AI Home">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 p-1.5 flex items-center justify-center shadow-lg shadow-cyan-900/30 group-hover:shadow-cyan-600/40 transition-all">
               <Waves className="h-full w-full text-white" />
             </div>
@@ -67,7 +67,10 @@ export function Header() {
           {/* Navigation */}
           <nav className="flex items-center gap-1 sm:gap-2">
             {navLinks.map(({ href, label, icon: Icon }) => {
-              const isActive = pathname === href;
+              const isActive =
+                href === "/explore"
+                  ? pathname === "/explore" || pathname.startsWith("/explore")
+                  : pathname === href;
               return (
                 <Link
                   key={href}

@@ -1,9 +1,11 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import React, { useEffect, useState } from "react";
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -17,15 +19,19 @@ export function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
-  const [mockReady, setMockReady] = useState(false);
+  const isMocking = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+  const [mockReady, setMockReady] = useState(() => !isMocking);
 
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_USE_MOCKS === "true") {
+    if (isMocking) {
       import("../mocks/browser")
         .then(async ({ worker }) => {
           if (worker) {
             await worker.start({
               onUnhandledRequest: "bypass",
+              serviceWorker: {
+                url: "/mockServiceWorker.js",
+              },
             });
           }
           setMockReady(true);
@@ -37,9 +43,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
     } else {
       setMockReady(true);
     }
-  }, []);
+  }, [isMocking]);
 
-  if (!mockReady) {
+  const isMarketingRoute = pathname === "/" || pathname === "/welcome";
+
+  if (isMocking && !mockReady && !isMarketingRoute) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
         <div className="flex items-center space-x-3">

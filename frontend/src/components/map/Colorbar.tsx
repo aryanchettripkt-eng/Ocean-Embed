@@ -8,10 +8,11 @@ interface ColorbarProps {
   field: "pred" | "glorys" | "error";
   vmin: number;
   vmax: number;
+  wallRange?: { vmin: number; vmax: number };
   className?: string;
 }
 
-export function Colorbar({ field, vmin, vmax, className = "" }: ColorbarProps) {
+export function Colorbar({ field, vmin, vmax, wallRange, className = "" }: ColorbarProps) {
   const colormap: ColormapName = field === "error" ? "balance" : "thermal";
   const gradientCss = getColormapGradientCss(colormap);
   const mid = (vmin + vmax) / 2;
@@ -22,6 +23,10 @@ export function Colorbar({ field, vmin, vmax, className = "" }: ColorbarProps) {
       : field === "glorys"
       ? "GLORYS Reanalysis Temperature"
       : "Model Predicted Temperature";
+
+  const showWallRange =
+    wallRange &&
+    (Math.abs(wallRange.vmin - vmin) > 0.1 || Math.abs(wallRange.vmax - vmax) > 0.1);
 
   return (
     <div
@@ -44,6 +49,13 @@ export function Colorbar({ field, vmin, vmax, className = "" }: ColorbarProps) {
         <span>{formatTemp(mid, 1)}</span>
         <span>{formatTemp(vmax, 1)}</span>
       </div>
+
+      {showWallRange && (
+        <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+          <span>Top face: {formatTemp(vmin, 1)}–{formatTemp(vmax, 1)}</span>
+          <span>Walls: {formatTemp(wallRange.vmin, 1)}–{formatTemp(wallRange.vmax, 1)}</span>
+        </div>
+      )}
     </div>
   );
 }

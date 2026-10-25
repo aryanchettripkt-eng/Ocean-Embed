@@ -13,6 +13,7 @@ import type {
   MetricsResponse,
   ProfileResponse,
   RegionSummaryResponse,
+  SectionResponse,
   TimeseriesResponse,
 } from "../lib/api/client";
 
@@ -25,6 +26,7 @@ import metaJson from "./meta.json";
 import metricsJson from "./metrics.json";
 import profileJson from "./profile.json";
 import regionSummaryJson from "./region_summary.json";
+import sectionJson from "./section.json";
 import timeseriesJson from "./timeseries.json";
 
 export const mockHealth = healthJson as unknown as HealthResponse;
@@ -37,6 +39,7 @@ export const mockMetrics = metricsJson as unknown as MetricsResponse;
 export const mockArgo = argoJson as unknown as ArgoResponse;
 export const mockArgoProfiles = argoProfilesJson as unknown as ArgoProfilesResponse;
 export const mockHeadline = headlineJson as unknown as HeadlineResponse;
+export const mockSection = sectionJson as unknown as SectionResponse;
 
 export function createMockMap(
   date = "2020-01-05",

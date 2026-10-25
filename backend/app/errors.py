@@ -74,6 +74,17 @@ class BothDepthParamsError(APIError):
         )
 
 
+class InvalidSectionError(APIError):
+    def __init__(
+        self, message: str = "Provide exactly one of 'lat' or 'lon', not both or neither"
+    ) -> None:
+        super().__init__(
+            status_code=422,
+            code="invalid_section",
+            message=message,
+        )
+
+
 class DateUnavailableError(APIError):
     def __init__(self, message: str = "Requested date is outside available dates") -> None:
         super().__init__(

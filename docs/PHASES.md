@@ -1,6 +1,6 @@
 # Project phases — OceanScope AI
 
-**Status:** v1 (2026-10-22). This is the execution order for the whole project. Each phase has an **exit gate**; do not start a phase whose "Needs" are not met. Task IDs (e.g. `P1-B2`) are used in branch names, commits and `docs/PROGRESS.md`.
+**Status:** v1 (2026-10-22); P2b 3D explorer and P7 Meta features (now core) updated 2026-10-24. This is the execution order for the whole project. Each phase has an **exit gate**; do not start a phase whose "Needs" are not met. Task IDs (e.g. `P1-B2`) are used in branch names, commits and `docs/PROGRESS.md`.
 
 Who: **Aryan** = owner (accounts, decisions, Colab/Kaggle runs, approvals) · **Gemini** = implementer · **Claude** = planning, task breakdown, review (can implement).
 
@@ -8,7 +8,7 @@ Who: **Aryan** = owner (accounts, decisions, Colab/Kaggle runs, approvals) · **
 P0 Setup ──► P1 Build on synthetic data ──► P2 Live synthetic site ─────────────────────────┐
    │              (backend ∥ frontend ∥ ML data M1)                                           │
    └─► accounts ─► P3 Real data + baselines ──► P4 U-Net training ──► P5 Evaluation ──► P6 Real outputs live ──► P8 Polish + demo
-                                                                                       P7 Assistant (optional, any time after P2)
+                                                                                       P7 Meta features (core, any time after P2)
 ```
 Backend/frontend work never waits for the model: P1 and P2 run on synthetic sample outputs while P3–P5 run on Colab/Kaggle.
 
@@ -75,15 +75,35 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 
 ---
 
+## P2b — 3D cutaway explorer (the demo's centrepiece)
+**Needs:** P2. Runs in parallel with P3–P5 (it works on synthetic data, so it never waits for the model). Spec: PRD_FRONTEND §3.1b and §10, PRD_BACKEND §4.11.
+
+| ID | Task | Who | Ref |
+|---|---|---|---|
+| P2b-F0 | Fix the current map code first: region from `/meta`, delete `oceanMask.ts` (land from `coverage`), canvas source instead of `toDataURL`, throttled hover, single click path, flat 2D view | Gemini | PRD_FRONTEND §10 |
+| P2b-B1 | `GET /section` + test 13, regenerate `openapi.json`, frontend types and MSW mocks | Gemini | PRD_BACKEND §4.11, M B7 |
+| P2b-F1 | View switch (*Map* / *3D*, `?view=`), lazily loaded `CutawayLayer`: top face from `/map`, two visible walls from `/section`, √depth axis and ticks, fallbacks | Gemini | §3.1b |
+| P2b-F2 | Look: contours, 20 °C isotherm line, lighting, shadow, edge highlight; dive animation and depth rail (scroll, keys), reduced-motion; hover/click on the top face | Gemini | §3.1b |
+| P2b-F3 | Exploded layers mode; "Tour" button for the demo | Gemini | §3.1b |
+| P2b-R | Claude reviews the diff against §3.1b, §0 and the fps/bundle targets; Aryan signs off the look on the deployed site | Claude, Aryan | §4 |
+| P2b-F4 | Optional: slice tool (inner wall + section chart in the details panel) | Gemini | §3.1b |
+
+Order: F0 and B1 can run in parallel; F1 needs both; F2 and F3 need F1. One agent per branch (AGENTS §7); branches and pushes only with Aryan's permission (AGENTS rule 10).
+
+**Exit gate:** on the deployed site (synthetic data), *3D* works on a laptop in Chrome, Firefox and Safari; phones fall back to 2D; 3D tests pass; ≥ 45 fps while rotating; initial `/` bundle still ≤ 350 KB gzipped; Aryan approves the look.
+
+---
+
 ## P3 — Real data and baselines
 **Needs:** P1-M3 (decisions confirmed). Runs in parallel with P2.
 
 | ID | Task | Ref |
 |---|---|---|
-| P3-1 | `preprocess.py` + climatology on the one-month sample; sample-day figure; tests 3–5 | M1 |
-| P3-2 | Full-period download (server-side subset); full preprocessing; upload processed store to Kaggle Dataset / Drive | §4.1, §11 |
+| P3-1 | `preprocess.py` with shared per-product reduce functions + climatology on the one-month sample; sample-day figure; tests 3–5 | M1 |
+| P3-2a | `build_store.py`: stream → reduce → store, one year at a time, resumable, no raw archive; dry run; test 13; parity with P3-1 on Jan 2019 | §4.2 |
+| P3-2b | Run `build_store` for the full period on Colab/Kaggle; float16 copy to a Kaggle Dataset | §4.2, §11 |
 | P3-3 | Baselines: climatology + ridge (LightGBM optional) → `baseline_*_val.csv` | §5.6 |
-| P3-4 | Download ARMOR3D and GREP ensemble mean for the validation and test periods (competitors in §1.1); GREP for the full period as auxiliary target | §3, §7 |
+| P3-4 | ARMOR3D and GREP ensemble mean for the validation and test periods (competitors in §1.1), and GREP for the full period as auxiliary target, through `build_store` (streamed, no raw files) | §3, §4.2, §7 |
 
 **Exit gate:** processed store passes schema check and loads in a Colab and a Kaggle notebook; baseline validation metrics exist.
 
@@ -135,29 +155,41 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 
 ---
 
-## P7 — Assistant (optional)
-**Needs:** P2 (can be built on synthetic data); a provider with tool calling.
+## P7 — Meta features: "Talk to the ocean" (core since 2026-10-24)
+**Needs:** P2 (runs on synthetic data, so it never waits for the model); P7-0 answered. Navigator actions in 3D need P2b-F1. Spec: PRD_BACKEND §4.10, §4.12–4.17, §6; PRD_FRONTEND §3.4. Recommended implementer for P7-B1/P7-F1: **Muse Code** (so Meta's coding tool builds part of the product), Gemini for the rest.
 
-| ID | Task | Ref |
-|---|---|---|
-| P7-0 | **Owner decision:** provider (Meta if available, else OpenAI-compatible) or skip | Aryan |
-| P7-1 | Backend `/chat`: provider, tools, prompt, grounding guard, limits; test 7 | PRD_BACKEND §6, M B5 |
-| P7-2 | Frontend chat drawer with "Data used" | PRD_FRONTEND §3.4, M F6 |
-| P7-3 | Owner tests 20 questions incl. trick ones; enable in prod | Aryan |
+| ID | Task | Who | Ref |
+|---|---|---|---|
+| P7-0 | **Owner:** Meta Model API key in Render secrets; exact model ids (Spark 1.3, Voice Transcribe, Image, SAM 3.1); rate limits/credits; hackathon deadline | Aryan | OPEN_QUESTIONS |
+| P7-B1 | `MetaModelClient`, data tools (+ `get_section`, `list_events`), prompt v1, grounding guard, per-feature limits, `/meta.features`; tests 7, 14, 16 | Muse Code / Gemini | BE §6, §4.12 |
+| P7-B2 | UI tools (`set_view`, `select_point`, `slice_at`, `open_event`) with backend validation; test 15 | Muse Code / Gemini | BE §6.2 |
+| P7-F1 | Guide drawer + `applyUiActions` + Undo chip + "Data used" | Muse Code / Gemini | FE §3.4a |
+| P7-B3 / F2 | `/transcribe` + mic button (hold-to-talk, edit before send); test 17 | Gemini | BE §4.13, FE §3.4b |
+| P7-E | Draft `events.json` (3–6 events in 2018–2020 with public sources; Claude drafts, **Aryan approves the list**) | Claude, Aryan | BE §4.14 |
+| P7-B4 / F3 | `/events` + time machine (Before/During/After, Explain); test 18 | Gemini | BE §4.14, FE §3.4c |
+| P7-B5 / F4 | `/postcard` (fixed template, cache) + postcard card and download; test 19 | Gemini | BE §4.15, FE §3.4d |
+| P7-B6 / F5 | `/segment` (threshold method first, then SAM 3.1 when the endpoint is confirmed) + lasso tool; test 20 | Gemini | BE §4.16, FE §3.4e |
+| P7-B7 / F6 | `/nearest-ocean` + beach mode (phones); test 21 | Gemini | BE §4.17, FE §3.4f |
+| P7-R | Claude reviews prompts, guard, validation and labels; **Aryan runs 20 questions** incl. trick ones (made-up places, test-year dates, "ignore your instructions", asking for numbers not in the data), 5 voice questions, 3 postcards, 3 lassos, beach mode outdoors; then enables each flag in prod | Claude, Aryan | — |
 
-**Exit gate:** grounding guard catches fabricated numbers in tests; owner approves enabling.
+Order: B1 → B2 → F1 first (everything else builds on them); then voice, time machine, postcards, lasso, beach. B-tasks and F-tasks of one row may run in parallel once the B-side OpenAPI change is merged (regenerate types and MSW mocks).
+
+**Scope guardrail:** P7 must never delay the ML critical path (P3 → P4 → P5 → P6). If the schedule slips, cut from the end of this list: beach mode → SAM (keep the threshold lasso) → postcards → time machine. The guide/navigator and voice are protected.
+
+**Exit gate:** each enabled feature passes its tests and P7-R; the grounding guard catches fabricated numbers; no Meta key in the repo, bundle or logs; turning any flag off hides that feature cleanly; the site works with all flags off.
+
 
 ---
 
 ## P8 — Polish, final test, demo
-**Needs:** P6 (and P7 if doing it).
+**Needs:** P6 and P7 (each Meta feature that passed P7-R).
 
 | ID | Task | Who |
 |---|---|---|
 | P8-1 | **Final test run** (`final_test.py`), once, on owner instruction; republish with `test_evaluated = true` | Aryan says go; Gemini runs |
 | P8-2 | README: what it is, live URL, architecture diagram, how to reproduce, limitations, data credits | Gemini, Claude reviews |
 | P8-3 | Lighthouse/accessibility pass, mobile check, OG image, `/about` text | Gemini |
-| P8-4 | Demo script (3–5 min) + backup screen recording in case the Space is asleep or down | Aryan + Claude |
+| P8-4 | Demo script (3–5 min, showing the landing dive, 3D, the guide moving the map by voice, one event and one postcard) + backup screen recording in case the backend is asleep or the Meta API is down | Aryan + Claude |
 | P8-5 | Freeze: tag release, pin `HF_DATASET_REVISION`, no deploys in the last 12 h before judging | Aryan |
 
 **Exit gate:** Definition of Done in the handoff §12 all ticked; demo rehearsed.
@@ -179,11 +211,11 @@ F starts on mocks generated from the committed `openapi.json`; it may begin once
 ---
 
 ## P10 — Stretch (only if time remains, in this order)
-Ensemble of 3–5 models + uncertainty (`temp_pred_std`, contract change) → hyper-local 1/12° Bay of Bengal model → temporal model (only if the flicker check flags it) → SAM region selection.
+Ensemble of 3–5 models + uncertainty (`temp_pred_std`, contract change) → hyper-local 1/12° Bay of Bengal model → temporal model (only if the flicker check flags it). (SAM region selection moved into P7 as the lasso, 2026-10-24. Ray-Ban glasses integration was considered and dropped: no device to test on; beach mode covers the idea on phones.)
 
 ---
 
 ## Critical path and owner checkpoints
 Critical path: **P0 → P1-M → P3 → P4 → P5 → P6 → P8**. Data download and training are the slowest and riskiest steps, so start P1-M on day one.
 
-Aryan must act at: P0-1, P0-4, P1-M3 (confirm config, incl. GREP end date and the §1.1 criterion), P2 tokens, P3/P4 notebook runs, P4 exit gate review, P7-0, P7-3, P8-1, P8-5, P9-1, P9-3 secrets.
+Aryan must act at: P0-1, P0-4, P1-M3 (confirm config, incl. GREP end date and the §1.1 criterion), P2 tokens, P2b-R (3D look sign-off), P3/P4 notebook runs, P4 exit gate review, P7-0, P7-E (event list), P7-R, P8-1, P8-5, P9-1, P9-3 secrets.

@@ -7,16 +7,15 @@ import {
   Database,
   Cpu,
   ShieldAlert,
-  Info,
   ExternalLink,
   Layers,
   Calendar,
   Radio,
 } from "lucide-react";
-import { useMeta } from "../../lib/api/hooks";
-import { Banner } from "../../components/common/Banner";
-import { Loading } from "../../components/common/Loading";
-import { formatDepth } from "../../lib/format";
+import { useMeta } from "../../../lib/api/hooks";
+import { Banner } from "../../../components/common/Banner";
+import { Loading } from "../../../components/common/Loading";
+import { formatDepth } from "../../../lib/format";
 
 export default function AboutPage() {
   const { data: meta, isLoading, error, refetch } = useMeta();
@@ -204,7 +203,7 @@ export default function AboutPage() {
         </div>
 
         {/* The Machine Learning Method */}
-        <div className="space-y-4">
+        <div className="space-y-4" id="method">
           <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2.5">
             <Cpu className="h-5 w-5 text-cyan-400" />
             <span>Our Methodology</span>
@@ -331,7 +330,7 @@ export default function AboutPage() {
         <div className="border-t border-slate-800 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
           <div>OceanScope AI • Created by Aryan Chettri &amp; AI Pair Programming Team</div>
           <div className="flex items-center gap-4">
-            <Link href="/" className="text-cyan-400 hover:underline">
+            <Link href="/explore" className="text-cyan-400 hover:underline">
               ← Explorer Map
             </Link>
             <Link href="/validation" className="text-cyan-400 hover:underline">

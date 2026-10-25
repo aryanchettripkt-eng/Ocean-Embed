@@ -10,14 +10,18 @@ export function renderGridToCanvas(
   vmin: number,
   vmax: number,
   colormap: ColormapName = "thermal",
-  scale = 4 // Supersample each cell into scale x scale pixels for sharp hatch patterns
+  scale = 4, // Supersample each cell into scale x scale pixels for sharp hatch patterns
+  targetCanvas?: HTMLCanvasElement | null
 ): HTMLCanvasElement {
   const nLat = values.length;
   const nLon = values[0]?.length ?? 0;
 
-  const canvas = document.createElement("canvas");
-  canvas.width = nLon * scale;
-  canvas.height = nLat * scale;
+  const canvas = targetCanvas || document.createElement("canvas");
+  const targetWidth = nLon * scale;
+  const targetHeight = nLat * scale;
+
+  if (canvas.width !== targetWidth) canvas.width = targetWidth;
+  if (canvas.height !== targetHeight) canvas.height = targetHeight;
 
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;

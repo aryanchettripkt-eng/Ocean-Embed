@@ -2,10 +2,10 @@ project: oceanscope-ai
 dataset_version: v1                 # bump when preprocessing output changes
 
 region:
-  lon_min: 40.0   # [CONFIRM]
-  lon_max: 100.0  # [CONFIRM]
-  lat_min: 0.0    # [CONFIRM]
-  lat_max: 30.0   # [CONFIRM]
+  lon_min: 40.0   # confirmed 2026-10-25 (DECISIONS)
+  lon_max: 100.0  # confirmed 2026-10-25
+  lat_min: 0.0    # confirmed 2026-10-25
+  lat_max: 30.0   # confirmed 2026-10-25
   lon_convention: "-180_180"
   lat_order: ascending
 
@@ -14,17 +14,17 @@ grid:
   # cell centres: lon_min + 0.125, ..., lat_min + 0.125, ...
 
 time:
-  start: "1993-01-01"   # [CONFIRM] = intersection of all product coverages (all inputs start <= 1993)
-  end:   "2021-12-31"   # [CONFIRM]
+  start: "1993-01-01"   # confirmed 2026-10-25; intersection of all product coverages (all inputs start <= 1993)
+  end:   "2021-12-31"   # confirmed 2026-10-25
   day_boundary: UTC
 
 splits:
-  train: ["1993-03-02", "2017-12-01"]   # [CONFIRM]
-  val:   ["2018-01-01", "2020-12-01"]   # [CONFIRM]
-  test:  ["2021-01-01", "2021-12-31"]   # [CONFIRM] sealed
+  train: ["1993-03-02", "2017-12-01"]   # confirmed 2026-10-25
+  val:   ["2018-01-01", "2020-12-01"]   # confirmed 2026-10-25
+  test:  ["2021-01-01", "2021-12-31"]   # confirmed 2026-10-25, sealed
   gap_days: 30                           # dropped at the end of train and val
 
-depths_m: []   # [CONFIRM] exactly 15 values copied from GLORYS native depth coordinate, ascending, last ~1000 m
+depths_m: [0.494, 5.078, 9.573, 18.496, 29.445, 47.374, 65.807, 92.326, 130.666, 186.126, 222.475, 266.040, 380.213, 643.567, 1062.440]   # confirmed by Aryan 2026-10-24 (DECISIONS): native GLORYS12 levels, 7 in 50-300 m
 
 inputs:
   core: [sla, adt, sst, sss, u_current, v_current, u_wind, v_wind, wind_stress_curl]
@@ -99,4 +99,8 @@ inference:
   publish_dtype: float16
 
 publish:
-  hf_dataset_repo: ""          # [CONFIRM] e.g. <hf-user>/oceanscope-outputs; token from env HF_TOKEN
+  hf_dataset_repo: "zenzone3/oceanscope-outputs"   # used since P2; token from env HF_TOKEN
+
+baselines:
+  max_train_samples: 500000
+  ridge_alpha: 1.0

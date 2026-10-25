@@ -68,7 +68,11 @@ def inspect_file(file_path: Path) -> dict[str, Any]:
         if file_path.is_dir() and file_path.suffix == ".zarr":
             ds = xr.open_zarr(file_path)
         elif file_path.suffix in [".nc", ".nc4"]:
-            ds = xr.open_dataset(file_path)
+            try:
+                ds = xr.open_dataset(file_path)
+            except ValueError:
+                # WOA23 uses "months since 1955", which xarray cannot decode
+                ds = xr.open_dataset(file_path, decode_times=False)
         else:
             return {
                 "file": file_path.name,
@@ -197,12 +201,24 @@ def build_real_argo_holdout(
                 with xr.open_dataset(p) as ds:
                     if "platform_number" in ds.variables:
                         pns = ds["platform_number"].values
-                        lats = ds["LATITUDE"].values if "LATITUDE" in ds.variables else None
-                        lons = ds["LONGITUDE"].values if "LONGITUDE" in ds.variables else None
+                        lats = (
+                            ds["latitude"].values
+                            if "latitude" in ds.variables
+                            else (ds["LATITUDE"].values if "LATITUDE" in ds.variables else None)
+                        )
+                        lons = (
+                            ds["longitude"].values
+                            if "longitude" in ds.variables
+                            else (ds["LONGITUDE"].values if "LONGITUDE" in ds.variables else None)
+                        )
                         times = (
                             ds["JULD"].values
                             if "JULD" in ds.variables
-                            else (ds["TIME"].values if "TIME" in ds.variables else None)
+                            else (
+                                ds["TIME"].values
+                                if "TIME" in ds.variables
+                                else (ds["time"].values if "time" in ds.variables else None)
+                            )
                         )
 
                         flat_pns = np.ravel(pns)
@@ -373,13 +389,16 @@ def is_glorys_file(path: Path) -> bool:
     Copernicus Marine typically names files like:
     `cmems_mod_glo_phy_my_0.083deg_P1D-m_...nc` or stores them in a folder
     named `glorys` or `glorys12` or `001_030`.
-    Must strictly exclude competitor products (GREP 001_031 and ARMOR3D 015_004).
+    Must strictly exclude competitor products (GREP 001_031 and ARMOR3D 015_012, formerly 015_004).
     """
     name = path.name.lower()
     folder = str(path.parent).lower()
 
     # Strictly reject competitor products
-    if any(k in name or k in folder for k in ["grep", "001_031", "armor3d", "015_004", "armor-3d"]):
+    if any(
+        k in name or k in folder
+        for k in ["grep", "001_031", "mnstd", "armor3d", "015_004", "015_012", "armor-3d"]
+    ):
         return False
 
     # Check filename and folder hierarchy

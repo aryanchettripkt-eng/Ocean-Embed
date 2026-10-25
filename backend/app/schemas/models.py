@@ -160,6 +160,41 @@ class MapResponse(BaseModel):
     stats: MapStats
 
 
+class SectionResponse(BaseModel):
+    """Response model for GET /section (PRD_BACKEND §4.11)."""
+
+    run_id: str
+    synthetic: bool
+    date: str
+    field: Literal["pred", "glorys", "error"]
+    split: str | None = None
+    units: str = "degC"
+    axis: Literal["lat", "lon"] = Field(
+        ...,
+        description="The varying coordinate: 'lon' when lat was given, 'lat' when lon was given",
+    )
+    fixed: dict[str, float] = Field(
+        ...,
+        description="The snapped fixed coordinate (e.g. {'lat': 15.125} or {'lon': 65.125})",
+    )
+    positions: list[float] = Field(
+        ...,
+        description="Coordinates along the varying axis (lon or lat)",
+    )
+    depths_m: list[float] = Field(
+        ...,
+        description="All 15 model depths in meters",
+    )
+    values: list[list[float | None]] = Field(
+        ...,
+        description="Vertical section slice [depth][position], null where unavailable",
+    )
+    coverage: list[int] = Field(
+        ...,
+        description="Coverage codes [position] along the section line",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Profile Schemas
 # ---------------------------------------------------------------------------

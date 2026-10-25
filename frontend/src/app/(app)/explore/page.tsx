@@ -4,28 +4,31 @@ import React, { Suspense, useCallback, useEffect, useMemo, useState } from "reac
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { MapPin, SlidersHorizontal, Eye, EyeOff } from "lucide-react";
+import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle } from "lucide-react";
 
-import { useArgoProfiles, useMap, useMeta } from "../lib/api/hooks";
-import { apiClient } from "../lib/api/client";
-import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../lib/url-state";
-import { DatePicker } from "../components/controls/DatePicker";
-import { DepthSelector } from "../components/controls/DepthSelector";
-import { FieldToggle, type FieldType } from "../components/controls/FieldToggle";
-import { Colorbar } from "../components/map/Colorbar";
-import { CoverageLegend } from "../components/map/CoverageLegend";
-import { Banner } from "../components/common/Banner";
-import { Loading } from "../components/common/Loading";
-import { ErrorState } from "../components/common/ErrorState";
-import { ErrorBoundary } from "../components/common/ErrorBoundary";
-import { formatCoord } from "../lib/format";
+import { useArgoProfiles, useMap, useMeta, useSection } from "../../../lib/api/hooks";
+import { apiClient } from "../../../lib/api/client";
+import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
+import { DatePicker } from "../../../components/controls/DatePicker";
+import { DepthSelector } from "../../../components/controls/DepthSelector";
+import { FieldToggle, type FieldType } from "../../../components/controls/FieldToggle";
+import { Colorbar } from "../../../components/map/Colorbar";
+import { CoverageLegend } from "../../../components/map/CoverageLegend";
+import { Banner } from "../../../components/common/Banner";
+import { Loading } from "../../../components/common/Loading";
+import { ErrorState } from "../../../components/common/ErrorState";
+import { ErrorBoundary } from "../../../components/common/ErrorBoundary";
+import { formatCoord } from "../../../lib/format";
+import { getWallColorRange } from "../../../components/map3d/depthScale";
+import { ViewSwitch } from "../../../components/map3d/ViewSwitch";
+import { DepthRail } from "../../../components/map3d/DepthRail";
 
-// MapView is statically included so MapLibre is counted directly in the initial / budget (PRD_FRONTEND §4)
-import { MapView } from "../components/map/MapView";
+// MapView is statically included so MapLibre is counted directly in the bundle budget (PRD_FRONTEND §4)
+import { MapView } from "../../../components/map/MapView";
 
 // DetailsPanel is displayed only when a point is clicked; charts (Recharts) load on-demand
 const DetailsPanel = dynamic(
-  () => import("../components/panels/DetailsPanel").then((mod) => mod.DetailsPanel),
+  () => import("../../../components/panels/DetailsPanel").then((mod) => mod.DetailsPanel),
   {
     ssr: false,
     loading: () => (
@@ -48,6 +51,12 @@ function ExplorerContent() {
   const [showControls, setShowControls] = useState(true);
   const [showArgo, setShowArgo] = useState(false);
 
+  // 3D Cutaway states
+  const [isTouring, setIsTouring] = useState(false);
+  const [isExploded, setIsExploded] = useState(false);
+  const [isSmoothed, setIsSmoothed] = useState(false);
+  const [showContours, setShowContours] = useState(true);
+
   // Sync state once metadata loads
   useEffect(() => {
     if (meta) {
@@ -55,10 +64,18 @@ function ExplorerContent() {
     }
   }, [meta, searchParams]);
 
+  // Focus explorer heading on mount (PLAN_LANDING §6 item 5)
+  useEffect(() => {
+    const heading = document.getElementById("explorer-heading");
+    if (heading) {
+      heading.focus();
+    }
+  }, []);
+
   // Sync URL query string when state changes
   useEffect(() => {
     const params = buildExplorerSearchParams(state);
-    const newUrl = `/?${params.toString()}`;
+    const newUrl = `/explore?${params.toString()}`;
     window.history.replaceState(null, "", newUrl);
   }, [state]);
 
@@ -83,7 +100,59 @@ function ExplorerContent() {
     { enabled: showArgo }
   );
 
-  // Determine color scale vmin and vmax
+  // Query 4 boundary sections when in 3D Cutaway mode
+  const is3D = state.view === "3d";
+  const rgn = meta?.region;
+
+  const { data: southSection, isError: isSouthError } = useSection(
+    {
+      date: state.date,
+      field: state.field,
+      lat: rgn?.lat_min,
+    },
+    { enabled: is3D && !!rgn && !!state.date }
+  );
+
+  const { data: northSection, isError: isNorthError } = useSection(
+    {
+      date: state.date,
+      field: state.field,
+      lat: rgn?.lat_max,
+    },
+    { enabled: is3D && !!rgn && !!state.date }
+  );
+
+  const { data: westSection, isError: isWestError } = useSection(
+    {
+      date: state.date,
+      field: state.field,
+      lon: rgn?.lon_min,
+    },
+    { enabled: is3D && !!rgn && !!state.date }
+  );
+
+  const { data: eastSection, isError: isEastError } = useSection(
+    {
+      date: state.date,
+      field: state.field,
+      lon: rgn?.lon_max,
+    },
+    { enabled: is3D && !!rgn && !!state.date }
+  );
+
+  const sections = useMemo(() => {
+    return {
+      south: southSection,
+      north: northSection,
+      west: westSection,
+      east: eastSection,
+    };
+  }, [southSection, northSection, westSection, eastSection]);
+
+  const wallsUnavailable =
+    is3D && (isSouthError || isNorthError || isWestError || isEastError);
+
+  // Determine top face color scale vmin and vmax
   const colorRange = useMemo(() => {
     if (state.field === "error") {
       return meta?.error_range ?? { vmin: -2.0, vmax: 2.0 };
@@ -91,6 +160,12 @@ function ExplorerContent() {
     const cr = meta?.color_ranges?.find((c) => Math.abs(c.depth_m - state.depth) < 0.1);
     return cr ?? { vmin: 15.0, vmax: 30.0 };
   }, [meta, state.depth, state.field]);
+
+  // Column-wide wall color range
+  const wallRange = useMemo(() => {
+    if (state.view !== "3d" || !meta?.color_ranges) return undefined;
+    return getWallColorRange(meta.color_ranges);
+  }, [state.view, meta?.color_ranges]);
 
   // Split and live status derived directly from API response
   const isLive = mapData?.split === "live";
@@ -145,8 +220,22 @@ function ExplorerContent() {
     setState((prev) => ({ ...prev, lat, lon }));
   }, []);
 
+  const handleViewChange = useCallback((newView: "map" | "3d") => {
+    setState((prev) => ({ ...prev, view: newView }));
+    if (newView === "map") {
+      setIsTouring(false);
+    }
+  }, []);
+
   if (isMetaLoading) {
-    return <Loading fullScreen label="Loading OceanScope AI metadata..." />;
+    return (
+      <>
+        <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
+          OceanScope AI Subsurface Temperature Explorer
+        </h1>
+        <Loading fullScreen label="Loading OceanScope AI metadata..." />
+      </>
+    );
   }
 
   if (metaError || !meta) {
@@ -163,11 +252,18 @@ function ExplorerContent() {
 
   return (
     <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden flex flex-col md:flex-row bg-slate-100 dark:bg-slate-950 transition-colors">
+      {/* Main Accessible Heading for Focus Management (PLAN_LANDING §6 item 5) */}
+      <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
+        OceanScope AI Subsurface Temperature Explorer
+      </h1>
+
       {/* Map Viewport */}
       <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] min-h-[400px]">
         <ErrorBoundary name="Interactive Map">
           <MapView
             mapData={mapData}
+            region={meta.region}
+            gridResolutionDeg={meta.grid_resolution_deg}
             vmin={colorRange.vmin}
             vmax={colorRange.vmax}
             selectedLat={state.lat}
@@ -175,8 +271,53 @@ function ExplorerContent() {
             onSelectPoint={handleSelectPoint}
             showArgo={showArgo}
             argoProfiles={argoData?.profiles ?? []}
+            view={state.view}
+            depth_m={state.depth}
+            availableDepths={meta.depths_m}
+            colorRanges={meta.color_ranges}
+            sections={sections}
+            isTouring={isTouring}
+            onStopTour={() => setIsTouring(false)}
+            isExploded={isExploded}
+            isSmoothed={isSmoothed}
+            showContours={showContours}
           />
         </ErrorBoundary>
+
+        {/* View Switch: 2D Map | 3D Cutaway */}
+        <div className="absolute top-4 left-4 z-20">
+          <ViewSwitch
+            view={state.view}
+            onChangeView={handleViewChange}
+            isTouring={isTouring}
+            onToggleTour={() => setIsTouring(!isTouring)}
+            isExploded={isExploded}
+            onToggleExploded={() => setIsExploded(!isExploded)}
+            isSmoothed={isSmoothed}
+            onToggleSmoothed={() => setIsSmoothed(!isSmoothed)}
+            showContours={showContours}
+            onToggleContours={() => setShowContours(!showContours)}
+          />
+        </div>
+
+        {/* 3D Depth Rail overlay on right edge */}
+        {state.view === "3d" && meta.depths_m && (
+          <div className="absolute top-20 right-4 z-20 pointer-events-auto animate-in fade-in duration-300">
+            <DepthRail
+              availableDepths={meta.depths_m}
+              selectedDepth={state.depth}
+              onChangeDepth={handleDepthChange}
+            />
+          </div>
+        )}
+
+        {/* Fallback badge when side walls are unavailable (PRD_FRONTEND §3.1b) */}
+        {wallsUnavailable && (
+          <div className="absolute top-16 left-4 z-20 bg-amber-500/90 text-slate-950 font-medium text-xs px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-1.5 backdrop-blur-md">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>Side walls unavailable for this date</span>
+          </div>
+        )}
 
         {/* Map Loading overlay */}
         {isMapLoading && (
@@ -206,6 +347,7 @@ function ExplorerContent() {
               field={state.field}
               vmin={colorRange.vmin}
               vmax={colorRange.vmax}
+              wallRange={wallRange}
             />
           </div>
 

@@ -46,3 +46,49 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Synthetic banner**: Embedded `<Banner type="synthetic" />` directly inside the sticky `<Header />` component to ensure it cannot be scrolled out of view and remains visible on every page.
 - Approved by Aryan.
 
+## 2026-10-23 — Full-period data: stream and reduce, no raw archive (PRD_AI_ML v6)
+- The one-month sample showed raw downloads scale to about 1 TB for 1993–2020 with the current downloader (OSCAR, CCMP and WOA23 only come as global files; GLORYS at 1/12° is 640 MB per month). Even with cropping it would be 150–200 GB.
+- Decision: the full period is built by a new `build_store` stage that streams each product (Copernicus ARCO via `open_dataset`, ERA5 daily statistics, server-side or crop-then-delete for OSCAR/CCMP, OPeNDAP for WOA23), reduces it to the 0.25° grid and 15 depths at once, and writes only the processed store. It runs one year at a time on Colab/Kaggle and is resumable. Targets: store ≤ 20 GB (float16 ≤ 12 GB), scratch ≤ 20 GB.
+- `download.py` stays for the one-month sample and live mode only.
+- Dataset IDs corrected to the live catalogue (checked by Aryan with `copernicusmarine describe`): DUACS `…allsat-l4-duacs-0.125deg_P1D`, OSTIA product `…_010_011`, SSS `cmems_obs-mob_glo_phy-sss_my_multi_P1D`, GREP `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m` (variable `thetao_mean`), ARMOR3D `MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012` / `cmems_obs-mob_glo_phy_my_0.125deg_P1D-m` (now daily).
+- No contract change: the processed store schema (§6.1) is unchanged.
+- Approved by Aryan ("let's do that then").
+
+## 2026-10-24 — 3D cutaway explorer (PRD_FRONTEND v3, PRD_BACKEND v3)
+- The Explorer gets a *3D* view: the region drawn as a rotatable block hanging below the basemap, the top face at the selected depth, side walls showing the column below, contours every 2 °C and the 20 °C isotherm, and an animated "dive" when the depth changes. An "exploded layers" mode and an optional slice tool come after. The 2D map stays as the default on phones and the fallback everywhere.
+- Built as one MapLibre custom layer in raw WebGL2, lazily loaded. No three.js, deck.gl or other 3D library, because the `/` bundle is already near its 350 KB budget.
+- **Contract addition (additive, nothing existing changes):** `GET /section` returns one row or column of the prediction store across all 15 depths (PRD_BACKEND §4.11). Reason: building the walls from 15 `/map` calls would move about 15× the data from a free-tier backend. `manifest.json` and the prediction store are unchanged.
+- Review of the current map code found two breaches of PRD_FRONTEND §0 (hardcoded region bounds and a hand-drawn land mask in `lib/oceanMask.ts`); both are to be fixed first (PHASES P2b-F0).
+- Proposed by Claude after Aryan liked the concept mockup; Aryan asked for it to be written into the PRDs, rules and phases ("how do you reckon we can implement it… put it into the respective PRDs"), 2026-10-24.
+
+## 2026-10-24 — Meta features become core: "Talk to the ocean" (PRD_BACKEND v4, PRD_FRONTEND v4, PHASES P7)
+- P7 moves from optional to core, because the hackathon is built around Meta's models. Included, in this order: **Ocean guide** (Muse Spark 1.3 with data tools plus UI tools that move the map and the 3D view), **voice dive** (Muse Voice Transcribe), **event time machine** (curated, sourced events in 2018–2020), **ocean postcards** (Muse Image, fixed prompt template, numbers only as HTML captions), **lasso** (SAM 3.1 through the Meta Model API, with a deterministic ±0.5 °C connected-region fallback), and **beach mode** on phones (location and compass → nearest ocean cell → profile).
+- **Contract additions (additive):** `/chat` gains `ui_actions` and `grounded`; `/meta` gains `features`; new `/transcribe`, `/events`, `/postcard` (+ `/postcard/<hash>.webp`), `/segment`, `/nearest-ocean`; new caveat strings `AI_CAVEAT`, `POSTCARD_CAVEAT`, `SEGMENT_CAVEAT`. Nothing existing changes; the ML output contract is untouched.
+- Guardrails: every Meta call goes through the backend (key only in Render secrets); Meta models never produce numbers (grounding guard; images carry no numbers); UI actions are validated by the backend; no user content stored; per-feature flags, rate limits and daily caps; every feature degrades cleanly and the site works with all flags off.
+- Scope guardrail: P7 never delays the ML critical path; if time runs short, cut beach mode, then SAM (keep the threshold lasso), then postcards, then the time machine.
+- Muse Code is the recommended implementer for the guide (P7-B1, P7-F1); Muse Image is used to make the landing-page art layers (PLAN_LANDING §4).
+- Rejected: Ray-Ban glasses integration (no device to test on; a mocked demo would cost trust); wearables, Presence Platform and Horizon tools (no fit). Muse Glimmer only as a chat fallback model.
+- Approved by Aryan ("let's include the spark as navigator idea, voice dive, event time machine, ocean postcards, SAM lasso"; SAM expected on the Meta API; "add these … changes to our plans"), 2026-10-24.
+
+## 2026-10-24 — 15 model depths (P1-M3)
+- `depths_m` = 0.494, 5.078, 9.573, 18.496, 29.445, 47.374, 65.807, 92.326, 130.666, 186.126, 222.475, 266.040, 380.213, 643.567, 1062.440 m: native GLORYS12 levels, taken from the data inspection of 2026-10-24 (`outputs/reports/data_inspection.md`).
+- Chosen to put 7 levels in 50–300 m, where the primary criterion is measured (PRD_AI_ML §1.1) and the thermocline sits; the inspect script's proposal had 7 levels in the top 20 m and only 4 in 50–300 m.
+- Changing this later means rebuilding the processed store and the prediction store.
+- Proposed by Claude; approved by Aryan on the decision card ("Thermocline-focused set"), 2026-10-24.
+
+## 2026-10-24 — Winds from ERA5 instead of CCMP (PRD_AI_ML §3, §4)
+- `u_wind`, `v_wind` and `wind_stress_curl` now come from ERA5 10 m winds (`u10`, `v10`, Copernicus CDS), requested together with the other ERA5 variables (area subset; daily statistics for the full build). The wind-stress bulk formula and curl method are unchanged.
+- Reason: CCMP V3.0 from Remote Sensing Systems is one 66 MB global file per day and the server ran at ~30 KB/s from Aryan's connection: over two days for the 91-day sample and roughly 600+ GB for 1993–2021. ERA5 is subset server-side and uses an account we already have.
+- Trade-off: ERA5 winds are model reanalysis rather than satellite-blended (CCMP); acceptable for a 0.25° daily input. CCMP stays in `download.py` as an optional product (only fetched when named), not part of the default download.
+- Proposed by Claude; approved by Aryan on the decision card ("ERA5 10 m winds"), 2026-10-24.
+
+## 2026-10-25 — Remaining M1 configuration (P1-M3)
+- **Region:** 40–100°E, 0–30°N (unchanged).
+- **Period:** 1993-01-01 to 2021-12-31; start stays 1993 (not 2004). ARGO input channels are empty before 2004 by design (`argo_input.min_year`).
+- **Splits:** train 1993-03-02 → 2017-12-01, val 2018-01-01 → 2020-12-01, test 2021-01-01 → 2021-12-31 (sealed), 30-day gaps (unchanged).
+- **GREP end date:** taken as 2020-12-15 (catalogue) unless `copernicusmarine describe` shows later data. The 2021 headline then compares the model with GLORYS12 and ARMOR3D only; GREP is reported as "n/a" for the test year (PRD_AI_ML §1.1).
+- **GREP top level:** GREP has no level at 0.494 m (its first is ~0.506 m). Its first level is used for the 0.494 m level (≈1 cm offset). GREP is also requested down to the first level below 1062.44 m so the deepest level can be interpolated (REVIEW_P3 A6).
+- **ARGO source:** Argo GDAC via ERDDAP (already used for the January sample).
+- `publish.hf_dataset_repo` = `zenzone3/oceanscope-outputs` (in use since P2).
+- Still `[CONFIRM]`, to be settled by validation experiments in P4: `history_days`, `long_history.days`, `aux_weight`, `depth_weights.in_band`, `finetune_argo.lambda`.
+- Proposed by Claude (REVIEW_P3 A8); approved by Aryan ("approved"), 2026-10-25.

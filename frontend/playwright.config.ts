@@ -17,13 +17,15 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "pnpm dev",
-    url: "http://localhost:3000",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-    env: {
-      NEXT_PUBLIC_USE_MOCKS: "true",
-    },
-  },
+  webServer: process.env.NO_WEBSERVER
+    ? undefined
+    : {
+        command: "pnpm dev",
+        url: process.env.PLAYWRIGHT_TEST_BASE_URL || "http://localhost:3000",
+        reuseExistingServer: !process.env.CI,
+        timeout: 120 * 1000,
+        env: {
+          NEXT_PUBLIC_USE_MOCKS: "true",
+        },
+      },
 });

@@ -6,17 +6,17 @@ import {
   useHeadline,
   useMeta,
   useMetrics,
-} from "../../lib/api/hooks";
-import { Banner } from "../../components/common/Banner";
-import { Loading } from "../../components/common/Loading";
-import { ErrorState } from "../../components/common/ErrorState";
-import { ErrorBoundary } from "../../components/common/ErrorBoundary";
-import { HeadlineCard } from "../../components/validation/HeadlineCard";
-import { MetricCards } from "../../components/validation/MetricCards";
-import { DepthErrorChart } from "../../components/validation/DepthErrorChart";
-import { MetricsTable } from "../../components/validation/MetricsTable";
-import { ArgoSection } from "../../components/validation/ArgoSection";
-import { TestSection } from "../../components/validation/TestSection";
+} from "../../../lib/api/hooks";
+import { Banner } from "../../../components/common/Banner";
+import { Loading } from "../../../components/common/Loading";
+import { ErrorState } from "../../../components/common/ErrorState";
+import { ErrorBoundary } from "../../../components/common/ErrorBoundary";
+import { HeadlineCard } from "../../../components/validation/HeadlineCard";
+import { MetricCards } from "../../../components/validation/MetricCards";
+import { DepthErrorChart } from "../../../components/validation/DepthErrorChart";
+import { MetricsTable } from "../../../components/validation/MetricsTable";
+import { ArgoSection } from "../../../components/validation/ArgoSection";
+import { TestSection } from "../../../components/validation/TestSection";
 
 export default function ValidationPage() {
   const { data: meta, isLoading: isMetaLoading, error: metaError, refetch: refetchMeta } = useMeta();

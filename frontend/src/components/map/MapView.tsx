@@ -1,14 +1,24 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-import { formatCoord, formatTemp } from "../../lib/format";
+import maplibregl, { type CanvasSource, type Map as MapLibreMap } from "maplibre-gl";
+import { formatCoord, formatDepth, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
-import { isNorthIndianOcean } from "../../lib/oceanMask";
-import type { ArgoProfileMatch, MapResponse } from "../../lib/api/client";
+import type { ArgoProfileMatch, MapResponse, SectionResponse } from "../../lib/api/client";
+import type { WallId } from "../map3d/depthScale";
+import type { CutawayLayer } from "../map3d/CutawayLayer";
+
+export interface RegionBounds {
+  lat_min: number;
+  lat_max: number;
+  lon_min: number;
+  lon_max: number;
+}
 
 interface MapViewProps {
   mapData?: MapResponse | null;
+  region?: RegionBounds;
+  gridResolutionDeg?: number;
   vmin: number;
   vmax: number;
   selectedLat: number | null;
@@ -17,6 +27,18 @@ interface MapViewProps {
   showArgo?: boolean;
   argoProfiles?: ArgoProfileMatch[];
   className?: string;
+
+  // 3D Explorer props (PRD_FRONTEND §3.1b)
+  view?: "map" | "3d";
+  depth_m?: number;
+  availableDepths?: number[];
+  colorRanges?: { depth_m: number; vmin: number; vmax: number }[];
+  sections?: Partial<Record<WallId, SectionResponse>>;
+  isTouring?: boolean;
+  onStopTour?: () => void;
+  isExploded?: boolean;
+  isSmoothed?: boolean;
+  showContours?: boolean;
 }
 
 interface HoverInfo {
@@ -26,7 +48,15 @@ interface HoverInfo {
   lon: number;
   value: number | null;
   coverage: number;
+  depth_m?: number;
 }
+
+const DEFAULT_REGION: RegionBounds = {
+  lat_min: 0.0,
+  lat_max: 30.0,
+  lon_min: 40.0,
+  lon_max: 100.0,
+};
 
 const OPENFREEMAP_STYLES = {
   light: "https://tiles.openfreemap.org/styles/positron",
@@ -37,21 +67,26 @@ function getBasemapStyle(isLight: boolean): string {
   return isLight ? OPENFREEMAP_STYLES.light : OPENFREEMAP_STYLES.dark;
 }
 
-function getInitialThemeIsLight(): boolean {
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("theme");
-    if (saved === "light") return true;
-    if (saved === "dark") return false;
+/**
+ * Find the nearest index in an array of sorted coordinate values.
+ */
+function findNearestIndex(arr: number[], target: number): number {
+  if (arr.length === 0) return 0;
+  let bestIdx = 0;
+  let bestDist = Math.abs(arr[0] - target);
+  for (let i = 1; i < arr.length; i++) {
+    const dist = Math.abs(arr[i] - target);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
   }
-  if (typeof document !== "undefined") {
-    if (document.documentElement.classList.contains("light")) return true;
-    if (document.documentElement.classList.contains("dark")) return false;
-  }
-  return false;
+  return bestIdx;
 }
 
 export function MapView({
   mapData,
+  region,
   vmin,
   vmax,
   selectedLat,
@@ -60,6 +95,16 @@ export function MapView({
   showArgo = false,
   argoProfiles = [],
   className = "",
+  view = "map",
+  depth_m = 100.0,
+  availableDepths,
+  colorRanges,
+  sections,
+  isTouring = false,
+  onStopTour,
+  isExploded = false,
+  isSmoothed = false,
+  showContours = true,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -68,21 +113,39 @@ export function MapView({
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
-  const [isLightMode, setIsLightMode] = useState<boolean>(getInitialThemeIsLight);
+  const [isLightMode, setIsLightMode] = useState<boolean>(false);
   const currentStyleRef = useRef<string | null>(null);
 
-  const lastDataUrlRef = useRef<string | null>(null);
-  const lastAppliedUrlRef = useRef<string | null>(null);
+  // Reference to 3D Custom Layer instance
+  const cutawayLayerRef = useRef<CutawayLayer | null>(null);
+
+  const activeRegion = region ?? DEFAULT_REGION;
+  const regionRef = useRef<RegionBounds>(activeRegion);
+  useEffect(() => {
+    regionRef.current = activeRegion;
+  }, [activeRegion]);
+
+  const mapDataRef = useRef(mapData);
+  useEffect(() => {
+    mapDataRef.current = mapData;
+  }, [mapData]);
+
+  const onSelectPointRef = useRef(onSelectPoint);
+  useEffect(() => {
+    onSelectPointRef.current = onSelectPoint;
+  }, [onSelectPoint]);
+
+  // Canvas source reference to avoid PNG dataURL encoding on main thread
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceId = "ocean-grid-source";
+  const layerId = "ocean-grid-layer";
 
   // Monitor documentElement class changes to switch between light and dark basemap
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const checkLight = () => {
-      const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
-      if (saved === "light") return true;
-      if (saved === "dark") return false;
-      return document.documentElement.classList.contains("light");
-    };
+    const checkLight = () =>
+      document.documentElement.classList.contains("light") ||
+      !document.documentElement.classList.contains("dark");
     setIsLightMode(checkLight());
 
     const observer = new MutationObserver(() => {
@@ -95,88 +158,186 @@ export function MapView({
     return () => observer.disconnect();
   }, []);
 
+  const getCoordinates = useCallback(
+    (rgn: RegionBounds): [[number, number], [number, number], [number, number], [number, number]] => [
+      [rgn.lon_min, rgn.lat_max], // Top-left [lon, lat]
+      [rgn.lon_max, rgn.lat_max], // Top-right
+      [rgn.lon_max, rgn.lat_min], // Bottom-right
+      [rgn.lon_min, rgn.lat_min], // Bottom-left
+    ],
+    []
+  );
+
   const syncGridLayer = useCallback(() => {
     const map = mapInstanceRef.current;
     if (!map || !map.isStyleLoaded()) return;
 
-    const dataUrl = lastDataUrlRef.current;
-    const sourceId = "ocean-grid-source";
-    const layerId = "ocean-grid-layer";
-
-    if (!dataUrl) {
+    // In 3D mode, the 2D raster grid layer is hidden to avoid z-fighting
+    if (view === "3d") {
       if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
+        map.setLayoutProperty(layerId, "visibility", "none");
       }
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId);
-      }
-      lastAppliedUrlRef.current = null;
       return;
     }
 
-    const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
-      [40.0, 30.0], // Top-left [lon, lat]
-      [100.0, 30.0], // Top-right
-      [100.0, 0.0], // Bottom-right
-      [40.0, 0.0], // Bottom-left
-    ];
+    const data = mapDataRef.current;
+    const canvas = canvasRef.current;
 
-    try {
-      const existingSource = map.getSource(sourceId) as maplibregl.ImageSource | undefined;
-      const existingLayer = map.getLayer(layerId);
-
-      if (existingSource && existingLayer) {
-        if (lastAppliedUrlRef.current !== dataUrl) {
-          existingSource.updateImage({ url: dataUrl });
-          lastAppliedUrlRef.current = dataUrl;
-        }
-      } else {
-        if (existingLayer) {
-          map.removeLayer(layerId);
-        }
-        if (existingSource) {
-          map.removeSource(sourceId);
-        }
-
-        map.addSource(sourceId, {
-          type: "image",
-          url: dataUrl,
-          coordinates,
-        });
-
-        map.addLayer({
-          id: layerId,
-          type: "raster",
-          source: sourceId,
-          paint: {
-            "raster-opacity": 0.9,
-            "raster-fade-duration": 0,
-            "raster-resampling": "nearest",
-          },
-        });
-
-        lastAppliedUrlRef.current = dataUrl;
-      }
-    } catch (err) {
-      console.warn("Could not sync ocean grid layer:", err);
+    if (
+      !data ||
+      !canvas ||
+      !data.values ||
+      data.values.length === 0 ||
+      !data.values[0] ||
+      data.values[0].length === 0
+    ) {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      return;
     }
-  }, []);
+
+    const coordinates = getCoordinates(regionRef.current);
+    const existingSource = map.getSource(sourceId) as CanvasSource | undefined;
+    const existingLayer = map.getLayer(layerId);
+
+    if (existingSource && existingLayer) {
+      existingSource.setCoordinates(coordinates);
+      map.setLayoutProperty(layerId, "visibility", "visible");
+      existingSource.play();
+      requestAnimationFrame(() => {
+        existingSource.pause();
+      });
+    } else {
+      if (existingLayer) map.removeLayer(layerId);
+      if (existingSource) map.removeSource(sourceId);
+
+      map.addSource(sourceId, {
+        type: "canvas",
+        canvas,
+        coordinates,
+        animate: false,
+      });
+
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0.9,
+          "raster-fade-duration": 0,
+          "raster-resampling": "nearest",
+        },
+      });
+
+      const newSource = map.getSource(sourceId) as CanvasSource | undefined;
+      if (newSource) {
+        newSource.play();
+        requestAnimationFrame(() => {
+          newSource.pause();
+        });
+      }
+    }
+  }, [getCoordinates, view]);
+
+  // Lazy-load and attach 3D cutaway layer when view is "3d"
+  const sync3DLayer = useCallback(async () => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    if (view === "3d") {
+      if (!cutawayLayerRef.current) {
+        // Dynamically import CutawayLayer so it is NOT bundled into the initial / page load (PRD_FRONTEND §3.1b)
+        const { CutawayLayer } = await import("../map3d/CutawayLayer");
+        const layer = new CutawayLayer({
+          region: regionRef.current,
+          availableDepths: availableDepths ?? [0.5, 10, 20, 50, 100, 200, 500, 1000],
+          colorRanges,
+          isDark: !isLightMode,
+        });
+
+        if (!map.getLayer(layer.id)) {
+          map.addLayer(layer);
+        }
+        cutawayLayerRef.current = layer;
+      } else if (!map.getLayer(cutawayLayerRef.current.id)) {
+        map.addLayer(cutawayLayerRef.current);
+      }
+
+      const layer = cutawayLayerRef.current;
+      if (layer) {
+        layer.setIsDark(!isLightMode);
+        layer.setSmoothed(isSmoothed);
+        layer.setExploded(isExploded);
+        layer.setShowContours(showContours);
+
+        const reducedMotion =
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        layer.setDepth(depth_m, reducedMotion);
+
+        if (mapData) {
+          layer.setMapData(mapData, vmin, vmax);
+        }
+
+        if (sections) {
+          for (const wallId of ["south", "north", "west", "east"] as WallId[]) {
+            const sec = sections[wallId];
+            if (sec) {
+              layer.setSectionData(wallId, sec);
+            }
+          }
+        }
+      }
+    } else if (cutawayLayerRef.current) {
+      if (map.getLayer(cutawayLayerRef.current.id)) {
+        map.removeLayer(cutawayLayerRef.current.id);
+      }
+      cutawayLayerRef.current = null;
+    }
+  }, [
+    view,
+    availableDepths,
+    colorRanges,
+    isLightMode,
+    isSmoothed,
+    isExploded,
+    showContours,
+    depth_m,
+    vmin,
+    vmax,
+    mapData,
+    sections,
+  ]);
 
   // Initialize MapLibre Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
-    const initialLight = getInitialThemeIsLight();
+    const initialLight =
+      typeof document !== "undefined" &&
+      (document.documentElement.classList.contains("light") ||
+        !document.documentElement.classList.contains("dark"));
+
     const initialStyle = getBasemapStyle(initialLight);
     currentStyleRef.current = initialStyle;
+
+    const rgn = regionRef.current;
+    const centerLon = (rgn.lon_min + rgn.lon_max) / 2;
+    const centerLat = (rgn.lat_min + rgn.lat_max) / 2;
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: initialStyle,
-      center: [70.0, 15.0],
+      center: [centerLon, centerLat],
       zoom: 4,
       minZoom: 2,
       maxZoom: 10,
+      pitch: view === "3d" ? 50 : 0,
+      bearing: view === "3d" ? -20 : 0,
+      maxPitch: view === "3d" ? 85 : 0,
+      dragRotate: view === "3d",
+      pitchWithRotate: view === "3d",
+      touchPitch: view === "3d",
       attributionControl: false,
     });
 
@@ -185,6 +346,7 @@ export function MapView({
     const handleStyleReady = () => {
       if (map.isStyleLoaded()) {
         syncGridLayer();
+        sync3DLayer();
       }
     };
 
@@ -192,10 +354,11 @@ export function MapView({
       setMapLoaded(true);
       handleStyleReady();
     });
-
+    map.on("style.load", () => {
+      setMapLoaded(true);
+      handleStyleReady();
+    });
     map.on("styledata", handleStyleReady);
-    map.on("idle", handleStyleReady);
-
     map.on("error", () => {
       setMapLoaded(true);
     });
@@ -210,8 +373,97 @@ export function MapView({
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      cutawayLayerRef.current = null;
     };
-  }, [syncGridLayer]);
+  }, [syncGridLayer, sync3DLayer, view]);
+
+  // Dynamically switch pitch, bearing, and controls between 2D Map and 3D Cutaway
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded) return;
+
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (view === "3d") {
+      map.setMaxPitch(85);
+      map.dragRotate.enable();
+      map.touchPitch.enable();
+
+      map.easeTo({
+        pitch: 50,
+        bearing: -20,
+        duration: reducedMotion ? 0 : 800,
+      });
+
+      syncGridLayer();
+      sync3DLayer();
+    } else {
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        duration: reducedMotion ? 0 : 600,
+      });
+
+      map.setMaxPitch(0);
+      map.dragRotate.disable();
+      map.touchPitch.disable();
+
+      syncGridLayer();
+      sync3DLayer();
+    }
+  }, [view, mapLoaded, syncGridLayer, sync3DLayer]);
+
+  // Update 3D layer on parameter changes
+  useEffect(() => {
+    if (view === "3d" && mapLoaded) {
+      sync3DLayer();
+    }
+  }, [view, mapLoaded, sync3DLayer]);
+
+  // Tour mode: auto-rotate bearing smoothly in 3D
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || view !== "3d" || !isTouring) return;
+
+    let tourRaf: number | null = null;
+
+    const rotateStep = () => {
+      const currentBearing = map.getBearing();
+      map.setBearing((currentBearing + 0.15) % 360);
+      tourRaf = requestAnimationFrame(rotateStep);
+    };
+
+    tourRaf = requestAnimationFrame(rotateStep);
+
+    // Cancel tour on user interaction with map canvas
+    const handleUserInteract = (e: any) => {
+      const target = e?.originalEvent?.target as HTMLElement | null;
+      if (
+        target &&
+        (target.closest("button") ||
+          target.closest("input") ||
+          target.closest("select") ||
+          target.closest(".pointer-events-auto") ||
+          target.closest(".maplibregl-ctrl"))
+      ) {
+        return;
+      }
+      if (onStopTour) onStopTour();
+    };
+
+    map.on("mousedown", handleUserInteract);
+    map.on("touchstart", handleUserInteract);
+    map.on("wheel", handleUserInteract);
+
+    return () => {
+      if (tourRaf !== null) cancelAnimationFrame(tourRaf);
+      map.off("mousedown", handleUserInteract);
+      map.off("touchstart", handleUserInteract);
+      map.off("wheel", handleUserInteract);
+    };
+  }, [view, isTouring, mapLoaded, onStopTour]);
 
   // Dynamically update basemap style when theme toggles
   useEffect(() => {
@@ -221,125 +473,204 @@ export function MapView({
     const nextStyle = getBasemapStyle(isLightMode);
     if (currentStyleRef.current !== nextStyle) {
       currentStyleRef.current = nextStyle;
-      lastAppliedUrlRef.current = null;
       map.setStyle(nextStyle);
     }
   }, [isLightMode, mapLoaded]);
 
   // Update canvas grid layer when mapData, vmin, or vmax change
   useEffect(() => {
-    if (!mapData) {
-      lastDataUrlRef.current = null;
-    } else {
-      const colormap = mapData.field === "error" ? "balance" : "thermal";
-      const nLat = mapData.lat?.length ?? mapData.values.length;
-      const nLon = mapData.lon?.length ?? (mapData.values[0]?.length ?? 0);
-      const maskedCoverage = mapData.coverage.map((row, r) =>
-        row.map((cov, c) => {
-          const lat = mapData.lat?.[r] ?? (30.0 / nLat) * (r + 0.5);
-          const lon = mapData.lon?.[c] ?? 40.0 + (60.0 / nLon) * (c + 0.5);
-          return isNorthIndianOcean(lat, lon) ? cov : 0;
-        })
-      );
-      const canvas = renderGridToCanvas(mapData.values, maskedCoverage, vmin, vmax, colormap);
-      lastDataUrlRef.current = canvas.toDataURL();
+    if (
+      !mapData ||
+      !mapData.values ||
+      mapData.values.length === 0 ||
+      !mapData.values[0] ||
+      mapData.values[0].length === 0
+    ) {
+      syncGridLayer();
+      return;
     }
+
+    if (!canvasRef.current && typeof document !== "undefined") {
+      canvasRef.current = document.createElement("canvas");
+    }
+
+    const colormap = mapData.field === "error" ? "balance" : "thermal";
+    renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap, 4, canvasRef.current);
     syncGridLayer();
-  }, [mapData, vmin, vmax, syncGridLayer]);
 
-  const mapDataRef = useRef(mapData);
-  useEffect(() => {
-    mapDataRef.current = mapData;
-  }, [mapData]);
+    if (view === "3d" && cutawayLayerRef.current) {
+      cutawayLayerRef.current.setMapData(mapData, vmin, vmax);
+      mapInstanceRef.current?.triggerRepaint();
+    }
+  }, [mapData, vmin, vmax, syncGridLayer, view]);
 
-  const onSelectPointRef = useRef(onSelectPoint);
-  useEffect(() => {
-    onSelectPointRef.current = onSelectPoint;
-  }, [onSelectPoint]);
+  // Throttled hover handler and single click path
+  const hoverRafRef = useRef<number | null>(null);
+  const lastHoverCellRef = useRef<{ r: number; c: number } | null>(null);
+  const pendingMouseEventRef = useRef<maplibregl.MapMouseEvent | null>(null);
 
-  // Handle hover and click inspection over grid cells
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    const selectAtLngLat = (lng: number, lat: number) => {
-      if (!isNorthIndianOcean(lat, lng)) {
+    const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
+      pendingMouseEventRef.current = e;
+
+      if (hoverRafRef.current !== null) {
         return;
       }
-      const data = mapDataRef.current;
-      if (lng >= 40.0 && lng <= 100.0 && lat >= 0.0 && lat <= 30.0) {
-        if (data && data.lat && data.lat.length > 0 && data.lon && data.lon.length > 0) {
-          const nLat = data.lat.length;
-          const nLon = data.lon.length;
-          const r = Math.min(nLat - 1, Math.max(0, Math.floor(lat / (30.0 / nLat))));
-          const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - 40.0) / (60.0 / nLon))));
-          const snappedLat = data.lat[r];
-          const snappedLon = data.lon[c];
-          onSelectPointRef.current(snappedLat, snappedLon);
-        } else {
-          const snappedLat = Math.round(lat * 4) / 4;
-          const snappedLon = Math.round(lng * 4) / 4;
-          onSelectPointRef.current(snappedLat, snappedLon);
+
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const evt = pendingMouseEventRef.current;
+        const data = mapDataRef.current;
+        const rgn = regionRef.current;
+
+        if (
+          !evt ||
+          !data ||
+          !data.lat ||
+          !data.lon ||
+          data.lat.length === 0 ||
+          data.lon.length === 0
+        ) {
+          if (lastHoverCellRef.current !== null) {
+            lastHoverCellRef.current = null;
+            setHoverInfo(null);
+          }
+          return;
         }
-      }
-    };
 
-    const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
-      const data = mapDataRef.current;
-      if (!data) return;
-      const { lng, lat } = e.lngLat;
-      const lonMin = 40.0;
-      const lonMax = 100.0;
-      const latMin = 0.0;
-      const latMax = 30.0;
+        let cellLat: number;
+        let cellLon: number;
+        let r: number;
+        let c: number;
 
-      if (lng >= lonMin && lng <= lonMax && lat >= latMin && lat <= latMax) {
-        const nLat = data.lat.length;
-        const nLon = data.lon.length;
-        const latRes = (latMax - latMin) / nLat;
-        const lonRes = (lonMax - lonMin) / nLon;
+        if (view === "3d" && cutawayLayerRef.current) {
+          const canvas = map.getCanvas();
+          const snapped = cutawayLayerRef.current.getSnappedCellAtScreenPoint(
+            evt.point.x,
+            evt.point.y,
+            data.lat,
+            data.lon,
+            canvas.clientWidth || canvas.width,
+            canvas.clientHeight || canvas.height
+          );
+          if (!snapped) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          if (
+            snapped.lon < rgn.lon_min ||
+            snapped.lon > rgn.lon_max ||
+            snapped.lat < rgn.lat_min ||
+            snapped.lat > rgn.lat_max
+          ) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          cellLat = snapped.lat;
+          cellLon = snapped.lon;
+          r = findNearestIndex(data.lat, cellLat);
+          c = findNearestIndex(data.lon, cellLon);
+        } else {
+          const { lng, lat } = evt.lngLat;
+          if (
+            lng < rgn.lon_min ||
+            lng > rgn.lon_max ||
+            lat < rgn.lat_min ||
+            lat > rgn.lat_max
+          ) {
+            if (lastHoverCellRef.current !== null) {
+              lastHoverCellRef.current = null;
+              setHoverInfo(null);
+            }
+            return;
+          }
+          r = findNearestIndex(data.lat, lat);
+          c = findNearestIndex(data.lon, lng);
+          cellLat = data.lat[r];
+          cellLon = data.lon[c];
+        }
 
-        const r = Math.min(nLat - 1, Math.max(0, Math.floor((lat - latMin) / latRes)));
-        const c = Math.min(nLon - 1, Math.max(0, Math.floor((lng - lonMin) / lonRes)));
+        // Skip state update if mouse is still in the same grid cell
+        if (
+          lastHoverCellRef.current &&
+          lastHoverCellRef.current.r === r &&
+          lastHoverCellRef.current.c === c
+        ) {
+          return;
+        }
 
-        const cellLat = data.lat[r];
-        const cellLon = data.lon[c];
-        const isOcean = isNorthIndianOcean(cellLat, cellLon);
-        const val = isOcean ? (data.values[r]?.[c] ?? null) : null;
-        const cov = isOcean ? (data.coverage[r]?.[c] ?? 0) : 0;
+        lastHoverCellRef.current = { r, c };
+
+        const val = data.values[r]?.[c] ?? null;
+        const cov = data.coverage[r]?.[c] ?? 0;
 
         setHoverInfo({
-          x: e.point.x,
-          y: e.point.y,
+          x: evt.point.x,
+          y: evt.point.y,
           lat: cellLat,
           lon: cellLon,
           value: val,
           coverage: cov,
+          depth_m,
         });
-      } else {
-        setHoverInfo(null);
-      }
+      });
     };
 
     const handleMouseLeave = () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+      pendingMouseEventRef.current = null;
+      lastHoverCellRef.current = null;
       setHoverInfo(null);
     };
 
+    // Single click path: MapLibre click handler only
     const handleClick = (e: maplibregl.MapMouseEvent) => {
-      selectAtLngLat(e.lngLat.lng, e.lngLat.lat);
-    };
+      const data = mapDataRef.current;
+      const rgn = regionRef.current;
+      let targetLat = e.lngLat.lat;
+      let targetLon = e.lngLat.lng;
 
-    const handleDomClick = (e: MouseEvent) => {
-      const container = mapContainerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      try {
-        const coords = map.unproject([x, y]);
-        selectAtLngLat(coords.lng, coords.lat);
-      } catch {
-        // Unproject failed
+      if (view === "3d" && cutawayLayerRef.current && data?.lat && data?.lon) {
+        const canvas = map.getCanvas();
+        const snapped = cutawayLayerRef.current.getSnappedCellAtScreenPoint(
+          e.point.x,
+          e.point.y,
+          data.lat,
+          data.lon,
+          canvas.clientWidth || canvas.width,
+          canvas.clientHeight || canvas.height
+        );
+        if (snapped) {
+          targetLat = snapped.lat;
+          targetLon = snapped.lon;
+        }
+      }
+
+      if (
+        targetLon >= rgn.lon_min &&
+        targetLon <= rgn.lon_max &&
+        targetLat >= rgn.lat_min &&
+        targetLat <= rgn.lat_max
+      ) {
+        if (data?.lat && data?.lon && data.lat.length > 0 && data.lon.length > 0) {
+          const r = findNearestIndex(data.lat, targetLat);
+          const c = findNearestIndex(data.lon, targetLon);
+          onSelectPointRef.current(data.lat[r], data.lon[c]);
+        } else {
+          onSelectPointRef.current(targetLat, targetLon);
+        }
       }
     };
 
@@ -347,16 +678,16 @@ export function MapView({
     map.on("mouseout", handleMouseLeave);
     map.on("click", handleClick);
 
-    const containerEl = mapContainerRef.current;
-    containerEl?.addEventListener("click", handleDomClick, true);
-
     return () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
       map.off("mousemove", handleMouseMove);
       map.off("mouseout", handleMouseLeave);
       map.off("click", handleClick);
-      containerEl?.removeEventListener("click", handleDomClick, true);
     };
-  }, []);
+  }, [depth_m, view, mapLoaded]);
 
   // Update selection marker
   useEffect(() => {
@@ -388,7 +719,6 @@ export function MapView({
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded) return;
 
-    // Clear previous argo markers
     argoMarkersRef.current.forEach((m) => m.remove());
     argoMarkersRef.current = [];
 
@@ -427,6 +757,7 @@ export function MapView({
   return (
     <div
       className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-slate-950 transition-colors ${className}`}
+      style={{ viewTransitionName: view === "3d" ? "ocean-section" : undefined }}
     >
       <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
 
@@ -436,8 +767,11 @@ export function MapView({
           className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-slate-950/90 backdrop-blur-md border border-slate-300 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
           style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
         >
-          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
-            {formatCoord(hoverInfo.lat, hoverInfo.lon)}
+          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+            <span>{formatCoord(hoverInfo.lat, hoverInfo.lon)}</span>
+            {view === "3d" && hoverInfo.depth_m !== undefined && (
+              <span className="text-cyan-500 font-semibold">· {formatDepth(hoverInfo.depth_m)}</span>
+            )}
           </div>
           {hoverInfo.coverage === 0 ? (
             <div className="text-slate-500 font-medium text-[11px]">Land / Unmodelled</div>

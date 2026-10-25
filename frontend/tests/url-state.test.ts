@@ -56,9 +56,11 @@ describe("url-state.ts explorer query sync", () => {
       field: "error" as const,
       lat: 14.25,
       lon: 68.75,
+      view: "3d" as const,
     };
 
     const sp = buildExplorerSearchParams(original);
+    expect(sp.get("view")).toBe("3d");
     const parsed = parseExplorerParams(sp, mockMeta);
 
     expect(parsed.date).toBe(original.date);
@@ -66,5 +68,14 @@ describe("url-state.ts explorer query sync", () => {
     expect(parsed.field).toBe(original.field);
     expect(parsed.lat).toBe(original.lat);
     expect(parsed.lon).toBe(original.lon);
+    expect(parsed.view).toBe("3d");
+  });
+
+  it("handles view param fallback", () => {
+    const invalidView = parseExplorerParams(new URLSearchParams({ view: "invalid" }), mockMeta);
+    expect(invalidView.view).toBe("map");
+
+    const valid3d = parseExplorerParams(new URLSearchParams({ view: "3d" }), mockMeta);
+    expect(valid3d.view).toBe("3d");
   });
 });

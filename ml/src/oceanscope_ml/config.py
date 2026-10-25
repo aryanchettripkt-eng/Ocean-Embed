@@ -49,6 +49,12 @@ class PathsConfig:
 
 
 @dataclass
+class BaselinesConfig:
+    max_train_samples: int = 500_000
+    ridge_alpha: float = 1.0
+
+
+@dataclass
 class ExperimentConfig:
     project: str = "oceanscope-ai"
     dataset_version: str = "v1"
@@ -65,6 +71,7 @@ class ExperimentConfig:
     train: dict[str, Any] = field(default_factory=dict)
     inference: dict[str, Any] = field(default_factory=dict)
     publish: dict[str, Any] = field(default_factory=dict)
+    baselines: BaselinesConfig = field(default_factory=BaselinesConfig)
     raw_dict: dict[str, Any] = field(default_factory=dict)
 
 
@@ -131,6 +138,12 @@ def load_config(config_path: str | Path = "configs/experiment.yaml") -> Experime
         checkpoints=checkpoints_path,
     )
 
+    baselines_data = data.get("baselines", {})
+    baselines = BaselinesConfig(
+        max_train_samples=int(baselines_data.get("max_train_samples", 500_000)),
+        ridge_alpha=float(baselines_data.get("ridge_alpha", 1.0)),
+    )
+
     return ExperimentConfig(
         project=str(data.get("project", "oceanscope-ai")),
         dataset_version=str(data.get("dataset_version", "v1")),
@@ -147,5 +160,6 @@ def load_config(config_path: str | Path = "configs/experiment.yaml") -> Experime
         train=data.get("train", {}),
         inference=data.get("inference", {}),
         publish=data.get("publish", {}),
+        baselines=baselines,
         raw_dict=data,
     )

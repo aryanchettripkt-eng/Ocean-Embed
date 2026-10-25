@@ -3,9 +3,16 @@
 Format: `- [YYYY-MM-DD] (area, asked by) question — status`
 
 - [2026-10-22] (ml, Claude) Create Copernicus Marine, NASA Earthdata, Copernicus CDS and Hugging Face accounts. — open
-- [2026-10-22] (ml, Claude) Confirm region bbox, 15 GLORYS depths, time period (1993 start) and splits after the M1 data inspection. — open
-- [2026-10-22] (ml, Claude) ARGO source: Argo GDAC or Copernicus INSITU? — open
-- [2026-10-22] (ml, Claude) GREP: confirm end date (catalogue says 2020-12-15, docs say "regularly updated") and members at M1. If it ends in 2020, the §1.1 test-year comparison is GLORYS12 + ARMOR3D only. — open
-- [2026-10-22] (ml, Claude) Storage: size of 1993–2021 inputs (~143 channels) vs Kaggle Dataset limits and Drive quota; decide after the one-month download. — open
-- [2026-10-22] (backend, Claude) Chat provider: Meta (Muse Spark / Llama API) if access is granted; otherwise which OpenAI-compatible provider, or keep chat off? — open
+- [2026-10-22] (ml, Claude) Confirm region bbox, 15 GLORYS depths, time period (1993 start) and splits after the M1 data inspection. — answered 2026-10-25: depths 2026-10-24; region, 1993–2021 and splits kept as proposed (DECISIONS 2026-10-25)
+- [2026-10-22] (ml, Claude) ARGO source: Argo GDAC or Copernicus INSITU? — answered 2026-10-25: Argo GDAC via ERDDAP (DECISIONS 2026-10-25)
+- [2026-10-22] (ml, Claude) GREP: confirm end date (catalogue says 2020-12-15, docs say "regularly updated") and members at M1. If it ends in 2020, the §1.1 test-year comparison is GLORYS12 + ARMOR3D only. — answered 2026-10-25: take 2020-12-15 unless `copernicusmarine describe` shows later data; GREP n/a for 2021 (DECISIONS 2026-10-25)
+- [2026-10-22] (ml, Claude) Storage: size of 1993–2021 inputs (~143 channels) vs Kaggle Dataset limits and Drive quota; decide after the one-month download. — answered 2026-10-23: stream and reduce, store ≤ 20 GB on a Kaggle Dataset (DECISIONS 2026-10-23, PRD_AI_ML §4.2)
+- [2026-10-22] (backend, Claude) Chat provider: Meta (Muse Spark / Llama API) if access is granted; otherwise which OpenAI-compatible provider, or keep chat off? — answered 2026-10-24: Meta Model API (Muse Spark 1.3), core (DECISIONS "Meta features")
 - [2026-10-22] (frontend, Claude) Branding, credits text, custom domain? — open
+- [2026-10-23] (ml, Claude) CCMP winds source for the full period: the RSS server ran at ~30 KB/s. Options: a faster CCMP mirror or OPeNDAP endpoint (same product, preferred), or switch to Copernicus `WIND_GLO_PHY_L4_MY_012_006` (different product, needs a DECISIONS entry). — answered 2026-10-24: use ERA5 10 m winds (u10, v10) instead of CCMP (Aryan; DECISIONS 2026-10-24)
+- [2026-10-23] (ml, Claude) Start year: keep 1993 (more history) or start in 2004 (ARGO era, about 40% less data and build time)? To be proposed with the M1 config. — answered 2026-10-25: keep 1993 (DECISIONS 2026-10-25)
+- [2026-10-24] (frontend, Claude) 3D view on the landing page: open the Explorer in *3D* on desktop for the demo (recommended), or in *Map* with a visible "3D" switch? — answered 2026-10-24: open in *3D* on desktop (Aryan)
+- [2026-10-24] (ml, Claude) Synthetic fixtures are at 1° spacing, so the 3D walls look coarse until real 0.25° outputs exist. Regenerate the fixtures at 0.25° for the demo period (still < 5 MB if only a few days), or accept the coarse look until P6? — answered 2026-10-24: regenerate at 0.25° (Aryan)
+- [2026-10-24] (all, Claude) Hackathon submission deadline and judging date? Needed to decide how much of P7 fits alongside P3–P5. — open
+- [2026-10-24] (backend, Claude) Meta Model API: key available? Exact model ids for Muse Spark 1.3, Muse Voice Transcribe, Muse Image and SAM 3.1; tool-calling support; rate limits or credits; is SAM 3.1 hosted with point prompts? — open
+- [2026-10-24] (ml/backend, Claude) Event list for the time machine: which 3–6 events in 2018–2020 (e.g. Cyclone Fani, May 2019; the 2019 positive IOD)? Claude drafts with sources, Aryan approves (P7-E). — open

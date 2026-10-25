@@ -12,6 +12,7 @@ export interface ExplorerState {
   field: "pred" | "glorys" | "error";
   lat: number | null;
   lon: number | null;
+  view: "map" | "3d";
 }
 
 export const DEFAULT_FALLBACK_STATE: ExplorerState = {
@@ -20,6 +21,7 @@ export const DEFAULT_FALLBACK_STATE: ExplorerState = {
   field: "pred",
   lat: null,
   lon: null,
+  view: "map",
 };
 
 /**
@@ -59,6 +61,7 @@ export function parseExplorerParams(
   const rawField = getParam("field");
   const rawLat = getParam("lat");
   const rawLon = getParam("lon");
+  const rawView = getParam("view");
 
   // Default depth: closest to 100m from meta.depths_m
   const defaultDepth = meta?.depths_m ? findClosestDepth(100.0, meta.depths_m) : DEFAULT_FALLBACK_STATE.depth;
@@ -130,7 +133,13 @@ export function parseExplorerParams(
     }
   }
 
-  return { date, depth, field, lat, lon };
+  // Validate view
+  let view: "map" | "3d" = "map";
+  if (rawView === "3d" || rawView === "map") {
+    view = rawView;
+  }
+
+  return { date, depth, field, lat, lon, view };
 }
 
 /**
@@ -144,6 +153,9 @@ export function buildExplorerSearchParams(state: ExplorerState): URLSearchParams
   if (state.lat !== null && state.lon !== null) {
     params.set("lat", state.lat.toFixed(3));
     params.set("lon", state.lon.toFixed(3));
+  }
+  if (state.view && state.view !== "map") {
+    params.set("view", state.view);
   }
   return params;
 }

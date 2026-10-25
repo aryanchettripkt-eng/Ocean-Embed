@@ -47,7 +47,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "name": "DUACS L4 Altimetry (SLA & ADT)",
         "provider": "Copernicus Marine Service",
         "source_id": "SEALEVEL_GLO_PHY_L4_MY_008_047",
-        "dataset_id": "cmems_obs-sl_glo_phy-ssh_my_0.25deg_P1D",
+        "dataset_id": "cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["sla", "adt"],
         "needs_lead_in": True,
@@ -59,7 +59,7 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
     "sst": {
         "name": "OSTIA L4 Sea Surface Temperature",
         "provider": "Copernicus Marine Service / UK Met Office",
-        "source_id": "SST_GLO_SST_L4_REP_OBSERVATIONS_010_001",
+        "source_id": "SST_GLO_SST_L4_REP_OBSERVATIONS_010_011",
         "dataset_id": "METOFFICE-GLO-SST-L4-REP-OBS-SST",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["analysed_sst"],
@@ -72,8 +72,8 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
     "sss": {
         "name": "MULTIOBS Sea Surface Salinity",
         "provider": "Copernicus Marine Service",
-        "source_id": "MULTIOBS_GLO_PHY_SSS_L4_MYNRT_015_013",
-        "dataset_id": "dataset-sss-multiobs-my-0.25deg-daily",
+        "source_id": "MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013",
+        "dataset_id": "cmems_obs-mob_glo_phy-sss_my_multi_P1D",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["sos"],
         "needs_lead_in": True,
@@ -106,20 +106,30 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "daily_mb": 0.5,
         "depth_subset": False,
         "env_creds": ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"],
-        "notes": "Dynamic input for wind stress & curl derivation from Remote Sensing Systems.",
+        # Replaced by ERA5 10 m winds (DECISIONS 2026-10-24); only fetched when named explicitly.
+        "optional": True,
+        "notes": "Unused: winds come from ERA5 u10/v10 (RSS too slow).",
     },
     "era5": {
-        "name": "ERA5 Surface Fluxes & Precip",
+        "name": "ERA5 Surface Fluxes, Precip & 10 m Winds",
         "provider": "Copernicus Climate Change Service (CDS) / ECMWF",
         "source_id": "reanalysis-era5-single-levels",
         "dataset_id": "era5-surface-daily",
         "source_url": "https://cds.climate.copernicus.eu",
-        "variables": ["ssr", "str", "sshf", "slhf", "tp"],
+        "variables": [
+            "ssr",
+            "str",
+            "sshf",
+            "slhf",
+            "tp",
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+        ],
         "needs_lead_in": True,
         "daily_mb": 0.8,
         "depth_subset": False,
         "env_creds": ["CDSAPI_URL", "CDSAPI_KEY"],
-        "notes": "Atmospheric net heat flux and precipitation forcing.",
+        "notes": "Net heat flux, precipitation and 10 m winds (wind + stress curl).",
     },
     "gebco": {
         "name": "GEBCO Ocean Bathymetry",
@@ -166,9 +176,9 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "name": "GREP Ensemble Mean Reanalysis",
         "provider": "Copernicus Marine Service",
         "source_id": "GLOBAL_MULTIYEAR_PHY_ENS_001_031",
-        "dataset_id": "cmems_mod_glo_phy-tem_phymnstd_my_0.25deg_P1D-m",
+        "dataset_id": "cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m",
         "source_url": "https://marine.copernicus.eu",
-        "variables": ["thetao"],
+        "variables": ["thetao_mean"],
         "needs_lead_in": False,
         "daily_mb": 3.0,
         "depth_subset": True,
@@ -178,8 +188,8 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
     "armor3d": {
         "name": "ARMOR3D L4 Observation-based 3D Temperature",
         "provider": "Copernicus Marine Service",
-        "source_id": "MULTIOBS_GLO_PHY_TS_REP_015_004",
-        "dataset_id": "dataset-armor-3d-rep-weekly",
+        "source_id": "MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012",
+        "dataset_id": "cmems_obs-mob_glo_phy_my_0.125deg_P1D-m",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["to"],
         "needs_lead_in": False,
@@ -216,7 +226,9 @@ def plan_download(
     end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     lead_in_days = int(config.inputs.get("long_history", {}).get("days", 60))
 
-    products = selected_products or list(PRODUCT_SPECS.keys())
+    products = selected_products or [
+        key for key, spec in PRODUCT_SPECS.items() if not spec.get("optional", False)
+    ]
     plan: dict[str, Any] = {}
     total_est_mb = 0.0
 
@@ -276,8 +288,8 @@ def plan_download(
         }
 
         if spec.get("depth_subset"):
-            # 15 depths +- neighbours: 0 m to just past GLORYS level 1062.44 m (~1000 m tier)
-            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1100.0}
+            # 15 depths: 0 m to at least 1250 m (covers GREP 1062 m layer, PRD §4.2)
+            plan_item["depth_range"] = {"min_depth_m": 0.0, "max_depth_m": 1250.0}
 
         plan[prod_key] = plan_item
 
@@ -423,7 +435,7 @@ def download_era5(item: dict[str, Any], raw_dir: Path, manifest: dict[str, Any])
         record_downloaded_file(manifest, "era5", out_file, raw_dir, item["source_id"])
         return
 
-    print("  Downloading ERA5 surface fluxes via cdsapi...")
+    print("  Downloading ERA5 surface fluxes and 10 m winds via cdsapi...")
     c = cdsapi.Client()
     bbox = item["bbox"]
     c.retrieve(

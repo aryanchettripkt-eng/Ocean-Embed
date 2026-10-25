@@ -423,6 +423,8 @@ Do not imply that the system can produce validated predictions for every day or 
 
 ## 9. Meta AI Integration
 
+> **Updated 2026-10-24:** the current plan for Meta's tools (Ocean guide with Muse Spark as navigator, voice, event time machine, Muse Image postcards, SAM lasso, beach mode) is in `docs/PRD_BACKEND.md` §6, `docs/PRD_FRONTEND.md` §3.4 and `docs/PHASES.md` P7. This section is background only.
+
 Meta's tools add a conversational and visual interaction layer.
 
 ### Muse Code

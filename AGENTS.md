@@ -3,7 +3,7 @@
 This file is mandatory reading before any change. It applies to every agent (Gemini, Claude, or any other) and overrides anything an agent "thinks is better". If a rule blocks you, stop and ask; do not work around it.
 
 ## 1. What this project is
-OceanScope AI reconstructs daily subsurface ocean temperature (15 depths, 0.25° grid, North Indian Ocean) from surface data with a small U-Net, and publishes the results through a FastAPI backend and a Next.js website.
+OceanScope AI reconstructs daily subsurface ocean temperature (15 depths, 0.25° grid, North Indian Ocean) from surface data with a small U-Net, and publishes the results through a FastAPI backend and a Next.js website, whose Explorer shows the ocean as a 2D map and as a 3D cutaway block (`PRD_FRONTEND.md` §3.1b).
 
 ## 2. Documents and their authority (highest first)
 1. The owner's latest explicit instruction (Aryan).
@@ -48,6 +48,7 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 8. **Never force-push `main`, never rewrite shared history, never commit directly to `main`.**
 9. **Ask instead of guessing** when requirements are unclear: add a dated entry to `docs/OPEN_QUESTIONS.md` and stop that task.
 10. **No new branches and no pushing without the owner's permission.** Do not create, rename or delete any git branch, and do not `git push` (or open, update or merge a pull request) unless Aryan has explicitly said so for that specific action. Approval for one push or branch does not carry over to the next. Work and commit locally on the branch you were told to use, then report and wait.
+11. **Meta / AI features.** Meta model calls (Muse Spark, Voice Transcribe, Muse Image, SAM) happen only in `backend/app/meta/`, with the key from env vars. AI-generated text and images are labelled with the caveat strings and never become a source of numbers; tests never call the real Meta API. Never commit API keys, transcripts, user audio or generated images.
 
 ## 6. Workflow for every task
 1. Read this file, the relevant PRD section, and `docs/PROGRESS.md`.
@@ -64,10 +65,11 @@ If you work in one area and need a contract change, **stop** and ask. Do not "te
 ## 7. Division of labour between agents
 - **Claude** writes plans, PRD updates, task breakdowns and reviews; it may also implement.
 - **Gemini** implements tasks from the plan.
+- **Muse Code** (Meta's coding tool) is the recommended implementer for the Ocean guide tasks (PHASES P7-B1, P7-F1); the same rules apply to it.
 - One agent per branch at a time. Before starting, check `docs/PROGRESS.md` for a task marked in progress by another agent.
 - Reviews check the diff against the PRD acceptance criteria and this file's hard rules.
 
 ## 8. Environments
 - ML training runs on Google Colab / Kaggle (see `PRD_AI_ML.md` §4.1, §11). Code must run there unchanged: paths from env vars, resumable checkpoints.
-- Backend deploys to Hugging Face Spaces (Docker). Frontend deploys to Vercel.
+- Backend deploys to Render (Docker web service, free tier; see DECISIONS "Phase 2 hosting"). Frontend deploys to Vercel.
 - Python 3.11. Node 22 LTS with pnpm.
