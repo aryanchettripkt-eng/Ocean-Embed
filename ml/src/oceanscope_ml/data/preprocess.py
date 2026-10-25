@@ -307,14 +307,13 @@ def run_preprocessing(
     if woa_files:
         logger.info("Found %d WOA23 monthly files...", len(woa_files))
         woa_monthly_ds: list[xr.Dataset] = []
-        for woa_file in sorted(woa_files):
+        for m_idx, woa_file in enumerate(sorted(woa_files), start=1):
             ds_woa_single = xr.open_dataset(woa_file, decode_times=False)
-            woa_monthly_ds.append(reduce_woa(ds_woa_single, target_grid, depths_m))
+            woa_monthly_ds.append(reduce_woa(ds_woa_single, target_grid, depths_m, month=m_idx))
         if len(woa_monthly_ds) == 1:
             processed_vars["woa_clim_profile"] = woa_monthly_ds[0]["woa_clim_profile"]
         else:
             ds_woa_all = xr.concat([d["woa_clim_profile"] for d in woa_monthly_ds], dim="month")
-            ds_woa_all = ds_woa_all.assign_coords(month=np.arange(1, len(woa_monthly_ds) + 1))
             processed_vars["woa_clim_profile"] = ds_woa_all
         opened_source_files["woa_clim_profile"] = [str(f.relative_to(raw_path)) for f in woa_files]
 
@@ -421,20 +420,18 @@ def run_preprocessing(
     ds_processed.attrs["dataset_version"] = str(config.dataset_version)
     ds_processed.attrs["config_hash"] = compute_config_hash(config.raw_dict)
     ds_processed.attrs["created_utc"] = datetime.now(timezone.utc).isoformat()
-    ds_processed.attrs["source_files"] = json.dumps(all_unique_files)
-    ds_processed.attrs["source_files_by_var"] = json.dumps(opened_source_files)
-    ds_processed.attrs["norm_stats"] = json.dumps(norm_stats)
+    ds_processed.attrs["source_files"] = all_unique_files
+    ds_processed.attrs["source_files_by_var"] = opened_source_files
+    ds_processed.attrs["norm_stats"] = norm_stats
     ds_processed.attrs["sample_only"] = sample_only
     ds_processed.attrs["synthetic"] = False
     if sample_only:
         ds_processed.attrs["norm_stats_sample_only"] = True
-    ds_processed.attrs["split_dates"] = json.dumps(
-        {
-            "train": config.splits.train,
-            "val": config.splits.val,
-            "test": config.splits.test,
-        }
-    )
+    ds_processed.attrs["split_dates"] = {
+        "train": config.splits.train,
+        "val": config.splits.val,
+        "test": config.splits.test,
+    }
 
     # Save Processed Zarr Store
     zarr_filename = f"oceanscope_{config.dataset_version}.zarr"

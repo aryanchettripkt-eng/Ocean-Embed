@@ -127,14 +127,14 @@ def compute_norm_stats(
         if len(valid_ocean_vals) > 0:
             ch_mean = float(np.mean(valid_ocean_vals))
             ch_std = float(np.std(valid_ocean_vals))
-            # Guard against zero std
-            if ch_std < 1e-6:
+            # Relative zero variance guard: preserve small variables (curl ~1e-7; REVIEW_P3 R4)
+            if not np.isfinite(ch_std) or ch_std == 0.0 or ch_std < 1e-12:
                 ch_std = 1.0
         else:
             ch_mean = 0.0
             ch_std = 1.0
 
-        channel_stats[ch] = {"mean": round(ch_mean, 6), "std": round(ch_std, 6)}
+        channel_stats[ch] = {"mean": ch_mean, "std": ch_std}
 
     # Static channel: bathymetry
     if "bathymetry" in ds_train.data_vars:
@@ -142,8 +142,8 @@ def compute_norm_stats(
         valid_bathy = bathy_vals[~np.isnan(bathy_vals)]
         if len(valid_bathy) > 0:
             channel_stats["bathymetry"] = {
-                "mean": round(float(np.mean(valid_bathy)), 6),
-                "std": round(float(np.std(valid_bathy)), 6),
+                "mean": float(np.mean(valid_bathy)),
+                "std": float(np.std(valid_bathy)),
             }
 
     # Per-depth anomaly standard deviation sigma_d: std(thetao - clim) over train dates
@@ -170,11 +170,11 @@ def compute_norm_stats(
             valid_anom = depth_ocean_anom[~np.isnan(depth_ocean_anom)]
             if len(valid_anom) > 0:
                 sig_d = float(np.std(valid_anom))
-                if sig_d < 1e-4:
+                if not np.isfinite(sig_d) or sig_d < 1e-6:
                     sig_d = 1.0
             else:
                 sig_d = 1.0
-            sigma_d_list.append(round(sig_d, 6))
+            sigma_d_list.append(sig_d)
     else:
         # Fallback 15 depths default
         sigma_d_list = [1.0] * 15
@@ -191,7 +191,7 @@ def normalize_inputs(
     std: float,
 ) -> np.ndarray:
     """Normalize input channel by z-scoring: (x - mean) / std."""
-    safe_std = 1.0 if abs(std) < 1e-6 else std
+    safe_std = 1.0 if not np.isfinite(std) or abs(std) < 1e-12 else std
     return ((arr - mean) / safe_std).astype(np.float32)
 
 

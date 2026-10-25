@@ -305,10 +305,23 @@ def stream_copernicus(
 
 
 def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
-    """Filter list of files to those containing the specified year in name or path."""
+    """Filter list of files to those containing the specified year in name or path.
+
+    Excludes files that explicitly contain a different 4-digit year (REVIEW_P3 R3).
+    """
+    import re
+
     yr_str = str(year)
     matched = [f for f in files if yr_str in f.name or yr_str in str(f)]
-    return matched if matched else files
+    if matched:
+        return matched
+
+    # If any file in files contains another 4-digit year, do not fall back
+    has_other_year = any(re.search(r"\b(19\d\d|20\d\d)\b", f.name) for f in files)
+    if has_other_year:
+        return []
+
+    return files
 
 
 def reduce_year_dataset(
@@ -317,6 +330,8 @@ def reduce_year_dataset(
     target_grid: TargetGrid,
     depths_m: list[float],
     manifest: dict[str, Any] | None = None,
+    stream: bool = False,
+    scratch_dir: Path | None = None,
 ) -> tuple[xr.Dataset, list[str]]:
     """Reduce all products for a given year using shared reduce functions from raw files.
 
@@ -325,19 +340,39 @@ def reduce_year_dataset(
     source_files: list[str] = []
     processed_vars: dict[str, xr.DataArray] = {}
 
+    bbox = (
+        float(target_grid.lons.min()),
+        float(target_grid.lons.max()),
+        float(target_grid.lats.min()),
+        float(target_grid.lats.max()),
+    )
+    start_date = f"{year}-01-01"
+    end_date = f"{year}-12-31"
+
     # --- GLORYS12 Primary Target ---
     glorys_files = filter_files_by_year(find_product_files(raw_path, "glorys12", manifest), year)
-    if not glorys_files:
+    if glorys_files:
+        source_files.append(
+            str(
+                glorys_files[0].relative_to(raw_path)
+                if glorys_files[0].is_relative_to(raw_path)
+                else glorys_files[0].name
+            )
+        )
+        ds_raw_glorys = xr.open_dataset(glorys_files[0])
+    elif stream:
+        # Stream GLORYS12 via copernicusmarine.open_dataset (PRD §4.2, REVIEW_P3 R3)
+        ds_raw_glorys = stream_copernicus(
+            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            bbox=bbox,
+            dates=(start_date, end_date),
+            variables=["thetao"],
+            depths=(float(min(depths_m)), float(max(depths_m))),
+        )
+        source_files.append(f"copernicusmarine:cmems_mod_glo_phy_my_0.083deg_P1D-m:{year}")
+    else:
         raise FileNotFoundError(f"Missing GLORYS12 raw data for year {year} in {raw_path}")
 
-    source_files.append(
-        str(
-            glorys_files[0].relative_to(raw_path)
-            if glorys_files[0].is_relative_to(raw_path)
-            else glorys_files[0].name
-        )
-    )
-    ds_raw_glorys = xr.open_dataset(glorys_files[0])
     ds_red_glorys = reduce_glorys12(ds_raw_glorys, target_grid, depths_m)
     processed_vars["thetao"] = ds_red_glorys["thetao"]
     processed_vars["ocean_mask"] = ds_red_glorys["ocean_mask"]
@@ -488,12 +523,20 @@ def reduce_year_dataset(
         if len(woa_files) == 12:
             woa_months = []
             for m_idx, wf in enumerate(woa_files, start=1):
-                ds_m = reduce_woa(xr.open_dataset(wf, decode_times=False), target_grid, depths_m)
+                ds_m = reduce_woa(
+                    xr.open_dataset(wf, decode_times=False),
+                    target_grid,
+                    depths_m,
+                    month=m_idx,
+                )
                 woa_months.append(ds_m["woa_clim_profile"].values[0])
             woa_12m = np.stack(woa_months, axis=0)  # (12, depth, lat, lon)
         else:
             ds_red_woa = reduce_woa(
-                xr.open_dataset(woa_files[0], decode_times=False), target_grid, depths_m
+                xr.open_dataset(woa_files[0], decode_times=False),
+                target_grid,
+                depths_m,
+                month=1,
             )
             woa_12m = np.repeat(ds_red_woa["woa_clim_profile"].values, 12, axis=0)
 
@@ -576,6 +619,7 @@ def build_store(
     force: bool = False,
     export_f16: bool = False,
     finalize: bool = False,
+    stream: bool = False,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
@@ -674,7 +718,15 @@ def build_store(
         logger.info("=" * 60)
 
         # In testing/local mode: reduce from raw_dir; in streaming mode: copernicusmarine
-        ds_yr, src_files = reduce_year_dataset(yr, raw_base, target_grid, depths_m, manifest)
+        ds_yr, src_files = reduce_year_dataset(
+            yr,
+            raw_base,
+            target_grid,
+            depths_m,
+            manifest,
+            stream=stream,
+            scratch_dir=yr_scratch,
+        )
         accumulated_sources.extend(src_files)
 
         yr_dates = pd.to_datetime(ds_yr.coords["time"].values)
@@ -687,8 +739,16 @@ def build_store(
                 len(all_dates),
             )
 
+            import dask.array as da
+
+            t_chunk = min(32, len(all_dates))
+            n_t = len(all_dates)
+            n_d = len(depths_m)
+            n_lat = len(target_grid.lats)
+            n_lon = len(target_grid.lons)
+
             data_vars: dict[str, Any] = {}
-            # 2D surface variables
+            # 2D surface variables (lazy dask arrays: 0 bytes RAM, REVIEW_P3 R3)
             for v in [
                 "sla",
                 "adt",
@@ -703,33 +763,31 @@ def build_store(
                 "precip",
             ]:
                 data_vars[v] = xr.DataArray(
-                    np.full(
-                        (len(all_dates), len(target_grid.lats), len(target_grid.lons)),
+                    da.full(
+                        (n_t, n_lat, n_lon),
                         np.nan,
                         dtype=np.float32,
+                        chunks=(t_chunk, n_lat, n_lon),
                     ),
                     dims=("time", "lat", "lon"),
                 )
 
-            # 4D subsurface variables
+            # 4D subsurface variables (lazy dask arrays: 0 bytes RAM, REVIEW_P3 R3)
             for v in ["thetao", "grep_mean", "armor3d"]:
                 data_vars[v] = xr.DataArray(
-                    np.full(
-                        (
-                            len(all_dates),
-                            len(depths_m),
-                            len(target_grid.lats),
-                            len(target_grid.lons),
-                        ),
+                    da.full(
+                        (n_t, n_d, n_lat, n_lon),
                         np.nan,
                         dtype=np.float32,
+                        chunks=(t_chunk, n_d, n_lat, n_lon),
                     ),
                     dims=("time", "depth", "lat", "lon"),
                 )
             data_vars["target_valid"] = xr.DataArray(
-                np.zeros(
-                    (len(all_dates), len(depths_m), len(target_grid.lats), len(target_grid.lons)),
+                da.zeros(
+                    (n_t, n_d, n_lat, n_lon),
                     dtype=bool,
+                    chunks=(t_chunk, n_d, n_lat, n_lon),
                 ),
                 dims=("time", "depth", "lat", "lon"),
             )
@@ -757,13 +815,8 @@ def build_store(
             template_ds.attrs["built_years"] = []
             template_ds.attrs["source_files"] = []
 
-            chunks_map = {
-                "time": min(32, len(all_dates)),
-                "depth": len(depths_m),
-                "lat": len(target_grid.lats),
-                "lon": len(target_grid.lons),
-            }
-            template_ds.chunk(chunks_map).to_zarr(zarr_dest, mode="w", compute=True)
+            # Write empty Zarr template metadata without computing large in-memory arrays
+            template_ds.to_zarr(zarr_dest, mode="w", compute=False)
 
         # Find time slice index in all_dates
         t_mask = np.isin(all_dates, yr_dates)
@@ -922,6 +975,11 @@ def main() -> None:
         action="store_true",
         help="Compute train-period climatology and normalization statistics",
     )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream remote products (Copernicus, CDS, etc.) instead of reading local raw files",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -941,6 +999,7 @@ def main() -> None:
         force=args.force,
         export_f16=args.f16,
         finalize=args.finalize,
+        stream=args.stream,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")

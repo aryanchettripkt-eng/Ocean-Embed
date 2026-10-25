@@ -161,8 +161,8 @@ def generate_synthetic_raw_sample(
     # 6. ERA5 Winds & Fluxes
     era5_dir = raw_dir / "era5"
     era5_dir.mkdir(parents=True, exist_ok=True)
-    instant_path = era5_dir / "data_stream-oper_stepType-instant.nc"
-    accum_path = era5_dir / "data_stream-oper_stepType-accum.nc"
+    instant_path = era5_dir / f"data_stream-oper_stepType-instant_{yr_str}.nc"
+    accum_path = era5_dir / f"data_stream-oper_stepType-accum_{yr_str}.nc"
 
     u_wind = (5.0 + 2.0 * np.cos(lat_2d / 4.0)).astype(np.float32)
     v_wind = (-3.0 + 1.5 * np.sin(lon_2d / 6.0)).astype(np.float32)

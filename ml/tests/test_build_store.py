@@ -39,7 +39,7 @@ class MockConfig:
         self.region = type(
             "Region",
             (),
-            {"lon_min": 40.0, "lon_max": 42.0, "lat_min": 0.0, "lat_max": 2.0},
+            {"lon_min": 60.0, "lon_max": 62.0, "lat_min": 10.0, "lat_max": 12.0},
         )()
         self.grid = type("Grid", (), {"resolution_deg": 0.25})()
         self.time = type("Time", (), {"start": "2018-01-01", "end": "2019-12-31"})()
@@ -121,7 +121,7 @@ def test_build_preprocess_parity_test_13(tmp_path: Path) -> None:
     outputs_dir.mkdir()
 
     cfg = MockConfig(raw_dir, prep_out_dir, outputs_dir)
-    grid = TargetGrid.from_bounds(40.0, 42.0, 0.0, 2.0, 0.25)
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
 
     # Generate synthetic raw sample dataset for January 2019 (3 days)
     sample_dates = pd.date_range("2019-01-01", periods=3, freq="D")
@@ -174,9 +174,21 @@ def test_build_preprocess_parity_test_13(tmp_path: Path) -> None:
                     f"NaN pattern mismatch on {var}"
                 )
 
-                if np.any(valid_mask):
-                    max_diff = float(np.max(np.abs(prep_arr[valid_mask] - build_arr[valid_mask])))
-                    assert max_diff <= 1e-4, f"Parity violated on {var}: max diff {max_diff} > 1e-4"
+                assert np.any(valid_mask), f"No finite values in {var} - box must be open ocean"
+                max_diff = float(np.max(np.abs(prep_arr[valid_mask] - build_arr[valid_mask])))
+                assert max_diff <= 1e-4, f"Parity violated on {var}: max diff {max_diff} > 1e-4"
+
+    # Also assert WOA parity and finite values (REVIEW_P3 R1, R5)
+    assert "woa_clim_profile" in ds_prep.data_vars, "woa_clim_profile missing from prep"
+    assert "woa_clim_profile" in ds_build.data_vars, "woa_clim_profile missing from build"
+    assert ds_prep["woa_clim_profile"].shape == ds_build["woa_clim_profile"].shape
+    assert np.any(np.isfinite(ds_prep["woa_clim_profile"].values)), "WOA is all NaN in prep"
+    assert np.any(np.isfinite(ds_build["woa_clim_profile"].values)), "WOA is all NaN in build"
+    assert np.allclose(
+        ds_prep["woa_clim_profile"].values,
+        ds_build["woa_clim_profile"].values,
+        equal_nan=True,
+    )
 
 
 def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
@@ -191,7 +203,7 @@ def test_resumption_skips_finished_years_test_13(tmp_path: Path) -> None:
     outputs_dir.mkdir()
 
     cfg = MockConfig(raw_dir, out_dir, outputs_dir)
-    grid = TargetGrid.from_bounds(40.0, 42.0, 0.0, 2.0, 0.25)
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
 
     # Generate genuine test data for BOTH 2018 and 2019 in raw_dir
     dates_2018 = pd.date_range("2018-01-01", periods=2, freq="D")
@@ -275,7 +287,7 @@ def test_export_f16_store(tmp_path: Path) -> None:
     outputs_dir.mkdir()
 
     cfg = MockConfig(raw_dir, out_dir, outputs_dir)
-    grid = TargetGrid.from_bounds(40.0, 42.0, 0.0, 2.0, 0.25)
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
     sample_dates = pd.date_range("2019-01-01", periods=2, freq="D")
     generate_synthetic_raw_sample(raw_dir, grid, cfg.depths_m, dates=sample_dates)
 

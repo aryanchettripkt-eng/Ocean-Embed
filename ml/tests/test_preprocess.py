@@ -434,7 +434,8 @@ paths:
     for attr in req_attrs:
         assert attr in ds_reloaded.attrs, f"Missing root attribute '{attr}' in processed store"
 
-    norm_stats = json.loads(ds_reloaded.attrs["norm_stats"])
+    raw_norm_stats = ds_reloaded.attrs["norm_stats"]
+    norm_stats = json.loads(raw_norm_stats) if isinstance(raw_norm_stats, str) else raw_norm_stats
     assert "channels" in norm_stats
     assert "sigma_d" in norm_stats
     assert len(norm_stats["sigma_d"]) == 15
@@ -515,3 +516,103 @@ def test_reducer_missing_variable_raises() -> None:
     )
     with pytest.raises(KeyError, match="Expected variable 'sla' in SLA dataset"):
         reduce_sla(ds_wrong, target_grid)
+
+
+def test_woa_time_coordinate_handling() -> None:
+    """Verify WOA files with numeric time coordinate are reduced without time dim (REVIEW_P3 R1)."""
+    from oceanscope_ml.data.reduce import reduce_woa
+
+    target_grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    depths_m = [0.494, 5.078, 92.326, 1062.44]
+
+    # Two monthly files with numeric time coordinates
+    ds_m1 = xr.Dataset(
+        data_vars={
+            "t_an": (
+                ("time", "depth", "lat", "lon"),
+                np.full((1, 4, 8, 8), 24.5, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": [0.0],  # numeric float time coordinate
+            "depth": depths_m,
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
+    ds_m2 = xr.Dataset(
+        data_vars={
+            "t_an": (
+                ("time", "depth", "lat", "lon"),
+                np.full((1, 4, 8, 8), 25.0, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": [372.0],  # numeric float time coordinate
+            "depth": depths_m,
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
+
+    red_m1 = reduce_woa(ds_m1, target_grid, depths_m, month=1)
+    red_m2 = reduce_woa(ds_m2, target_grid, depths_m, month=2)
+
+    assert "time" not in red_m1["woa_clim_profile"].dims
+    assert "time" not in red_m2["woa_clim_profile"].dims
+    assert red_m1["woa_clim_profile"].shape == (1, 4, 8, 8)
+    assert red_m2["woa_clim_profile"].shape == (1, 4, 8, 8)
+
+    woa_concat = xr.concat([red_m1["woa_clim_profile"], red_m2["woa_clim_profile"]], dim="month")
+    assert woa_concat.shape == (2, 4, 8, 8)
+    assert np.all(np.isfinite(woa_concat.values))
+
+
+def test_glorys_float32_depth_rounding() -> None:
+    """Verify float32 GLORYS depth levels (e.g. 1062.43994 m) are not NaN (REVIEW_P3 R2)."""
+    from oceanscope_ml.data.reduce import reduce_glorys12
+
+    target_grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    depths_m = [
+        0.494,
+        5.078,
+        9.573,
+        18.496,
+        29.445,
+        47.374,
+        65.807,
+        92.326,
+        130.666,
+        186.126,
+        222.475,
+        266.040,
+        380.213,
+        643.567,
+        1062.440,
+    ]
+    # Source depths stored in float32: 1062.44 becomes 1062.43994140625
+    src_depths_f32 = np.array(depths_m, dtype=np.float32)
+
+    ds_raw = xr.Dataset(
+        data_vars={
+            "thetao": (
+                ("time", "depth", "lat", "lon"),
+                np.full((1, 15, 8, 8), 18.0, dtype=np.float32),
+            )
+        },
+        coords={
+            "time": [np.datetime64("2019-01-01")],
+            "depth": src_depths_f32,
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
+    )
+
+    ds_red = reduce_glorys12(ds_raw, target_grid, depths_m)
+    out_thetao = ds_red["thetao"].values
+
+    # Check level 14 (depth 1062.44 m): must be finite and not NaN
+    assert np.all(np.isfinite(out_thetao[:, 14])), (
+        "Deepest GLORYS level (1062.44 m) was dropped as NaN due to float32 rounding"
+    )
+    assert np.isclose(float(np.mean(out_thetao[:, 14])), 18.0, atol=1e-3)

@@ -43,28 +43,10 @@ def compute_valid_pixel_mask(
     doy: int,
     feature_2d_vars: list[str],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Compute boolean 2D mask of valid cells where all inputs, climatology, and target are valid.
+    """Compute 2D surface ocean valid mask where inputs are finite, and return clim_t.
 
-    Both Climatology and Ridge baselines MUST be evaluated on this exact mask so skill_vs_clim_pct
-    is strictly apples-to-apples (PRD_AI_ML §5.6, REVIEW_P3 A7).
-
-    Parameters
-    ----------
-    ds : xr.Dataset
-        Processed dataset (for clim if stored globally by DOY).
-    ds_t : xr.Dataset
-        Single time-step dataset.
-    doy : int
-        Day of year.
-    feature_2d_vars : list of str
-        Names of surface 2D feature variables.
-
-    Returns
-    -------
-    mask : np.ndarray, shape (n_lat, n_lon), bool
-        Valid ocean cell mask.
-    clim_t : np.ndarray, shape (n_depth, n_lat, n_lon)
-        Climatology array for this day.
+    Evaluates valid ocean cells for surface features. Does not require all 15 depths
+    to be valid so shallow shelf cells are preserved in shallow depth metrics (REVIEW_P3 R2).
     """
     lats = ds_t.coords["lat"].values
     lons = ds_t.coords["lon"].values
@@ -82,19 +64,10 @@ def compute_valid_pixel_mask(
     else:
         clim_t = np.zeros_like(ds_t["thetao"].values)
 
-    thetao_t = ds_t["thetao"].values
-
     valid_cell_mask = ocean_mask.copy()
-    if "target_valid" in ds_t:
-        target_v = ds_t["target_valid"].values
-        valid_cell_mask &= np.all(target_v, axis=0)
-
     for v in feature_2d_vars:
         if v in ds_t:
             valid_cell_mask &= np.isfinite(ds_t[v].values)
-
-    valid_cell_mask &= np.all(np.isfinite(thetao_t), axis=0)
-    valid_cell_mask &= np.all(np.isfinite(clim_t), axis=0)
 
     return valid_cell_mask, clim_t
 
@@ -143,6 +116,10 @@ def extract_day_features_and_targets(
     thetao_t = ds_t["thetao"].values
     anom_t = thetao_t - clim_t
     day_Y = anom_t[:, y_idx, x_idx].T.astype(np.float32)
+
+    if "target_valid" in ds_t:
+        tv_cells = ds_t["target_valid"].values[:, y_idx, x_idx].T
+        day_Y[~tv_cells] = np.nan
 
     return day_X, day_Y
 
@@ -264,7 +241,7 @@ def fit_ridge_baseline(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Train per-pixel Ridge regression using closed-form regularized normal equations.
 
-    Solves: min_W ||(X - mu_X)/sigma_X @ W + mu_Y - Y||_2^2 + alpha * ||W||_2^2
+    Fits each depth on its valid samples to support shallow shelf cells (REVIEW_P3 R2).
 
     Parameters
     ----------
@@ -286,21 +263,32 @@ def fit_ridge_baseline(
     sigma_X : np.ndarray, shape (P,)
         Feature stds for standardization.
     """
-    mu_X = np.mean(X_train, axis=0)
-    sigma_X = np.std(X_train, axis=0)
+    mu_X = np.nanmean(X_train, axis=0)
+    sigma_X = np.nanstd(X_train, axis=0)
     sigma_X[sigma_X < 1e-7] = 1.0
 
     X_norm = (X_train - mu_X) / sigma_X
-
-    mu_Y = np.mean(Y_train, axis=0)
-    Y_cent = Y_train - mu_Y
-
     p = X_norm.shape[1]
-    xtx = X_norm.T @ X_norm
-    xty = X_norm.T @ Y_cent
+    n_depths = Y_train.shape[1]
 
-    reg_matrix = xtx + alpha * np.eye(p, dtype=np.float32)
-    W = scipy.linalg.solve(reg_matrix, xty, assume_a="pos").astype(np.float32)
+    W = np.zeros((p, n_depths), dtype=np.float32)
+    mu_Y = np.zeros(n_depths, dtype=np.float32)
+
+    for d in range(n_depths):
+        y_d = Y_train[:, d]
+        valid_idx = np.where(np.isfinite(y_d))[0]
+        if len(valid_idx) == 0:
+            continue
+        X_sub = X_norm[valid_idx]
+        y_sub = y_d[valid_idx]
+        m_y = float(np.mean(y_sub))
+        mu_Y[d] = m_y
+        y_cent = y_sub - m_y
+        xtx = X_sub.T @ X_sub
+        xty = X_sub.T @ y_cent
+        reg_matrix = xtx + alpha * np.eye(p, dtype=np.float32)
+        w_d = scipy.linalg.solve(reg_matrix, xty, assume_a="pos").astype(np.float32)
+        W[:, d] = w_d
 
     return W, mu_Y, mu_X, sigma_X
 
@@ -348,12 +336,22 @@ def evaluate_climatology_baseline(
 
         err = clim_cells - thetao_cells  # (depth, n_cells)
 
+        target_valid_cells = (
+            ds_t["target_valid"].values[:, y_idx, x_idx]
+            if "target_valid" in ds_t
+            else np.ones((n_depths, n_cells), dtype=bool)
+        )
+
         for d_idx in range(n_depths):
             e_d = err[d_idx]
-            n_d[d_idx] += n_cells
-            sum_err[d_idx] += float(np.sum(e_d))
-            sum_abs_err[d_idx] += float(np.sum(np.abs(e_d)))
-            sum_sq_err[d_idx] += float(np.sum(e_d**2))
+            valid_d = np.isfinite(e_d) & target_valid_cells[d_idx]
+            e_d_valid = e_d[valid_d]
+            n_valid = len(e_d_valid)
+            if n_valid > 0:
+                n_d[d_idx] += n_valid
+                sum_err[d_idx] += float(np.sum(e_d_valid))
+                sum_abs_err[d_idx] += float(np.sum(np.abs(e_d_valid)))
+                sum_sq_err[d_idx] += float(np.sum(e_d_valid**2))
 
     rows: list[dict[str, Any]] = []
     for d_idx, d_m in enumerate(depths_m):
@@ -494,10 +492,14 @@ def evaluate_ridge_baseline(
 
         for d_idx in range(n_depths):
             e_d = day_err[:, d_idx]
-            n_d[d_idx] += n_cells
-            sum_err[d_idx] += float(np.sum(e_d))
-            sum_abs_err[d_idx] += float(np.sum(np.abs(e_d)))
-            sum_sq_err[d_idx] += float(np.sum(e_d**2))
+            valid_d = np.isfinite(e_d)
+            e_d_valid = e_d[valid_d]
+            n_valid = len(e_d_valid)
+            if n_valid > 0:
+                n_d[d_idx] += n_valid
+                sum_err[d_idx] += float(np.sum(e_d_valid))
+                sum_abs_err[d_idx] += float(np.sum(np.abs(e_d_valid)))
+                sum_sq_err[d_idx] += float(np.sum(e_d_valid**2))
 
     rows: list[dict[str, Any]] = []
     for d_idx, d_m in enumerate(depths_m):

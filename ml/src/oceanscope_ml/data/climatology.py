@@ -108,16 +108,17 @@ def fit_harmonic_climatology(
                 thetao = thetao.isel(time=np.where(train_mask)[0])
             else:
                 thetao = np.asarray(thetao)[train_mask]
+    n_time = len(dt_series)
     if isinstance(thetao, xr.DataArray):
-        t_arr = thetao.values
+        n_depth, n_lat, n_lon = thetao.shape[1], thetao.shape[2], thetao.shape[3]
     else:
-        t_arr = np.asarray(thetao)
+        n_depth, n_lat, n_lon = thetao.shape[1], thetao.shape[2], thetao.shape[3]
 
-    n_time, n_depth, n_lat, n_lon = t_arr.shape
     day_of_years = dt_series.day_of_year.values.astype(np.float64)
 
-    # Design matrix for training dates
+    # Design matrix for training dates: (n_time, p)
     x_train = build_harmonic_design_matrix(day_of_years, n_harmonics, period_days)
+    p = x_train.shape[1]
 
     # Design matrix for all 366 days of year: (366, p)
     all_doy = np.arange(1, 367, dtype=np.float64)
@@ -125,44 +126,67 @@ def fit_harmonic_climatology(
 
     # Output climatology: (366, n_depth, n_lat, n_lon)
     clim_out = np.full((366, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
-
-    # Flatten spatial/depth dimensions to (n_time, n_cells)
     n_cells = n_depth * n_lat * n_lon
-    t_flat = t_arr.reshape((n_time, n_cells)).astype(np.float64)
 
-    # Check for completely non-NaN ocean cells
-    valid_mask = ~np.isnan(t_flat)
-    all_valid_cells = np.all(valid_mask, axis=0)
+    # Chunked accumulation of X^T X and X^T Y (PRD §4.2, REVIEW_P3 R3: < 100 MB RAM)
+    xt_x = x_train.T @ x_train  # (p, p)
+    xt_y = np.zeros((p, n_cells), dtype=np.float64)
+    n_valid_per_cell = np.zeros(n_cells, dtype=np.int32)
 
-    if np.any(all_valid_cells):
-        # Fast vectorized path: X_train (n_time, p) -> Beta: (p, n_valid_cells)
-        # Beta = (X^T X)^(-1) X^T Y
-        xt_x = x_train.T @ x_train
-        xt_y = x_train.T @ t_flat[:, all_valid_cells]
+    chunk_size = 365
+    for start_i in range(0, n_time, chunk_size):
+        end_i = min(start_i + chunk_size, n_time)
+        x_chunk = x_train[start_i:end_i]
+
+        if isinstance(thetao, xr.DataArray):
+            t_chunk = thetao.isel(time=slice(start_i, end_i)).values
+        else:
+            t_chunk = thetao[start_i:end_i]
+
+        t_chunk_flat = t_chunk.reshape((t_chunk.shape[0], n_cells)).astype(np.float64)
+        valid_chunk = np.isfinite(t_chunk_flat)
+        n_valid_per_cell += np.sum(valid_chunk, axis=0).astype(np.int32)
+
+        t_chunk_clean = np.where(valid_chunk, t_chunk_flat, 0.0)
+        xt_y += x_chunk.T @ t_chunk_clean
+
+    # Cells with full valid observations across all training dates
+    full_valid_cells = np.where(n_valid_per_cell == n_time)[0]
+    if len(full_valid_cells) > 0:
         try:
-            beta = np.linalg.solve(xt_x, xt_y)  # (p, n_valid_cells)
-            # Eval: (366, p) @ (p, n_valid_cells) -> (366, n_valid_cells)
-            pred_366 = x_366 @ beta
-            # Assign back
+            beta = np.linalg.solve(xt_x, xt_y[:, full_valid_cells])  # (p, n_full)
+            pred_366 = x_366 @ beta  # (366, n_full)
             target_slice = clim_out.reshape((366, n_cells))
-            target_slice[:, all_valid_cells] = pred_366.astype(np.float32)
+            target_slice[:, full_valid_cells] = pred_366.astype(np.float32)
         except np.linalg.LinAlgError:
             logger.warning("LinAlgError in vectorized harmonic fit; falling back to lstsq")
 
-    # Handle remaining cells with partial missing values (e.g. ice, boundaries)
-    partial_cells = np.where(~all_valid_cells & (np.sum(valid_mask, axis=0) >= min_valid_samples))[
+    # Cells with partial missing values
+    partial_cells = np.where((n_valid_per_cell < n_time) & (n_valid_per_cell >= min_valid_samples))[
         0
     ]
-    for cell_idx in partial_cells:
-        c_mask = valid_mask[:, cell_idx]
-        x_sub = x_train[c_mask]
-        y_sub = t_flat[c_mask, cell_idx]
-        try:
-            beta_sub, _, _, _ = np.linalg.lstsq(x_sub, y_sub, rcond=None)
-            pred_sub = x_366 @ beta_sub
-            clim_out.reshape((366, n_cells))[:, cell_idx] = pred_sub.astype(np.float32)
-        except Exception:
-            pass
+    if len(partial_cells) > 0:
+        # Load only partial cells across all time steps
+        if isinstance(thetao, xr.DataArray):
+            t_full_partial = thetao.values.reshape((n_time, n_cells))[:, partial_cells].astype(
+                np.float64
+            )
+        else:
+            t_full_partial = (
+                np.asarray(thetao).reshape((n_time, n_cells))[:, partial_cells].astype(np.float64)
+            )
+
+        for idx_in_partial, cell_idx in enumerate(partial_cells):
+            y_col = t_full_partial[:, idx_in_partial]
+            c_mask = np.isfinite(y_col)
+            x_sub = x_train[c_mask]
+            y_sub = y_col[c_mask]
+            try:
+                beta_sub, _, _, _ = np.linalg.lstsq(x_sub, y_sub, rcond=None)
+                pred_sub = x_366 @ beta_sub
+                clim_out.reshape((366, n_cells))[:, cell_idx] = pred_sub.astype(np.float32)
+            except Exception:
+                pass
 
     return clim_out
 

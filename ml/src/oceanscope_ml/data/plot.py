@@ -324,6 +324,10 @@ def plot_sample_day(
                     ts = pd.Timestamp(actual_date)
                     doy = ts.day_of_year if hasattr(ts, "day_of_year") else ts.dayofyear
                     data_2d = arr[min(doy - 1, arr.shape[0] - 1), d_idx, :, :]
+                elif var_name == "woa_clim_profile":
+                    ts = pd.Timestamp(actual_date)
+                    month_idx = min(ts.month - 1, arr.shape[0] - 1)
+                    data_2d = arr[month_idx, d_idx, :, :]
                 else:
                     data_2d = arr[0, d_idx, :, :]
             elif "d" in pdef and arr.ndim == 3:

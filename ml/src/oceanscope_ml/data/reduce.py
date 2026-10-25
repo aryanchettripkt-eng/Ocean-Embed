@@ -39,7 +39,7 @@ class TargetGrid:
         lon_max: float,
         lat_min: float,
         lat_max: float,
-        resolution_deg: float = 0.25,
+        resolution_deg: float,
     ) -> TargetGrid:
         """Construct target grid with cell centres matching PRD_AI_ML §2."""
         lons = np.arange(lon_min + resolution_deg / 2.0, lon_max, resolution_deg, dtype=np.float64)
@@ -304,26 +304,37 @@ def interpolate_depths_1d(
 ) -> np.ndarray:
     """Interpolate 3D array (depth, lat, lon) along depth axis without extrapolation.
 
-    Per DECISIONS 2026-10-25, if target depth is within 2 cm above min_d (e.g. 0.494 m
-    vs 0.506 m for GREP), the first source level (~1 cm offset) is used to avoid
-    dropping the surface level.
+    Matches source depths within atol=0.05 to avoid float32 rounding discrepancies
+    (e.g. GLORYS 1062.43994 m vs 1062.44 m; REVIEW_P3 R2). Clamps within 5 cm at
+    boundaries (DECISIONS 2026-10-25 for GREP 0.494 m vs 0.506 m).
     """
     tgt_depth_arr = np.array(target_depths, dtype=np.float64)
     n_tgt = len(tgt_depth_arr)
     _, n_lat, n_lon = values_by_depth.shape
 
-    # Fast path if source depths match target depths exactly
-    if len(src_depths) == n_tgt and np.allclose(src_depths, tgt_depth_arr, atol=0.01):
-        return values_by_depth.astype(np.float32)
+    # Fast path: check if every target depth has an exact match in src_depths within 0.05 m
+    matched_indices: list[int] = []
+    for td in tgt_depth_arr:
+        diffs = np.abs(src_depths - td)
+        best_idx = int(np.argmin(diffs))
+        if diffs[best_idx] <= 0.05:
+            matched_indices.append(best_idx)
+        else:
+            matched_indices = []
+            break
+
+    if len(matched_indices) == n_tgt:
+        return values_by_depth[matched_indices].astype(np.float32)
 
     out = np.full((n_tgt, n_lat, n_lon), np.nan, dtype=np.float32)
     min_d, max_d = float(np.min(src_depths)), float(np.max(src_depths))
 
-    # Clamp target depth within 2 cm of surface to min_d (DECISIONS 2026-10-25
-    # for GREP 0.494 m vs 0.506 m)
+    # Clamp boundary target depths within 5 cm (e.g. GREP 0.494 vs 0.506, GLORYS float32 max)
     eval_depths = tgt_depth_arr.copy()
-    near_surface = (eval_depths < min_d) & (min_d - eval_depths <= 0.02)
+    near_surface = (eval_depths < min_d) & (min_d - eval_depths <= 0.05)
     eval_depths[near_surface] = min_d
+    near_bottom = (eval_depths > max_d) & (eval_depths - max_d <= 0.05)
+    eval_depths[near_bottom] = max_d
 
     valid_tgt_mask = (eval_depths >= min_d) & (eval_depths <= max_d)
     if not np.any(valid_tgt_mask):
@@ -387,18 +398,42 @@ def reduce_glorys12(
     elif vals.ndim == 2:  # (lat, lon)
         vals = vals[np.newaxis, np.newaxis, ...]
 
+    # Match configured depths to GLORYS native levels with tolerance (atol=0.05)
+    matched_indices: list[int] = []
+    for td in depths_m:
+        diffs = np.abs(src_depths - td)
+        best_idx = int(np.argmin(diffs))
+        if diffs[best_idx] <= 0.05:
+            matched_indices.append(best_idx)
+        else:
+            matched_indices = []
+            break
+    direct_depth_slicing = len(matched_indices) == n_depth
+
     for t_idx in range(n_time):
         t_slice = vals[t_idx]
-        regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
-        for d_idx in range(len(src_depths)):
-            regrid_by_depth[d_idx] = area_mean_regrid_2d(
-                t_slice[d_idx],
-                src_lats,
-                src_lons,
-                target_grid,
-                valid_frac_threshold=0.5,
-            )
-        out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+        if direct_depth_slicing:
+            # Regrid only the 15 selected depth slices directly (REVIEW_P3 R2)
+            t_slice_15 = t_slice[matched_indices]
+            for d_idx in range(n_depth):
+                out_arr[t_idx, d_idx] = area_mean_regrid_2d(
+                    t_slice_15[d_idx],
+                    src_lats,
+                    src_lons,
+                    target_grid,
+                    valid_frac_threshold=0.5,
+                )
+        else:
+            regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+            for d_idx in range(len(src_depths)):
+                regrid_by_depth[d_idx] = area_mean_regrid_2d(
+                    t_slice[d_idx],
+                    src_lats,
+                    src_lons,
+                    target_grid,
+                    valid_frac_threshold=0.5,
+                )
+            out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
 
     surface_layer = out_arr[:, 0, :, :]
     ocean_mask = np.any(~np.isnan(surface_layer), axis=0)
@@ -1032,7 +1067,13 @@ def reduce_era5_fluxes(
                     q_day = np.nanmean(q_vals, axis=0)
 
                 tp_vals = ds[tp_var].isel(time=np.where(day_mask)[0]).values
-                tp_day = np.nansum(tp_vals, axis=0)
+                valid_hours_count = np.sum(np.isfinite(tp_vals), axis=0)
+                # Cell is valid only if valid_hours >= 18; scale daily sum to 24 hours
+                tp_day = np.where(
+                    valid_hours_count >= 18,
+                    np.nansum(tp_vals, axis=0) * (24.0 / np.maximum(valid_hours_count, 1)),
+                    np.nan,
+                )
 
                 while q_day.ndim > 2:
                     q_day = np.squeeze(q_day, axis=0)
@@ -1132,9 +1173,18 @@ def reduce_woa(
     ds: xr.Dataset,
     target_grid: TargetGrid,
     depths_m: list[float],
+    month: int | None = None,
 ) -> xr.Dataset:
-    """Reduce World Ocean Atlas (WOA23) monthly climatology to 15 depths and 0.25° grid."""
+    """Reduce World Ocean Atlas (WOA23) monthly climatology to 15 depths and 0.25° grid.
+
+    Always returns (month, depth, lat, lon) without any numeric time dimension (REVIEW_P3 R1).
+    """
     ds = standardize_coords(ds)
+    if "time" in ds.dims:
+        ds = ds.squeeze("time", drop=True)
+    if "time" in ds.coords:
+        ds = ds.drop_vars("time", errors="ignore")
+
     var_name = None
     for cand in ["t_an", "temperature", "t_mn"]:
         if cand in ds.data_vars:
@@ -1146,50 +1196,46 @@ def reduce_woa(
         )
 
     da = ds[var_name]
+    while da.ndim > 3:
+        da = da.squeeze(axis=0)
+
     src_lats = np.asarray(ds.coords["lat"].values, dtype=np.float64)
     src_lons = np.asarray(ds.coords["lon"].values, dtype=np.float64)
     src_depths = np.asarray(ds.coords["depth"].values, dtype=np.float64)
 
     vals = da.values
-    if vals.ndim == 3:
+    if vals.ndim == 2:
         vals = vals[np.newaxis, ...]
 
-    n_slices = vals.shape[0]
-    n_depth = len(depths_m)
     n_lat = len(target_grid.lats)
     n_lon = len(target_grid.lons)
 
-    out_arr = np.full((n_slices, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
+    regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+    for d_idx in range(len(src_depths)):
+        regrid_by_depth[d_idx] = area_mean_regrid_2d(
+            vals[d_idx],
+            src_lats,
+            src_lons,
+            target_grid,
+        )
+    interp_vals = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+    out_arr = interp_vals[np.newaxis, ...]  # (1, depth, lat, lon)
 
-    for s_idx in range(n_slices):
-        regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
-        for d_idx in range(len(src_depths)):
-            regrid_by_depth[d_idx] = area_mean_regrid_2d(
-                vals[s_idx, d_idx],
-                src_lats,
-                src_lons,
-                target_grid,
-            )
-        out_arr[s_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
-
-    coords: dict[str, Any] = {
-        "depth": np.array(depths_m, dtype=np.float64),
-        "lat": target_grid.lats,
-        "lon": target_grid.lons,
-    }
-    if "month" in ds.coords:
-        coords["month"] = ds.coords["month"].values
-        dims = ("month", "depth", "lat", "lon")
-    elif "time" in ds.coords:
-        coords["time"] = ds.coords["time"].values
-        dims = ("time", "depth", "lat", "lon")
+    if month is not None:
+        month_val = int(month)
+    elif "month" in ds.coords and len(ds.coords["month"].values) > 0:
+        month_val = int(ds.coords["month"].values[0])
     else:
-        coords["month"] = np.arange(1, n_slices + 1)
-        dims = ("month", "depth", "lat", "lon")
+        month_val = 1
 
     return xr.Dataset(
-        data_vars={"woa_clim_profile": (dims, out_arr)},
-        coords=coords,
+        data_vars={"woa_clim_profile": (("month", "depth", "lat", "lon"), out_arr)},
+        coords={
+            "month": [month_val],
+            "depth": np.array(depths_m, dtype=np.float64),
+            "lat": target_grid.lats,
+            "lon": target_grid.lons,
+        },
     )
 
 
