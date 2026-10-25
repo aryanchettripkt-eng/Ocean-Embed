@@ -1123,7 +1123,8 @@ def reduce_era5_fluxes(
             if src_idx < 0 or src_idx >= q_all.shape[0]:
                 continue
             q_t = q_all[src_idx]
-            tp_t = tp_all[src_idx]
+            # Non-hourly (daily mean) tp needs x24 to match daily accumulation sum
+            tp_t = tp_all[src_idx] * 24.0
             out_heat[t_idx] = area_mean_regrid_2d(
                 q_t.astype(np.float32), src_lats, src_lons, target_grid
             )
@@ -1279,10 +1280,6 @@ def reduce_grep(
     if np.ndim(time_vals) == 0:
         time_vals = np.array([time_vals])
 
-    vals = da.values
-    if vals.ndim == 3:
-        vals = vals[np.newaxis, ...]
-
     n_time = len(time_vals)
     n_depth = len(depths_m)
     n_lat = len(target_grid.lats)
@@ -1290,17 +1287,30 @@ def reduce_grep(
 
     out_arr = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
-        for d_idx in range(len(src_depths)):
-            regrid_by_depth[d_idx] = area_mean_regrid_2d(
-                vals[t_idx, d_idx],
-                src_lats,
-                src_lons,
-                target_grid,
-                valid_frac_threshold=0.5,
-            )
-        out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+    # Process in monthly chunks (<= 31 days) to prevent memory spikes
+    chunk_size = 31
+    for start_t in range(0, n_time, chunk_size):
+        end_t = min(start_t + chunk_size, n_time)
+        da_chunk = da.isel(time=slice(start_t, end_t)) if "time" in da.dims else da
+        chunk_vals = da_chunk.values
+        if chunk_vals.ndim == 3:
+            chunk_vals = chunk_vals[np.newaxis, ...]
+        elif chunk_vals.ndim == 2:
+            chunk_vals = chunk_vals[np.newaxis, np.newaxis, ...]
+
+        for offset in range(end_t - start_t):
+            t_idx = start_t + offset
+            t_slice = chunk_vals[offset]
+            regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+            for d_idx in range(len(src_depths)):
+                regrid_by_depth[d_idx] = area_mean_regrid_2d(
+                    t_slice[d_idx],
+                    src_lats,
+                    src_lons,
+                    target_grid,
+                    valid_frac_threshold=0.5,
+                )
+            out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
 
     return xr.Dataset(
         data_vars={"grep_mean": (("time", "depth", "lat", "lon"), out_arr)},
@@ -1340,10 +1350,6 @@ def reduce_armor3d(
     if np.ndim(time_vals) == 0:
         time_vals = np.array([time_vals])
 
-    vals = da.values
-    if vals.ndim == 3:
-        vals = vals[np.newaxis, ...]
-
     n_time = len(time_vals)
     n_depth = len(depths_m)
     n_lat = len(target_grid.lats)
@@ -1351,17 +1357,30 @@ def reduce_armor3d(
 
     out_arr = np.full((n_time, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
 
-    for t_idx in range(n_time):
-        regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
-        for d_idx in range(len(src_depths)):
-            regrid_by_depth[d_idx] = area_mean_regrid_2d(
-                vals[t_idx, d_idx],
-                src_lats,
-                src_lons,
-                target_grid,
-                valid_frac_threshold=0.5,
-            )
-        out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
+    # Process in monthly chunks (<= 31 days) to prevent memory spikes
+    chunk_size = 31
+    for start_t in range(0, n_time, chunk_size):
+        end_t = min(start_t + chunk_size, n_time)
+        da_chunk = da.isel(time=slice(start_t, end_t)) if "time" in da.dims else da
+        chunk_vals = da_chunk.values
+        if chunk_vals.ndim == 3:
+            chunk_vals = chunk_vals[np.newaxis, ...]
+        elif chunk_vals.ndim == 2:
+            chunk_vals = chunk_vals[np.newaxis, np.newaxis, ...]
+
+        for offset in range(end_t - start_t):
+            t_idx = start_t + offset
+            t_slice = chunk_vals[offset]
+            regrid_by_depth = np.full((len(src_depths), n_lat, n_lon), np.nan, dtype=np.float32)
+            for d_idx in range(len(src_depths)):
+                regrid_by_depth[d_idx] = area_mean_regrid_2d(
+                    t_slice[d_idx],
+                    src_lats,
+                    src_lons,
+                    target_grid,
+                    valid_frac_threshold=0.5,
+                )
+            out_arr[t_idx] = interpolate_depths_1d(regrid_by_depth, src_depths, depths_m)
 
     return xr.Dataset(
         data_vars={"armor3d": (("time", "depth", "lat", "lon"), out_arr)},

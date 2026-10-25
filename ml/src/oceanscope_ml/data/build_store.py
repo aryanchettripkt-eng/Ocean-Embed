@@ -22,6 +22,7 @@ import xarray as xr
 import zarr
 
 from oceanscope_ml.data.climatology import fit_harmonic_climatology
+from oceanscope_ml.data.download import PRODUCT_SPECS
 from oceanscope_ml.data.preprocess import (
     compute_config_hash,
     find_product_files,
@@ -394,10 +395,12 @@ def stream_oscar(
 
 
 def stream_gebco(target_grid: TargetGrid, scratch_dir: Path) -> xr.Dataset:
-    """Download regional GEBCO bathymetry into scratch_dir."""
+    """Download regional GEBCO bathymetry into scratch_dir (cached across years)."""
     import urllib.request
 
-    out_file = scratch_dir / "gebco_sub_ice_topo.nc"
+    base_scratch = scratch_dir.parent if scratch_dir.name.isdigit() else scratch_dir
+    base_scratch.mkdir(parents=True, exist_ok=True)
+    out_file = base_scratch / "gebco_sub_ice_topo.nc"
     if out_file.exists() and out_file.stat().st_size > 0:
         return xr.open_dataset(out_file)
 
@@ -411,8 +414,21 @@ def stream_gebco(target_grid: TargetGrid, scratch_dir: Path) -> xr.Dataset:
     return xr.open_dataset(out_file)
 
 
-def stream_woa(target_grid: TargetGrid, depths_m: list[float]) -> xr.DataArray:
-    """Stream WOA23 0.25° monthly temperature climatology over OPeNDAP."""
+def stream_woa(
+    target_grid: TargetGrid,
+    depths_m: list[float],
+    scratch_dir: Path | None = None,
+) -> xr.DataArray:
+    """Stream WOA23 0.25° monthly temperature climatology over OPeNDAP (cached across years)."""
+    if scratch_dir is not None:
+        base_scratch = scratch_dir.parent if scratch_dir.name.isdigit() else scratch_dir
+        base_scratch.mkdir(parents=True, exist_ok=True)
+        cache_file = base_scratch / "woa23_clim_profile.nc"
+        if cache_file.exists() and cache_file.stat().st_size > 0:
+            return xr.open_dataarray(cache_file)
+    else:
+        cache_file = None
+
     url_base = (
         "https://www.ncei.noaa.gov/thredds-ocean/dodsC/woa23/DATA/temperature/netcdf/decav/0.25"
     )
@@ -423,7 +439,7 @@ def stream_woa(target_grid: TargetGrid, depths_m: list[float]) -> xr.DataArray:
         ds_m = reduce_woa(ds_m_raw, target_grid, depths_m, month=m)
         woa_months.append(ds_m["woa_clim_profile"].values[0])
     woa_12m = np.stack(woa_months, axis=0)
-    return xr.DataArray(
+    da_woa = xr.DataArray(
         woa_12m.astype(np.float32),
         dims=("month", "depth", "lat", "lon"),
         coords={
@@ -433,12 +449,19 @@ def stream_woa(target_grid: TargetGrid, depths_m: list[float]) -> xr.DataArray:
             "lon": target_grid.lons,
         },
     )
+    if cache_file is not None:
+        try:
+            da_woa.to_netcdf(cache_file)
+        except Exception as e:
+            logger.warning("Could not cache WOA23 DataArray to %s: %s", cache_file, e)
+    return da_woa
 
 
 def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
-    r"""Filter list of files to those matching the specified year in their filename.
+    r"""Filter list of files to those matching the specified year in their filename or time range.
 
-    Uses regex (?<!\d)(19|20)\d\d(?!\d) on f.name only, or returns [] when nothing matches.
+    Uses regex (?<!\d)(19|20)\d\d(?!\d) on f.name only. If a file has no year in its name,
+    checks the file's time range coordinate. Returns [] when nothing matches.
     """
     import re
 
@@ -450,6 +473,18 @@ def filter_files_by_year(files: list[Path], year: int) -> list[Path]:
         years_found = [m.group(0) for m in pattern.finditer(name)]
         if yr_str in years_found or re.search(r"(?<!\d)" + yr_str + r"(\d{2}|\d{4})?(?!\d)", name):
             matched.append(f)
+        elif not years_found and not re.search(r"(?<!\d)(19|20)\d\d", name):
+            # File has no 4-digit year in filename (e.g. data_stream-oper_stepType-instant.nc)
+            # Check the file's time range coordinate
+            try:
+                with xr.open_dataset(f) as ds:
+                    if "time" in ds.coords and len(ds.coords["time"]) > 0:
+                        t_min = pd.Timestamp(ds.coords["time"].values[0])
+                        t_max = pd.Timestamp(ds.coords["time"].values[-1])
+                        if t_min.year <= year <= t_max.year:
+                            matched.append(f)
+            except Exception:
+                pass
     return matched
 
 
@@ -461,6 +496,8 @@ def reduce_year_dataset(
     manifest: dict[str, Any] | None = None,
     stream: bool = False,
     scratch_dir: Path | None = None,
+    cached_bathymetry: xr.DataArray | None = None,
+    cached_woa_profile: xr.DataArray | None = None,
 ) -> tuple[xr.Dataset, list[str]]:
     """Reduce all products for a given year using shared reduce functions from raw files.
 
@@ -492,14 +529,14 @@ def reduce_year_dataset(
     elif stream:
         # Stream GLORYS12 via copernicusmarine.open_dataset (PRD §4.2, REVIEW_P3 R3)
         ds_raw_glorys = stream_copernicus(
-            dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+            dataset_id=PRODUCT_SPECS["glorys12"]["dataset_id"],
             bbox=bbox,
             dates=(start_date, end_date),
             variables=["thetao"],
             depths=(float(min(depths_m)), float(max(depths_m))),
             depth_levels=depths_m,
         )
-        source_files.append(f"copernicusmarine:cmems_mod_glo_phy_my_0.083deg_P1D-m:{year}")
+        source_files.append(f"copernicusmarine:{PRODUCT_SPECS['glorys12']['dataset_id']}:{year}")
     else:
         raise FileNotFoundError(f"Missing GLORYS12 raw data for year {year} in {raw_path}")
 
@@ -536,12 +573,12 @@ def reduce_year_dataset(
         ds_raw_sla = xr.open_dataset(sla_files[0])
     elif stream:
         ds_raw_sla = stream_copernicus(
-            dataset_id="cmems_obs-sl_glo_phy-ssh_my_0.25deg_P1D-m",
+            dataset_id=PRODUCT_SPECS["sla"]["dataset_id"],
             bbox=bbox,
             dates=(start_date, end_date),
             variables=["sla", "adt"],
         )
-        source_files.append(f"copernicusmarine:cmems_obs-sl_glo_phy-ssh_my_0.25deg_P1D-m:{year}")
+        source_files.append(f"copernicusmarine:{PRODUCT_SPECS['sla']['dataset_id']}:{year}")
     else:
         raise FileNotFoundError(f"Missing SLA/ADT raw data for year {year} in {raw_path}")
 
@@ -564,12 +601,12 @@ def reduce_year_dataset(
         ds_raw_sst = xr.open_dataset(sst_files[0])
     elif stream:
         ds_raw_sst = stream_copernicus(
-            dataset_id="METOFFICE-GLO-SST-L4-REP-OBS-SST",
+            dataset_id=PRODUCT_SPECS["sst"]["dataset_id"],
             bbox=bbox,
             dates=(start_date, end_date),
             variables=["analysed_sst"],
         )
-        source_files.append(f"copernicusmarine:METOFFICE-GLO-SST-L4-REP-OBS-SST:{year}")
+        source_files.append(f"copernicusmarine:{PRODUCT_SPECS['sst']['dataset_id']}:{year}")
     else:
         raise FileNotFoundError(f"Missing OSTIA SST raw data for year {year} in {raw_path}")
 
@@ -589,12 +626,12 @@ def reduce_year_dataset(
         ds_raw_sss = xr.open_dataset(sss_files[0])
     elif stream:
         ds_raw_sss = stream_copernicus(
-            dataset_id="MULTIOBS_GLO_PHY_SSS_L4_MY_015_015",
+            dataset_id=PRODUCT_SPECS["sss"]["dataset_id"],
             bbox=bbox,
             dates=(start_date, end_date),
             variables=["sos"],
         )
-        source_files.append(f"copernicusmarine:MULTIOBS_GLO_PHY_SSS_L4_MY_015_015:{year}")
+        source_files.append(f"copernicusmarine:{PRODUCT_SPECS['sss']['dataset_id']}:{year}")
     else:
         raise FileNotFoundError(f"Missing MULTIOBS SSS raw data for year {year} in {raw_path}")
 
@@ -674,75 +711,88 @@ def reduce_year_dataset(
     processed_vars["net_heat_flux"] = ds_red_flux["net_heat_flux"]
     processed_vars["precip"] = ds_red_flux["precip"]
 
-    # --- GEBCO Bathymetry (Static) ---
-    gebco_files = find_product_files(raw_path, "gebco", manifest)
-    if gebco_files:
-        source_files.append(
-            str(
-                gebco_files[0].relative_to(raw_path)
-                if gebco_files[0].is_relative_to(raw_path)
-                else gebco_files[0].name
+    # --- GEBCO Bathymetry (Static, PRD §3) ---
+    if cached_bathymetry is not None:
+        processed_vars["bathymetry"] = cached_bathymetry
+    else:
+        gebco_files = find_product_files(raw_path, "gebco", manifest)
+        if gebco_files:
+            source_files.append(
+                str(
+                    gebco_files[0].relative_to(raw_path)
+                    if gebco_files[0].is_relative_to(raw_path)
+                    else gebco_files[0].name
+                )
             )
-        )
-        ds_red_gebco = reduce_gebco(xr.open_dataset(gebco_files[0]), target_grid)
-        processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
-    elif stream:
-        try:
-            ds_raw_gebco = stream_gebco(target_grid, effective_scratch)
-            ds_red_gebco = reduce_gebco(ds_raw_gebco, target_grid)
+            ds_red_gebco = reduce_gebco(xr.open_dataset(gebco_files[0]), target_grid)
             processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
-            source_files.append("bodc:gebco_2023_sub_ice_topo")
-        except Exception as e:
-            logger.warning("Could not stream GEBCO bathymetry: %s", e)
+        elif stream:
+            try:
+                ds_raw_gebco = stream_gebco(target_grid, effective_scratch)
+                ds_red_gebco = reduce_gebco(ds_raw_gebco, target_grid)
+                processed_vars["bathymetry"] = ds_red_gebco["bathymetry"]
+                source_files.append("bodc:gebco_2023_sub_ice_topo")
+            except Exception as e:
+                raise RuntimeError(f"Failed to stream GEBCO bathymetry: {e}") from e
+        else:
+            raise FileNotFoundError(f"Missing GEBCO bathymetry raw data in {raw_path}")
 
     # --- WOA23 Climatology (Static by month, PRD §3, REVIEW B5) ---
-    woa_files = find_product_files(raw_path, "woa23", manifest)
-    if woa_files:
-        source_files.append(
-            str(
-                woa_files[0].relative_to(raw_path)
-                if woa_files[0].is_relative_to(raw_path)
-                else woa_files[0].name
+    if cached_woa_profile is not None:
+        processed_vars["woa_clim_profile"] = cached_woa_profile
+    else:
+        woa_files = find_product_files(raw_path, "woa23", manifest)
+        if woa_files:
+            source_files.append(
+                str(
+                    woa_files[0].relative_to(raw_path)
+                    if woa_files[0].is_relative_to(raw_path)
+                    else woa_files[0].name
+                )
             )
-        )
-        if len(woa_files) == 12:
-            woa_months = []
-            for m_idx, wf in enumerate(woa_files, start=1):
-                ds_m = reduce_woa(
-                    xr.open_dataset(wf, decode_times=False),
+            if len(woa_files) == 12:
+                woa_months = []
+                for m_idx, wf in enumerate(woa_files, start=1):
+                    ds_m = reduce_woa(
+                        xr.open_dataset(wf, decode_times=False),
+                        target_grid,
+                        depths_m,
+                        month=m_idx,
+                    )
+                    woa_months.append(ds_m["woa_clim_profile"].values[0])
+                woa_12m = np.stack(woa_months, axis=0)  # (12, depth, lat, lon)
+            else:
+                ds_red_woa = reduce_woa(
+                    xr.open_dataset(woa_files[0], decode_times=False),
                     target_grid,
                     depths_m,
-                    month=m_idx,
+                    month=1,
                 )
-                woa_months.append(ds_m["woa_clim_profile"].values[0])
-            woa_12m = np.stack(woa_months, axis=0)  # (12, depth, lat, lon)
-        else:
-            ds_red_woa = reduce_woa(
-                xr.open_dataset(woa_files[0], decode_times=False),
-                target_grid,
-                depths_m,
-                month=1,
-            )
-            woa_12m = np.repeat(ds_red_woa["woa_clim_profile"].values, 12, axis=0)
+                woa_12m = np.repeat(ds_red_woa["woa_clim_profile"].values, 12, axis=0)
 
-        processed_vars["woa_clim_profile"] = xr.DataArray(
-            woa_12m.astype(np.float32),
-            dims=("month", "depth", "lat", "lon"),
-            coords={
-                "month": np.arange(1, 13),
-                "depth": depths_m,
-                "lat": target_grid.lats,
-                "lon": target_grid.lons,
-            },
-        )
-    elif stream:
-        try:
-            processed_vars["woa_clim_profile"] = stream_woa(target_grid, depths_m)
-            source_files.append("opendap:ncei.noaa.gov:woa23_decav_0.25")
-        except Exception as e:
-            logger.warning("Could not stream WOA23 dataset over OPeNDAP: %s", e)
+            processed_vars["woa_clim_profile"] = xr.DataArray(
+                woa_12m.astype(np.float32),
+                dims=("month", "depth", "lat", "lon"),
+                coords={
+                    "month": np.arange(1, 13),
+                    "depth": depths_m,
+                    "lat": target_grid.lats,
+                    "lon": target_grid.lons,
+                },
+            )
+        elif stream:
+            try:
+                processed_vars["woa_clim_profile"] = stream_woa(
+                    target_grid, depths_m, effective_scratch
+                )
+                source_files.append("opendap:ncei.noaa.gov:woa23_decav_0.25")
+            except Exception as e:
+                raise RuntimeError(f"Failed to stream WOA23 dataset over OPeNDAP: {e}") from e
+        else:
+            raise FileNotFoundError(f"Missing WOA23 climatology raw data in {raw_path}")
 
     # --- GREP Ensemble Mean ---
+    is_after_grep_cutoff = any(pd.Timestamp(t) > pd.Timestamp("2020-12-15") for t in target_dates)
     grep_files = filter_files_by_year(find_product_files(raw_path, "grep", manifest), year)
     if grep_files:
         source_files.append(
@@ -757,18 +807,24 @@ def reduce_year_dataset(
         try:
             # Request GREP down to >= 1250 m so 1062 m level is covered (PRD §4.2)
             ds_raw_grep = stream_copernicus(
-                dataset_id="cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m",
+                dataset_id=PRODUCT_SPECS["grep"]["dataset_id"],
                 bbox=bbox,
                 dates=(start_date, end_date),
                 variables=["thetao_mean"],
                 depths=(0.0, 1250.0),
             )
-            source_files.append(f"copernicusmarine:cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m:{year}")
+            source_files.append(f"copernicusmarine:{PRODUCT_SPECS['grep']['dataset_id']}:{year}")
         except Exception as e:
-            logger.warning("Could not stream GREP dataset: %s", e)
-            ds_raw_grep = None
+            if is_after_grep_cutoff:
+                logger.warning("GREP unavailable after 2020-12-15 cutoff: %s", e)
+                ds_raw_grep = None
+            else:
+                raise RuntimeError(f"Failed to stream GREP dataset for year {year}: {e}") from e
     else:
-        ds_raw_grep = None
+        if is_after_grep_cutoff:
+            ds_raw_grep = None
+        else:
+            raise FileNotFoundError(f"Missing GREP raw data for year {year} in {raw_path}")
 
     if ds_raw_grep is not None:
         ds_red_grep = reduce_grep(ds_raw_grep, target_grid, depths_m)
@@ -790,24 +846,22 @@ def reduce_year_dataset(
     elif stream:
         try:
             ds_raw_armor = stream_copernicus(
-                dataset_id="dataset-armor-3d-rep-weekly",
+                dataset_id=PRODUCT_SPECS["armor3d"]["dataset_id"],
                 bbox=bbox,
                 dates=(start_date, end_date),
                 variables=["to"],
                 depths=(0.0, 1100.0),
             )
-            source_files.append(f"copernicusmarine:dataset-armor-3d-rep-weekly:{year}")
+            source_files.append(f"copernicusmarine:{PRODUCT_SPECS['armor3d']['dataset_id']}:{year}")
         except Exception as e:
-            logger.warning("Could not stream ARMOR3D dataset: %s", e)
-            ds_raw_armor = None
+            raise RuntimeError(f"Failed to stream ARMOR3D dataset for year {year}: {e}") from e
     else:
-        ds_raw_armor = None
+        raise FileNotFoundError(f"Missing ARMOR3D raw data for year {year} in {raw_path}")
 
-    if ds_raw_armor is not None:
-        ds_red_armor = reduce_armor3d(ds_raw_armor, target_grid, depths_m)
-        if "time" in ds_red_armor.dims:
-            ds_red_armor = ds_red_armor.sel(time=target_dates)
-        processed_vars["armor3d"] = ds_red_armor["armor3d"]
+    ds_red_armor = reduce_armor3d(ds_raw_armor, target_grid, depths_m)
+    if "time" in ds_red_armor.dims:
+        ds_red_armor = ds_red_armor.sel(time=target_dates)
+    processed_vars["armor3d"] = ds_red_armor["armor3d"]
 
     ds_year = xr.Dataset(data_vars=processed_vars)
     return ds_year, source_files
@@ -930,6 +984,9 @@ def build_store(
             logger.warning("Could not read MANIFEST.json: %s", e)
 
     # 3. Process each year
+    cached_bathymetry: xr.DataArray | None = None
+    cached_woa_profile: xr.DataArray | None = None
+
     for yr in years_to_process:
         if yr in built_years and not force:
             logger.info(
@@ -954,7 +1011,13 @@ def build_store(
             manifest,
             stream=stream,
             scratch_dir=yr_scratch,
+            cached_bathymetry=cached_bathymetry,
+            cached_woa_profile=cached_woa_profile,
         )
+        if cached_bathymetry is None and "bathymetry" in ds_yr.data_vars:
+            cached_bathymetry = ds_yr["bathymetry"]
+        if cached_woa_profile is None and "woa_clim_profile" in ds_yr.data_vars:
+            cached_woa_profile = ds_yr["woa_clim_profile"]
         accumulated_sources.extend(src_files)
 
         yr_dates = pd.to_datetime(ds_yr.coords["time"].values)

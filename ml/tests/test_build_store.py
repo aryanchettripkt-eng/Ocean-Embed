@@ -24,6 +24,7 @@ from oceanscope_ml.data.build_store import (
     parse_year_spec,
     plan_store_build,
 )
+from oceanscope_ml.data.download import PRODUCT_SPECS
 from oceanscope_ml.data.preprocess import (
     run_preprocessing,
 )
@@ -444,20 +445,19 @@ def test_stream_build_store_full_year_mocked(
         coords={"month": np.arange(1, 13), "depth": cfg.depths_m, "lat": lats, "lon": lons},
     )
 
+    expected_datasets: dict[str, xr.Dataset] = {
+        PRODUCT_SPECS["glorys12"]["dataset_id"]: ds_mock_glorys,
+        PRODUCT_SPECS["sla"]["dataset_id"]: ds_mock_sla,
+        PRODUCT_SPECS["sst"]["dataset_id"]: ds_mock_sst,
+        PRODUCT_SPECS["sss"]["dataset_id"]: ds_mock_sss,
+        PRODUCT_SPECS["grep"]["dataset_id"]: ds_mock_grep,
+        PRODUCT_SPECS["armor3d"]["dataset_id"]: ds_mock_armor,
+    }
+
     def mock_stream_copernicus(dataset_id: str, **kwargs: Any) -> xr.Dataset:
-        if "glo_phy_my" in dataset_id:
-            return ds_mock_glorys
-        elif "obs-sl" in dataset_id:
-            return ds_mock_sla
-        elif "SST" in dataset_id:
-            return ds_mock_sst
-        elif "SSS" in dataset_id:
-            return ds_mock_sss
-        elif "mnstd" in dataset_id:
-            return ds_mock_grep
-        elif "armor" in dataset_id:
-            return ds_mock_armor
-        raise ValueError(f"Unknown dataset_id: {dataset_id}")
+        if dataset_id not in expected_datasets:
+            raise ValueError(f"Wrong dataset_id: {dataset_id}")
+        return expected_datasets[dataset_id]
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream_copernicus)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_era5)
@@ -503,3 +503,145 @@ def test_stream_build_store_full_year_mocked(
         assert required_var in ds_built.data_vars
         val = ds_built[required_var].values
         assert np.sum(np.isfinite(val)) > 0
+
+
+def test_era5_hourly_and_daily_precipitation_parity() -> None:
+    """Verify streamed daily-statistics precipitation (scaled x24) matches hourly accumulation."""
+    from oceanscope_ml.data.reduce import reduce_era5_fluxes
+
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    lats = grid.lats
+    lons = grid.lons
+    n_lat = len(lats)
+    n_lon = len(lons)
+
+    # Hourly dataset for 2019-01-01: 24 hours with constant 0.001 m/hr precipitation
+    hourly_times = pd.date_range("2019-01-01 01:00:00", "2019-01-02 00:00:00", freq="h")
+    n_h = len(hourly_times)
+    ds_hourly = xr.Dataset(
+        data_vars={
+            "ssr": (("time", "lat", "lon"), np.full((n_h, n_lat, n_lon), 40.0, dtype=np.float32)),
+            "str": (("time", "lat", "lon"), np.full((n_h, n_lat, n_lon), 10.0, dtype=np.float32)),
+            "sshf": (("time", "lat", "lon"), np.full((n_h, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "slhf": (("time", "lat", "lon"), np.full((n_h, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "tp": (("time", "lat", "lon"), np.full((n_h, n_lat, n_lon), 0.001, dtype=np.float32)),
+        },
+        coords={"time": hourly_times, "lat": lats, "lon": lons},
+    )
+    for v in ["ssr", "str", "sshf", "slhf"]:
+        ds_hourly[v].attrs["units"] = "W m**-2"
+    ds_hourly["tp"].attrs["units"] = "m"
+
+    # Daily dataset: 1 daily value with mean rate 0.001 m/hr
+    daily_times = pd.date_range("2019-01-01", periods=1, freq="D")
+    ds_daily = xr.Dataset(
+        data_vars={
+            "ssr": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 40.0, dtype=np.float32)),
+            "str": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 10.0, dtype=np.float32)),
+            "sshf": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "slhf": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "tp": (("time", "lat", "lon"), np.full((1, n_lat, n_lon), 0.001, dtype=np.float32)),
+        },
+        coords={"time": daily_times, "lat": lats, "lon": lons},
+    )
+    for v in ["ssr", "str", "sshf", "slhf"]:
+        ds_daily[v].attrs["units"] = "W m**-2"
+    ds_daily["tp"].attrs["units"] = "m"
+
+    target_time = np.array(["2019-01-01"], dtype="datetime64[ns]")
+    red_hourly = reduce_era5_fluxes(ds_hourly, grid, target_time=target_time)
+    red_daily = reduce_era5_fluxes(ds_daily, grid, target_time=target_time)
+
+    # 24 hours * 0.001 m = 0.024 m daily accumulation
+    assert np.allclose(red_hourly["precip"].values, 0.024, atol=1e-5)
+    assert np.allclose(red_daily["precip"].values, 0.024, atol=1e-5)
+    assert np.allclose(red_hourly["precip"].values, red_daily["precip"].values, atol=1e-5)
+    assert np.allclose(
+        red_hourly["net_heat_flux"].values, red_daily["net_heat_flux"].values, atol=1e-5
+    )
+
+
+def test_filter_files_by_year_time_range(tmp_path: Path) -> None:
+    """Verify filter_files_by_year inspects NetCDF time range for non-year-named ERA5 files."""
+    from oceanscope_ml.data.build_store import filter_files_by_year
+
+    era5_file = tmp_path / "data_stream-oper_stepType-instant.nc"
+    ds = xr.Dataset(coords={"time": pd.date_range("2019-01-01", "2019-12-31")})
+    ds.to_netcdf(era5_file)
+
+    files = [
+        Path("/data/raw/glorys/glorys_2018.nc"),
+        Path("/data/raw/glorys/glorys_2019.nc"),
+        era5_file,
+    ]
+
+    # For 2019: glorys_2019.nc and era5_file (covers 2019) match
+    m_2019 = filter_files_by_year(files, 2019)
+    assert Path("/data/raw/glorys/glorys_2019.nc") in m_2019
+    assert era5_file in m_2019
+    assert Path("/data/raw/glorys/glorys_2018.nc") not in m_2019
+
+    # For 2020: era5_file ends in 2019, so nothing matches
+    assert filter_files_by_year(files, 2020) == []
+
+
+def test_stream_silent_failures_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify streaming failures for GEBCO or WOA raise RuntimeError instead of silent warning."""
+    import oceanscope_ml.data.build_store as bs_mod
+
+    cfg = MockConfig(tmp_path / "raw", tmp_path / "out", tmp_path / "outputs")
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    sample_dates = pd.date_range("2019-01-01", periods=2, freq="D")
+    n_t = len(sample_dates)
+    n_d = len(cfg.depths_m)
+    n_lat = len(grid.lats)
+    n_lon = len(grid.lons)
+
+    ds_mock = xr.Dataset(
+        data_vars={
+            "thetao": (
+                ("time", "depth", "lat", "lon"),
+                np.full((n_t, n_d, n_lat, n_lon), 25.0, dtype=np.float32),
+            ),
+            "sla": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.05, dtype=np.float32)),
+            "adt": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.85, dtype=np.float32)),
+            "analysed_sst": (
+                ("time", "lat", "lon"),
+                np.full((n_t, n_lat, n_lon), 299.0, dtype=np.float32),
+            ),
+            "sos": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 35.0, dtype=np.float32)),
+            "u": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.1, dtype=np.float32)),
+            "v": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -0.1, dtype=np.float32)),
+            "u10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "v10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -3.0, dtype=np.float32)),
+            "ssr": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 30.0, dtype=np.float32)),
+            "str": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 10.0, dtype=np.float32)),
+            "sshf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "slhf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
+            "tp": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.001, dtype=np.float32)),
+        },
+        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": grid.lats, "lon": grid.lons},
+    )
+    for v in ["ssr", "str", "sshf", "slhf"]:
+        ds_mock[v].attrs["units"] = "W m**-2"
+    ds_mock["tp"].attrs["units"] = "m"
+    ds_mock["analysed_sst"].attrs["units"] = "Kelvin"
+
+    monkeypatch.setattr(bs_mod, "stream_copernicus", lambda *args, **kwargs: ds_mock)
+    monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock)
+    monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock)
+
+    def failing_stream(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionError("Network unreachable")
+
+    monkeypatch.setattr(bs_mod, "stream_gebco", failing_stream)
+
+    with pytest.raises(RuntimeError, match="Failed to stream GEBCO bathymetry"):
+        bs_mod.reduce_year_dataset(
+            year=2019,
+            raw_path=tmp_path / "raw",
+            target_grid=grid,
+            depths_m=cfg.depths_m,
+            stream=True,
+            scratch_dir=tmp_path / "scratch",
+        )
