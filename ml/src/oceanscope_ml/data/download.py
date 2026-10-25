@@ -106,20 +106,30 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "daily_mb": 0.5,
         "depth_subset": False,
         "env_creds": ["EARTHDATA_USERNAME", "EARTHDATA_PASSWORD"],
-        "notes": "Dynamic input for wind stress & curl derivation from Remote Sensing Systems.",
+        # Replaced by ERA5 10 m winds (DECISIONS 2026-10-24); only fetched when named explicitly.
+        "optional": True,
+        "notes": "Unused: winds come from ERA5 u10/v10 (RSS too slow).",
     },
     "era5": {
-        "name": "ERA5 Surface Fluxes & Precip",
+        "name": "ERA5 Surface Fluxes, Precip & 10 m Winds",
         "provider": "Copernicus Climate Change Service (CDS) / ECMWF",
         "source_id": "reanalysis-era5-single-levels",
         "dataset_id": "era5-surface-daily",
         "source_url": "https://cds.climate.copernicus.eu",
-        "variables": ["ssr", "str", "sshf", "slhf", "tp"],
+        "variables": [
+            "ssr",
+            "str",
+            "sshf",
+            "slhf",
+            "tp",
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+        ],
         "needs_lead_in": True,
         "daily_mb": 0.8,
         "depth_subset": False,
         "env_creds": ["CDSAPI_URL", "CDSAPI_KEY"],
-        "notes": "Atmospheric net heat flux and precipitation forcing.",
+        "notes": "Net heat flux, precipitation and 10 m winds (wind + stress curl).",
     },
     "gebco": {
         "name": "GEBCO Ocean Bathymetry",
@@ -216,7 +226,9 @@ def plan_download(
     end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     lead_in_days = int(config.inputs.get("long_history", {}).get("days", 60))
 
-    products = selected_products or list(PRODUCT_SPECS.keys())
+    products = selected_products or [
+        key for key, spec in PRODUCT_SPECS.items() if not spec.get("optional", False)
+    ]
     plan: dict[str, Any] = {}
     total_est_mb = 0.0
 
@@ -423,7 +435,7 @@ def download_era5(item: dict[str, Any], raw_dir: Path, manifest: dict[str, Any])
         record_downloaded_file(manifest, "era5", out_file, raw_dir, item["source_id"])
         return
 
-    print("  Downloading ERA5 surface fluxes via cdsapi...")
+    print("  Downloading ERA5 surface fluxes and 10 m winds via cdsapi...")
     c = cdsapi.Client()
     bbox = item["bbox"]
     c.retrieve(

@@ -69,3 +69,15 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Muse Code is the recommended implementer for the guide (P7-B1, P7-F1); Muse Image is used to make the landing-page art layers (PLAN_LANDING §4).
 - Rejected: Ray-Ban glasses integration (no device to test on; a mocked demo would cost trust); wearables, Presence Platform and Horizon tools (no fit). Muse Glimmer only as a chat fallback model.
 - Approved by Aryan ("let's include the spark as navigator idea, voice dive, event time machine, ocean postcards, SAM lasso"; SAM expected on the Meta API; "add these … changes to our plans"), 2026-10-24.
+
+## 2026-10-24 — 15 model depths (P1-M3)
+- `depths_m` = 0.494, 5.078, 9.573, 18.496, 29.445, 47.374, 65.807, 92.326, 130.666, 186.126, 222.475, 266.040, 380.213, 643.567, 1062.440 m: native GLORYS12 levels, taken from the data inspection of 2026-10-24 (`outputs/reports/data_inspection.md`).
+- Chosen to put 7 levels in 50–300 m, where the primary criterion is measured (PRD_AI_ML §1.1) and the thermocline sits; the inspect script's proposal had 7 levels in the top 20 m and only 4 in 50–300 m.
+- Changing this later means rebuilding the processed store and the prediction store.
+- Proposed by Claude; approved by Aryan on the decision card ("Thermocline-focused set"), 2026-10-24.
+
+## 2026-10-24 — Winds from ERA5 instead of CCMP (PRD_AI_ML §3, §4)
+- `u_wind`, `v_wind` and `wind_stress_curl` now come from ERA5 10 m winds (`u10`, `v10`, Copernicus CDS), requested together with the other ERA5 variables (area subset; daily statistics for the full build). The wind-stress bulk formula and curl method are unchanged.
+- Reason: CCMP V3.0 from Remote Sensing Systems is one 66 MB global file per day and the server ran at ~30 KB/s from Aryan's connection: over two days for the 91-day sample and roughly 600+ GB for 1993–2021. ERA5 is subset server-side and uses an account we already have.
+- Trade-off: ERA5 winds are model reanalysis rather than satellite-blended (CCMP); acceptable for a 0.25° daily input. CCMP stays in `download.py` as an optional product (only fetched when named), not part of the default download.
+- Proposed by Claude; approved by Aryan on the decision card ("ERA5 10 m winds"), 2026-10-24.

@@ -24,7 +24,7 @@ splits:
   test:  ["2021-01-01", "2021-12-31"]   # [CONFIRM] sealed
   gap_days: 30                           # dropped at the end of train and val
 
-depths_m: []   # [CONFIRM] exactly 15 values copied from GLORYS native depth coordinate, ascending, last ~1000 m
+depths_m: [0.494, 5.078, 9.573, 18.496, 29.445, 47.374, 65.807, 92.326, 130.666, 186.126, 222.475, 266.040, 380.213, 643.567, 1062.440]   # confirmed by Aryan 2026-10-24 (DECISIONS): native GLORYS12 levels, 7 in 50-300 m
 
 inputs:
   core: [sla, adt, sst, sss, u_current, v_current, u_wind, v_wind, wind_stress_curl]

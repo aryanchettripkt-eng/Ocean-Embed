@@ -168,12 +168,12 @@ publish:
 |---|---|---|---|---|
 | `sla` | DUACS L4 SLA (`SEALEVEL_GLO_PHY_L4_MY_008_047`, dataset `cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`) | input | 0.125° daily | Use `sla` variable; area-mean to 0.25°; record reference period. |
 | `u_current`, `v_current` | OSCAR | input | 0.25° or 1/3° (version-dependent) | Bilinear to grid if coarser. |
-| `u_wind`, `v_wind` | CCMP | input | 0.25°, 6-hourly | Daily mean of the 4 timesteps; require ≥3 valid. |
+| `u_wind`, `v_wind` | ERA5 10 m wind (`u10`, `v10`), Copernicus CDS (replaces CCMP, DECISIONS 2026-10-24) | input | 0.25° hourly | Daily mean; require ≥ 18 of 24 valid hours. |
 | `thetao` | GLORYS12 reanalysis | target | 1/12°, 50 depths | Area-mean of valid ocean sub-cells to 0.25°; cell valid if ≥50% sub-cells valid. |
 | `sst` | OSTIA L4 SST (`SST_GLO_SST_L4_REP_OBSERVATIONS_010_011`, dataset `METOFFICE-GLO-SST-L4-REP-OBS-SST`, variable `analysed_sst`) | input | 0.05° daily | Area-mean to 0.25°; convert K → °C. |
 | `sss` | Copernicus MULTIOBS SSS (`MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013`, dataset `cmems_obs-mob_glo_phy-sss_my_multi_P1D`, variable `sos`) | input | 0.125° daily | Area-mean to 0.25°. |
 | `adt` | DUACS L4 ADT | input | 0.125° daily | Same dataset as SLA. |
-| `wind_stress_curl` | derived from CCMP | input | 0.25° | Compute stress with a bulk formula (ρ_air=1.22, Cd per Large & Pond), then curl with centred differences, NaN at coast. |
+| `wind_stress_curl` | derived from ERA5 10 m wind | input | 0.25° | Compute stress with a bulk formula (ρ_air=1.22, Cd per Large & Pond), then curl with centred differences, NaN at coast. |
 | `net_heat_flux`, `precip` | ERA5 single levels (Copernicus CDS) | input | 0.25° hourly | Daily mean/sum. Needs CDS account. |
 | `bathymetry` | GEBCO | static input | 15″ | Area-mean to 0.25°; use log(1+depth). |
 | `woa_clim_profile` | World Ocean Atlas 2023 temperature | static input (by month) | 0.25° monthly | Interpolate to the 15 depths; 15 channels. |
@@ -216,8 +216,7 @@ Each stage is a CLI module run from `ml/`: `python -m <module> --config configs/
   - GLORYS12, DUACS SLA + ADT, OSTIA SST, MULTIOBS SSS, ARMOR3D: Copernicus Marine Toolbox (`copernicusmarine` Python package), subset server-side to the region bbox (+1° margin), date range and (GLORYS) the 15 depths ± neighbours. OSTIA also needs the extra 10°S–0°, 50–110°E strip for the DMI. Needs `COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD`.
   - The history windows need inputs from **60 days before** `time.start` (and before each split start); download that lead-in too.
   - OSCAR: NASA PO.DAAC (Earthdata login, `earthaccess` package).
-  - CCMP: Remote Sensing Systems.
-  - ERA5 (and optional GloFAS): Copernicus CDS (`cdsapi`, key in env `CDSAPI_URL`/`CDSAPI_KEY`), area-subset requests, one month per request.
+  - ERA5 fluxes, precipitation and 10 m winds (and optional GloFAS): Copernicus CDS (`cdsapi`, key in env `CDSAPI_URL`/`CDSAPI_KEY`), area-subset requests, one month per request.
   - GEBCO (bbox subset), WOA23 monthly 0.25° temperature: one-off files.
   - Climate indices: Niño 3.4 from NOAA CPC/PSL, MJO RMM from the Australian Bureau of Meteorology; plain text files, no account. DMI is computed from OSTIA (§3). Record the exact URLs in `MANIFEST.json`.
   - GREP: same toolbox, daily ensemble-mean dataset `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m`, variable `thetao_mean` only, 15 depths ± neighbours.
@@ -239,7 +238,7 @@ The full period must never be stored as raw files. Downloading raw files for 199
   - GLORYS12, GREP, ARMOR3D, DUACS, OSTIA, SSS: `copernicusmarine.open_dataset(...)` (lazy, ARCO), subset to bbox + 1° margin, the year's dates and (3D products) only the 15 configured depths, then reduce in memory. Nothing is written before reduction. For GLORYS this also drops the 1/12° detail we never use (about 20× smaller than raw).
   - ERA5: CDS dataset `derived-era5-single-levels-daily-statistics` (server-side daily means, one request per month, area subset). Precipitation daily sum = daily mean rate × 24 h. Never request hourly data for the full period.
   - OSCAR: server-side spatial subset through NASA Harmony (`earthaccess`) if the collection supports it. Otherwise fetch one granule, crop it to bbox + 1°, reduce, then delete the original before the next one.
-  - CCMP winds: an OPeNDAP/THREDDS subset if available. Otherwise fetch one file, crop, reduce, delete. The RSS HTTPS server measured about 30 KB/s from the owner's connection, which is too slow for the full period; the source choice is in `docs/OPEN_QUESTIONS.md`.
+  - Winds: ERA5 `10m_u_component_of_wind` / `10m_v_component_of_wind` in the same daily-statistics requests as the other ERA5 variables (DECISIONS 2026-10-24; CCMP dropped because the RSS server ran at ~30 KB/s with 66 MB global daily files).
   - WOA23 and GEBCO: static, fetched once. Subset WOA23 over OPeNDAP (bbox + 1°, all 12 months, depths needed for interpolation); GEBCO via a regional request or crop-then-delete. Already-downloaded one-month files may be reused.
   - ARGO: ERDDAP queries chunked by year (bbox, `pres ≤ 1100`, with `temp_qc`, `pres_qc`, `temp_adjusted` and data mode), stored as a small Parquet table rather than NetCDF.
 - **Storage:** zarr with compression (e.g. Blosc/zstd), chunks of (time = 32, depth = all, lat = all, lon = all) or similar, float32 master. The float16 copy (§6.1) is the one uploaded for training.
@@ -444,7 +443,7 @@ Use small synthetic fixtures (e.g. 3 days × 16 × 16 grid) generated in `tests/
 ## 12. Live mode (after the first real run is published; PHASES P9)
 A scheduled job produces one new day per run, about 3 days behind real time.
 - **Runner:** GitHub Actions `schedule:` workflow (daily, 06:00 UTC) on CPU. Credentials from GitHub secrets (`COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD`, `EARTHDATA_USERNAME/PASSWORD`, `CDSAPI_KEY`, `HF_TOKEN`). No database: the published zarr store on the HF dataset repo is the store.
-- **Inputs:** near-real-time versions of each product (DUACS NRT, OSTIA NRT, CCMP NRT, ERA5T, OSCAR NRT/interim, MULTIOBS SSS NRT, ARGO real-time profiles with RT QC flags 1–2, indices). The target date is the latest day for which every core input exists; record the per-input latency in the run log. If a required input is missing, skip the day (no partial maps) and log why.
+- **Inputs:** near-real-time versions of each product (DUACS NRT, OSTIA NRT, ERA5T (incl. 10 m winds), OSCAR NRT/interim, MULTIOBS SSS NRT, ARGO real-time profiles with RT QC flags 1–2, indices). The target date is the latest day for which every core input exists; record the per-input latency in the run log. If a required input is missing, skip the day (no partial maps) and log why.
 - **Model:** the published checkpoint, unchanged. No online learning. Retraining happens offline (e.g. every 3–6 months) and is published only if it passes the same validation gate.
 - **NRT vs reprocessed shift:** before enabling, run the model on one past month using NRT inputs and on the same month using reprocessed inputs; report the RMSE difference vs GLORYS per depth in `outputs/reports/live_mode_check.md`. Enable only if the owner accepts it.
 - **Output:** append the day to the prediction store with `split_of_each_date` label `live`, `temp_glorys` = NaN (no reference yet), then update `available_dates.end` in `manifest.json` last. Keep a rolling window (default 365 live days). This needs a contract note in `docs/DECISIONS.md` and a backend/frontend change to accept `live` dates and missing `temp_glorys`.
