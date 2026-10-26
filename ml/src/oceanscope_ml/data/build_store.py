@@ -391,7 +391,8 @@ def stream_oscar(
     results = earthaccess.search_data(
         short_name="OSCAR_L4_OC_FINAL_V2.0",
         temporal=(f"{year}-01-01", f"{year}-12-31"),
-        bounding_box=bbox,
+        # earthaccess expects (west, south, east, north); bbox is (lon_min, lon_max, lat_min, lat_max)
+        bounding_box=(bbox[0], bbox[2], bbox[1], bbox[3]),
     )
     if not results:
         raise FileNotFoundError(f"No OSCAR granules found for year {year} in bbox {bbox}")
