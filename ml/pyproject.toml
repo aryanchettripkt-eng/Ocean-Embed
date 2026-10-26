@@ -32,6 +32,8 @@ dev = [
     "ruff>=0.1.0",
     "types-PyYAML",
     "types-jsonschema",
+    # P4-1: the U-Net, loss and training tests import torch, so CI needs it here.
+    "torch>=2.2.0",
 ]
 
 [tool.setuptools.packages.find]
