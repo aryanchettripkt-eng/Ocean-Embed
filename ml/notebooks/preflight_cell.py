@@ -1,5 +1,4 @@
 # Pre-flight: tests every remote source with a tiny request (a few minutes total).
-import urllib.request
 from pathlib import Path
 
 import xarray as xr
@@ -11,6 +10,7 @@ bbox = (40.125, 99.875, 0.125, 29.875)  # lon_min, lon_max, lat_min, lat_max
 dates = ("2017-01-01", "2017-01-02")
 tmp = Path("/tmp/preflight")
 tmp.mkdir(exist_ok=True)
+STATIC = None  # set by the static-fields check; cell 4 passes it to --static-file
 
 
 def chk(name, fn):
@@ -36,6 +36,7 @@ def era5():
     import cdsapi
 
     out = tmp / "era5_test.nc"
+    out.unlink(missing_ok=True)
     cdsapi.Client().retrieve(
         "derived-era5-single-levels-daily-statistics",
         {
@@ -60,27 +61,27 @@ def era5():
         },
         str(out),
     )
-    ds = xr.open_dataset(out)
-    return f"vars={list(ds.data_vars)} dims={dict(ds.sizes)}"
+    kind = "zip" if out.read_bytes()[:2] == b"PK" else "netcdf/other"
+    ds = bs._open_cds_download(out)
+    return f"file={kind} vars={list(ds.data_vars)} dims={dict(ds.sizes)}"
 
 
-def gebco():
-    url = (
-        "https://data.ceda.ac.uk/bodc/gebco/global/gebco_2023/sub_ice_topo/netcdf/"
-        "gebco_2023_sub_ice_topo.nc"
+def find_static():
+    hits = (
+        sorted(Path("/kaggle/input").rglob("static_fields.nc"))
+        if Path("/kaggle/input").exists()
+        else []
     )
-    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "OceanScope-AI/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return f"HTTP {r.status}, {int(r.headers.get('Content-Length', 0)) / 1e9:.1f} GB"
+    if not hits:
+        raise FileNotFoundError("static_fields.nc not found under /kaggle/input (add the dataset)")
+    return hits[0]
 
 
-def woa():
-    url = (
-        "https://www.ncei.noaa.gov/thredds-ocean/dodsC/woa23/DATA/temperature/netcdf/decav/0.25/"
-        "woa23_decav_t01_04.nc"
-    )
-    ds = xr.open_dataset(url, decode_times=False)
-    return f"vars include t_an={'t_an' in ds.data_vars} dims={dict(ds.sizes)}"
+def static():
+    global STATIC
+    STATIC = str(find_static())
+    ds = xr.open_dataset(STATIC)
+    return f"{STATIC} vars={list(ds.data_vars)} dims={dict(ds.sizes)}"
 
 
 def cm(key, var, depths=None):
@@ -98,8 +99,7 @@ def cm(key, var, depths=None):
 
 
 chk("OSCAR (Earthdata)", oscar)
-chk("GEBCO (CEDA)", gebco)
-chk("WOA23 (OPeNDAP)", woa)
+chk("Static fields (GEBCO + WOA)", static)
 chk("GREP (Copernicus)", cm("grep", "thetao_mean", (0.0, 1250.0)))
 chk("ARMOR3D (Copernicus)", cm("armor3d", "to", (0.0, 1100.0)))
 chk("ERA5 (CDS, may queue a few minutes)", era5)
