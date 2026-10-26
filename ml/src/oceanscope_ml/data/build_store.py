@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -321,6 +322,20 @@ def stream_copernicus(
     return ds
 
 
+def _open_cds_download(path: Path) -> xr.Dataset:
+    """Open a CDS download, which can be a plain netCDF or a zip of several netCDFs."""
+    if not zipfile.is_zipfile(path):
+        return xr.open_dataset(path)
+    extract_dir = path.with_suffix("")
+    with zipfile.ZipFile(path) as zf:
+        members = [m for m in zf.namelist() if m.endswith(".nc")]
+        if not members:
+            raise RuntimeError(f"CDS zip {path} contains no .nc files")
+        zf.extractall(extract_dir, members=members)
+    parts = [xr.open_dataset(extract_dir / m) for m in sorted(members)]
+    return xr.merge(parts, compat="override")
+
+
 def stream_era5_daily(
     year: int,
     bbox: tuple[float, float, float, float],
@@ -329,7 +344,7 @@ def stream_era5_daily(
     """Request and download ERA5 daily-statistics dataset from CDS into scratch_dir."""
     out_file = scratch_dir / f"era5_daily_{year}.nc"
     if out_file.exists() and out_file.stat().st_size > 0:
-        ds = xr.open_dataset(out_file)
+        ds = _open_cds_download(out_file)
         ds.attrs["daily_statistic"] = "daily_mean"
         ds.attrs["is_daily_mean"] = True
         return ds
@@ -367,7 +382,7 @@ def stream_era5_daily(
         },
         str(out_file),
     )
-    ds = xr.open_dataset(out_file)
+    ds = _open_cds_download(out_file)
     ds.attrs["daily_statistic"] = "daily_mean"
     ds.attrs["is_daily_mean"] = True
     return ds
@@ -921,6 +936,48 @@ def export_f16_store(
     return dst_zarr
 
 
+def load_static_fields(
+    path: Path, target_grid: TargetGrid, depths_m: list[float]
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Load bathymetry and the WOA monthly profile from a file made by export_static.
+
+    Lets a streamed build skip the GEBCO and WOA servers entirely.
+    """
+    ds = xr.open_dataset(path)
+    lats = np.asarray(target_grid.lats)
+    lons = np.asarray(target_grid.lons)
+    depths = np.asarray(depths_m, dtype=float)
+    for name in ("bathymetry", "woa_clim_profile"):
+        if name not in ds.data_vars:
+            raise ValueError(f"Static file {path} has no '{name}' variable")
+    if not (
+        np.allclose(ds["lat"].values, lats, atol=1e-4)
+        and np.allclose(ds["lon"].values, lons, atol=1e-4)
+    ):
+        raise ValueError(f"Static file {path} grid does not match the target grid")
+    woa = ds["woa_clim_profile"].transpose("month", "depth", "lat", "lon")
+    if woa.shape != (12, len(depths), len(lats), len(lons)):
+        raise ValueError(
+            f"Static file woa_clim_profile has shape {woa.shape}, expected "
+            f"{(12, len(depths), len(lats), len(lons))}"
+        )
+    bathy = ds["bathymetry"].transpose("lat", "lon").load()
+    bathymetry = xr.DataArray(
+        bathy.values.astype(np.float32),
+        dims=("lat", "lon"),
+        coords={"lat": lats, "lon": lons},
+        attrs=bathy.attrs,
+    )
+    woa_profile = xr.DataArray(
+        woa.values.astype(np.float32),
+        dims=("month", "depth", "lat", "lon"),
+        coords={"month": np.arange(1, 13), "depth": depths, "lat": lats, "lon": lons},
+        attrs=woa.attrs,
+    )
+    ds.close()
+    return bathymetry, woa_profile
+
+
 def build_store(
     config: Any,
     years: list[int] | None = None,
@@ -932,6 +989,7 @@ def build_store(
     export_f16: bool = False,
     finalize: bool = False,
     stream: bool = False,
+    static_file: Path | None = None,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
@@ -1016,6 +1074,12 @@ def build_store(
     # 3. Process each year
     cached_bathymetry: xr.DataArray | None = None
     cached_woa_profile: xr.DataArray | None = None
+    if static_file is not None:
+        cached_bathymetry, cached_woa_profile = load_static_fields(
+            static_file, target_grid, depths_m
+        )
+        if f"static:{static_file.name}" not in accumulated_sources:
+            accumulated_sources.append(f"static:{static_file.name}")
 
     for yr in years_to_process:
         if yr in built_years and not force:
@@ -1301,6 +1365,11 @@ def main() -> None:
         action="store_true",
         help="Stream remote products (Copernicus, CDS, etc.) instead of reading local raw files",
     )
+    parser.add_argument(
+        "--static-file",
+        default=None,
+        help="netCDF with bathymetry and woa_clim_profile (from export_static); skips GEBCO/WOA",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1321,6 +1390,7 @@ def main() -> None:
         export_f16=args.f16,
         finalize=args.finalize,
         stream=args.stream,
+        static_file=Path(args.static_file) if args.static_file else None,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")
