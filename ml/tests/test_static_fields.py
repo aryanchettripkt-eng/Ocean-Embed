@@ -109,3 +109,36 @@ def test_static_file_grid_mismatch_raises(tmp_path: Path) -> None:
     ds.to_netcdf(path)
     with pytest.raises(ValueError, match="grid does not match"):
         load_static_fields(path, grid, depths)
+
+
+def test_stream_era5_daily_requests_month_by_month(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ERA5 is requested one month per CDS call (a full year exceeds the cost limit)."""
+    import sys
+    import types
+
+    from oceanscope_ml.data.build_store import stream_era5_daily
+
+    calls: list[dict[str, object]] = []
+
+    class FakeClient:
+        def retrieve(self, name: str, request: dict[str, object], target: str) -> None:
+            calls.append(request)
+            month = int(request["month"][0])  # type: ignore[index]
+            days = pd.date_range(f"2017-{month:02d}-01", periods=2, freq="D")
+            xr.Dataset(
+                {"u10": (("valid_time", "latitude", "longitude"), np.full((2, 2, 2), month))},
+                coords={"valid_time": days, "latitude": [10.0, 10.25], "longitude": [60.0, 60.25]},
+            ).to_netcdf(target)
+
+    monkeypatch.setitem(sys.modules, "cdsapi", types.SimpleNamespace(Client=FakeClient))
+    ds = stream_era5_daily(2017, (60.0, 62.0, 10.0, 12.0), tmp_path)
+    assert len(calls) == 12
+    assert all(len(c["month"]) == 1 for c in calls)  # type: ignore[arg-type]
+    assert ds.sizes["valid_time"] == 24
+    assert ds.attrs["is_daily_mean"]
+
+    calls.clear()
+    stream_era5_daily(2017, (60.0, 62.0, 10.0, 12.0), tmp_path)
+    assert calls == []  # every month is cached

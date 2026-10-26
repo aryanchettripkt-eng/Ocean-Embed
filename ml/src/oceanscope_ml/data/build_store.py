@@ -336,6 +336,17 @@ def _open_cds_download(path: Path) -> xr.Dataset:
     return xr.merge(parts, compat="override")
 
 
+ERA5_DAILY_VARIABLES = [
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "surface_net_solar_radiation",
+    "surface_net_thermal_radiation",
+    "surface_sensible_heat_flux",
+    "surface_latent_heat_flux",
+    "total_precipitation",
+]
+
+
 def stream_era5_daily(
     year: int,
     bbox: tuple[float, float, float, float],
@@ -357,32 +368,33 @@ def stream_era5_daily(
     lon_min, lon_max, lat_min, lat_max = bbox
     area = [lat_max + 1.0, lon_min - 1.0, lat_min - 1.0, lon_max + 1.0]
 
+    # CDS rejects a whole year in one request ("cost limits exceeded"), so fetch month by
+    # month; each month is cached so a rerun only requests the missing ones.
     c = cdsapi.Client()
-    c.retrieve(
-        "derived-era5-single-levels-daily-statistics",
-        {
-            "product_type": "reanalysis",
-            "variable": [
-                "10m_u_component_of_wind",
-                "10m_v_component_of_wind",
-                "surface_net_solar_radiation",
-                "surface_net_thermal_radiation",
-                "surface_sensible_heat_flux",
-                "surface_latent_heat_flux",
-                "total_precipitation",
-            ],
-            "year": str(year),
-            "month": [f"{m:02d}" for m in range(1, 13)],
-            "day": [f"{d:02d}" for d in range(1, 32)],
-            "daily_statistic": "daily_mean",
-            "time_zone": "utc+00:00",
-            "frequency": "1_hourly",
-            "area": area,
-            "format": "netcdf",
-        },
-        str(out_file),
-    )
-    ds = _open_cds_download(out_file)
+    months = []
+    for month in range(1, 13):
+        month_file = scratch_dir / f"era5_daily_{year}_{month:02d}.nc"
+        if not (month_file.exists() and month_file.stat().st_size > 0):
+            logger.info("Requesting ERA5 daily statistics for %d-%02d from CDS...", year, month)
+            c.retrieve(
+                "derived-era5-single-levels-daily-statistics",
+                {
+                    "product_type": "reanalysis",
+                    "variable": ERA5_DAILY_VARIABLES,
+                    "year": str(year),
+                    "month": [f"{month:02d}"],
+                    "day": [f"{d:02d}" for d in range(1, 32)],
+                    "daily_statistic": "daily_mean",
+                    "time_zone": "utc+00:00",
+                    "frequency": "1_hourly",
+                    "area": area,
+                    "format": "netcdf",
+                },
+                str(month_file),
+            )
+        months.append(_open_cds_download(month_file))
+    time_dim = "valid_time" if "valid_time" in months[0].dims else "time"
+    ds = xr.concat(months, dim=time_dim)
     ds.attrs["daily_statistic"] = "daily_mean"
     ds.attrs["is_daily_mean"] = True
     return ds
