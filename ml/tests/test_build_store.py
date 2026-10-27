@@ -842,3 +842,49 @@ def test_grep_ends_partway_through_year(tmp_path: Path, monkeypatch: pytest.Monk
     assert np.isnan(dec_16_vals).all()
     dec_31_vals = ds_year["grep_mean"].sel(time="2020-12-31").values
     assert np.isnan(dec_31_vals).all()
+
+
+def test_finalize_fits_climatology_on_built_years_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unbuilt (all-NaN) years in the pre-allocated store must not reach the climatology fit.
+
+    On Kaggle a 2017-2018 build passed all 1993-2017 train dates to the fit, which made
+    every cell "partial" and ran out of memory before `clim` was written.
+    """
+    import oceanscope_ml.data.build_store as bs
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir()
+
+    cfg = MockConfig(raw_dir, out_dir, outputs_dir)
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    generate_synthetic_raw_sample(
+        raw_dir, grid, cfg.depths_m, dates=pd.date_range("2019-01-01", periods=2, freq="D")
+    )
+
+    seen_years: list[set[int]] = []
+    real_fit = bs.fit_harmonic_climatology
+
+    def spy_fit(thetao: Any, time_coords: Any, **kwargs: Any) -> np.ndarray:
+        seen_years.append(set(pd.to_datetime(time_coords).year))
+        return real_fit(thetao, time_coords, **kwargs)
+
+    monkeypatch.setattr(bs, "fit_harmonic_climatology", spy_fit)
+
+    store_path = build_store(
+        config=cfg,
+        years=[2019],
+        raw_dir=raw_dir,
+        out_dir=out_dir,
+        scratch_dir=tmp_path / "scratch",
+        dry_run=False,
+        finalize=True,
+    )
+
+    assert seen_years == [{2019}]
+    assert "clim" in xr.open_zarr(store_path).data_vars

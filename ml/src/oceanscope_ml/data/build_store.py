@@ -1390,6 +1390,12 @@ def build_store(
             check_no_test_leakage(config.splits.train, config.splits.test)
 
             t_3d = ds_master["thetao"].sel(time=slice(train_start, train_end))
+            # Only fit on years that were actually built. The store is pre-allocated across
+            # the whole period, so unbuilt years are all-NaN; leaving them in turns every
+            # ocean cell into a "partial" cell and the per-cell fallback allocates
+            # (n_time x n_cells) float64, which ran Kaggle out of memory on a 2-year build.
+            t_years = pd.to_datetime(t_3d.coords["time"].values).year
+            t_3d = t_3d.isel(time=np.where(np.isin(t_years, sorted(set(built_years))))[0])
             train_times = pd.to_datetime(t_3d.coords["time"].values)
 
             clim_366 = fit_harmonic_climatology(
