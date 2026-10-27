@@ -2,6 +2,7 @@
 # step, the OK/FAIL check and the baselines, exactly as the full build will run them.
 # Run after cells 1-3 (clone + install, secrets, preflight, which sets STATIC).
 # Keeps going after a failed year so one run shows every error. Target: 30-45 min.
+import os
 import subprocess
 import sys
 import time
@@ -11,10 +12,22 @@ SMOKE_YEARS = [1993, 2000, 2007, 2014, 2020, 2021]  # 2021 is built only, never 
 SMOKE_DAYS = 14
 OUT = Path("/kaggle/working/smoke")
 OUT.mkdir(parents=True, exist_ok=True)
-# `%run` gets a fresh namespace, so fall back to the static dataset path on Kaggle.
-KAGGLE_STATIC = Path("/kaggle/input/datasets/zenlesszone222/oceanscope-static/static_fields.nc")
-static = globals().get("STATIC") or (KAGGLE_STATIC if KAGGLE_STATIC.exists() else None)
+# `%run` gets a fresh namespace, so look for the attached oceanscope-static dataset.
+# Kaggle mounts inputs at different depths, so walk /kaggle/input (skipping big stores).
+static = globals().get("STATIC")
+if not static:
+    for root, dirs, files in os.walk("/kaggle/input"):
+        dirs[:] = [d for d in dirs if not d.endswith(".zarr") and d not in (".git", "node_modules")]
+        if "static_fields.nc" in files:
+            static = Path(root) / "static_fields.nc"
+            break
 print("static file:", static)
+if static is None:
+    # Without it every year fails: the GEBCO download URL returns 404.
+    raise SystemExit(
+        "static_fields.nc not found under /kaggle/input. Attach the oceanscope-static "
+        "dataset (Add Input -> Your Work -> Datasets) and run again."
+    )
 
 
 def run(name, args, show_tail=True):
