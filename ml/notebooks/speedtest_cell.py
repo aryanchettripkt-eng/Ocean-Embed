@@ -5,15 +5,34 @@ from pathlib import Path
 import copernicusmarine
 import numpy as np
 
-DEPTHS = [0.494, 5.078, 9.573, 18.496, 29.445, 47.374, 65.807, 92.326, 130.666,
-          186.126, 222.475, 266.040, 380.213, 643.567, 1062.440]
+DEPTHS = [
+    0.494,
+    5.078,
+    9.573,
+    18.496,
+    29.445,
+    47.374,
+    65.807,
+    92.326,
+    130.666,
+    186.126,
+    222.475,
+    266.040,
+    380.213,
+    643.567,
+    1062.440,
+]
 common = dict(
     dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
     variables=["thetao"],
-    minimum_longitude=39.125, maximum_longitude=100.875,
-    minimum_latitude=-0.875, maximum_latitude=30.875,
-    start_datetime="2017-01-01", end_datetime="2017-01-31",
-    minimum_depth=0.494, maximum_depth=1062.44,
+    minimum_longitude=39.125,
+    maximum_longitude=100.875,
+    minimum_latitude=-0.875,
+    maximum_latitude=30.875,
+    start_datetime="2017-01-01",
+    end_datetime="2017-01-31",
+    minimum_depth=0.494,
+    maximum_depth=1062.44,
 )
 
 # A) current method: lazy open, select 15 levels, load

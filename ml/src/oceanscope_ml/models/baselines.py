@@ -17,6 +17,7 @@ import pandas as pd
 import scipy.linalg
 import xarray as xr
 
+from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.preprocess import ExperimentConfig, load_config
 from oceanscope_ml.data.transform import check_no_test_leakage
 
@@ -571,11 +572,12 @@ def evaluate_ridge_baseline(
 
 def run_baselines(
     config: ExperimentConfig,
-    store_path: Path | None = None,
+    store_path: Path | list[Path] | None = None,
     out_dir: Path | None = None,
     models_dir: Path | None = None,
     max_train_samples: int | None = None,
     ridge_alpha: float | None = None,
+    stats_path: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train and evaluate non-neural baselines (Climatology and Ridge).
 
@@ -583,8 +585,9 @@ def run_baselines(
     ----------
     config : ExperimentConfig
         Experiment configuration.
-    store_path : Path, optional
-        Path to processed Zarr store (default: data/processed/oceanscope_<version>.zarr).
+    store_path : Path or list of Path, optional
+        Processed Zarr store, or the part stores of a multi-part build
+        (default: data/processed/oceanscope_<version>.zarr).
     out_dir : Path, optional
         Metrics output directory (default: outputs/metrics).
     models_dir : Path, optional
@@ -595,6 +598,8 @@ def run_baselines(
     ridge_alpha : float, optional
         Regularization parameter for Ridge.
         Defaults to config.baselines.ridge_alpha.
+    stats_path : Path, optional
+        Stats store holding `clim` and norm stats for a multi-part build.
 
     Returns
     -------
@@ -619,8 +624,10 @@ def run_baselines(
     out_dir.mkdir(parents=True, exist_ok=True)
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Opening processed Zarr store from %s...", store_path)
-    ds = xr.open_zarr(store_path)
+    store_paths = store_path if isinstance(store_path, list) else [store_path]
+    logger.info("Opening processed Zarr store(s) %s (stats: %s)...", store_paths, stats_path)
+    # Only the dates the store(s) actually wrote; unbuilt pre-allocated dates are all-NaN.
+    ds = open_parts(store_paths, stats_path)
 
     # Date splits
     train_split = config.splits.train
@@ -738,8 +745,16 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--store",
         type=Path,
+        nargs="+",
         default=None,
-        help="Path to processed Zarr store (default: data/processed/oceanscope_<v>.zarr).",
+        help="Processed Zarr store, or several part stores "
+        "(default: data/processed/oceanscope_<v>.zarr).",
+    )
+    parser.add_argument(
+        "--stats",
+        type=Path,
+        default=None,
+        help="Stats store with clim and norm stats, for a multi-part build.",
     )
     parser.add_argument(
         "--out-dir",
@@ -786,6 +801,7 @@ def main() -> None:
         models_dir=args.models_dir,
         max_train_samples=args.max_samples,
         ridge_alpha=args.alpha,
+        stats_path=args.stats,
     )
 
     print("\n" + "=" * 80)

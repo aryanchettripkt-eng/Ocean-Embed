@@ -74,6 +74,9 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "provider": "Copernicus Marine Service",
         "source_id": "MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013",
         "dataset_id": "cmems_obs-mob_glo_phy-sss_my_multi_P1D",
+        # Only version on the server (checked 2026-10-27); it is retired 2026-11-24, so
+        # pin it to keep every year of the build on the same version.
+        "dataset_version": "202311",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["sos"],
         "needs_lead_in": True,

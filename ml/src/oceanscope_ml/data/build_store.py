@@ -299,6 +299,13 @@ def stream_copernicus(
         "start_datetime": dates[0],
         "end_datetime": dates[1],
     }
+    pinned = [
+        spec["dataset_version"]
+        for spec in PRODUCT_SPECS.values()
+        if spec.get("dataset_id") == dataset_id and spec.get("dataset_version")
+    ]
+    if pinned:
+        kwargs["dataset_version"] = pinned[0]
     if variables:
         kwargs["variables"] = variables
     if depths:
@@ -375,6 +382,7 @@ def stream_era5_daily(
     year: int,
     bbox: tuple[float, float, float, float],
     scratch_dir: Path,
+    last_month: int = 12,
 ) -> xr.Dataset:
     """Request and download ERA5 daily-statistics dataset from CDS into scratch_dir."""
     out_file = scratch_dir / f"era5_daily_{year}.nc"
@@ -396,7 +404,7 @@ def stream_era5_daily(
     # month; each month is cached so a rerun only requests the missing ones.
     c = cdsapi.Client()
     months = []
-    for month in range(1, 13):
+    for month in range(1, last_month + 1):
         month_file = scratch_dir / f"era5_daily_{year}_{month:02d}.nc"
         if not (month_file.exists() and month_file.stat().st_size > 0):
             logger.info("Requesting ERA5 daily statistics for %d-%02d from CDS...", year, month)
@@ -476,6 +484,7 @@ def stream_era5_arco(
     bbox: tuple[float, float, float, float],
     scratch_dir: Path,
     url: str = ARCO_ERA5_URL,
+    last_month: int = 12,
 ) -> xr.Dataset:
     """Daily-mean ERA5 for one year from Google's public ARCO ERA5 Zarr (no CDS queue).
 
@@ -486,7 +495,7 @@ def stream_era5_arco(
     zarr.config.set({"async.concurrency": 64})
     src: xr.Dataset | None = None
     months = []
-    for month in range(1, 13):
+    for month in range(1, last_month + 1):
         month_file = scratch_dir / f"era5_arco_daily_{year}_{month:02d}.nc"
         if not (month_file.exists() and month_file.stat().st_size > 0):
             if src is None:
@@ -519,6 +528,7 @@ def stream_oscar(
     year: int,
     bbox: tuple[float, float, float, float],
     scratch_dir: Path,
+    end_date: str | None = None,
 ) -> xr.Dataset:
     """Download OSCAR ocean currents from NASA Earthdata into scratch_dir."""
     out_dir = scratch_dir / "oscar"
@@ -532,7 +542,7 @@ def stream_oscar(
     earthaccess.login(strategy="environment")
     results = earthaccess.search_data(
         short_name="OSCAR_L4_OC_FINAL_V2.0",
-        temporal=(f"{year}-01-01", f"{year}-12-31"),
+        temporal=(f"{year}-01-01", end_date or f"{year}-12-31"),
         # earthaccess wants (west, south, east, north); bbox is (lon_min, lon_max, lat_min, lat_max)
         bounding_box=(bbox[0], bbox[2], bbox[1], bbox[3]),
     )
@@ -650,10 +660,12 @@ def reduce_year_dataset(
     scratch_dir: Path | None = None,
     cached_bathymetry: xr.DataArray | None = None,
     cached_woa_profile: xr.DataArray | None = None,
+    max_days: int | None = None,
 ) -> tuple[xr.Dataset, list[str]]:
     """Reduce all products for a given year using shared reduce functions from raw files.
 
     Strictly uses find_product_files (PRD §0 Rule 1, REVIEW A1); never synthesizes missing files.
+    ``max_days`` limits streaming to the first N days of the year (smoke test only).
     """
     source_files: list[str] = []
     processed_vars: dict[str, xr.DataArray] = {}
@@ -666,6 +678,13 @@ def reduce_year_dataset(
     )
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
+    last_month = 12
+    if max_days is not None:
+        end_ts = min(
+            pd.Timestamp(start_date) + pd.Timedelta(days=max_days - 1), pd.Timestamp(end_date)
+        )
+        end_date = end_ts.strftime("%Y-%m-%d")
+        last_month = end_ts.month
 
     # --- GLORYS12 Primary Target ---
     glorys_files = filter_files_by_year(find_product_files(raw_path, "glorys12", manifest), year)
@@ -808,7 +827,7 @@ def reduce_year_dataset(
         else:
             ds_raw_curr = xr.open_dataset(oscar_files[0])
     elif stream:
-        ds_raw_curr = stream_oscar(year, bbox, effective_scratch)
+        ds_raw_curr = stream_oscar(year, bbox, effective_scratch, end_date=end_date)
         source_files.append(f"podaac:OSCAR_L4_OC_FINAL_V2.0:{year}")
     else:
         raise FileNotFoundError(f"Missing OSCAR currents raw data for year {year} in {raw_path}")
@@ -839,11 +858,11 @@ def reduce_year_dataset(
         ds_raw_flux = xr.open_dataset(flux_files[0])
     elif stream:
         try:
-            ds_raw_era5 = stream_era5_arco(year, bbox, effective_scratch)
+            ds_raw_era5 = stream_era5_arco(year, bbox, effective_scratch, last_month=last_month)
             source_files.append(f"arco-era5:full_37-1h-0p25deg-chunk-1:{year}")
         except Exception as e:
             logger.warning("ARCO ERA5 failed (%s); falling back to CDS daily statistics.", e)
-            ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch)
+            ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch, last_month=last_month)
             source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
         ds_raw_winds = ds_raw_era5
         ds_raw_flux = ds_raw_era5
@@ -1124,11 +1143,15 @@ def build_store(
     finalize: bool = False,
     stream: bool = False,
     static_file: Path | None = None,
+    max_days: int | None = None,
+    part: bool = False,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
     Uses pre-allocated region writes and persists built_years directly on disk
-    (PRD §4.2, REVIEW A3).
+    (PRD §4.2, REVIEW A3). With ``part=True`` the store is one part of a multi-part
+    build: the finalize step is skipped, and ``oceanscope_ml.data.parts stats`` fits the
+    climatology across all parts instead.
     """
     start_year = int(pd.Timestamp(config.time.start).year)
     end_year = int(pd.Timestamp(config.time.end).year)
@@ -1247,6 +1270,7 @@ def build_store(
             scratch_dir=yr_scratch,
             cached_bathymetry=cached_bathymetry,
             cached_woa_profile=cached_woa_profile,
+            max_days=max_days,
         )
         if cached_bathymetry is None and "bathymetry" in ds_yr.data_vars:
             cached_bathymetry = ds_yr["bathymetry"]
@@ -1364,6 +1388,17 @@ def build_store(
         built_years.append(yr)
         root = zarr.open_group(str(zarr_dest), mode="r+")
         root.attrs["built_years"] = sorted(list(set(built_years)))
+        # First and last date written per year. Shorter than the year only in a smoke
+        # build, and lets readers skip the unwritten (all-NaN) rest of the year.
+        raw_ranges = root.attrs.get("built_ranges", {})
+        built_ranges: dict[str, Any] = dict(raw_ranges) if isinstance(raw_ranges, dict) else {}
+        built_ranges[str(yr)] = [
+            yr_dates[0].strftime("%Y-%m-%d"),
+            yr_dates[-1].strftime("%Y-%m-%d"),
+        ]
+        root.attrs["built_ranges"] = built_ranges
+        if max_days is not None:
+            root.attrs["smoke_days"] = int(max_days)
         root.attrs["source_files"] = sorted(list(set(accumulated_sources)))
         logger.info(
             "Persisted year %d to built_years. Total built: %s", yr, root.attrs["built_years"]
@@ -1376,12 +1411,19 @@ def build_store(
 
     # 4. Finalize step: Climatology and Norm Stats (A4)
     # Only run if finalize=True or if train split is covered
-    if finalize or set(built_years) == set(years_to_process):
+    if part:
+        logger.info("Part store: skipping finalize; run `oceanscope_ml.data.parts stats` next.")
+    elif finalize or set(built_years) == set(years_to_process):
         ds_master = xr.open_zarr(zarr_dest)
         master_dates = pd.to_datetime(ds_master.coords["time"].values)
         train_start = pd.Timestamp(config.splits.train[0])
         train_end = pd.Timestamp(config.splits.train[1])
-        has_train_dates = np.any((master_dates >= train_start) & (master_dates <= train_end))
+        # Pre-allocated dates of unbuilt years are all-NaN and do not count.
+        has_train_dates = np.any(
+            (master_dates >= train_start)
+            & (master_dates <= train_end)
+            & np.isin(master_dates.year, sorted(set(built_years)))
+        )
 
         if has_train_dates:
             logger.info(
@@ -1516,6 +1558,17 @@ def main() -> None:
         default=None,
         help="netCDF with bathymetry and woa_clim_profile (from export_static); skips GEBCO/WOA",
     )
+    parser.add_argument(
+        "--smoke-days",
+        type=int,
+        default=None,
+        help="Smoke test: build only the first N days of each year (use a separate --out-dir)",
+    )
+    parser.add_argument(
+        "--part",
+        action="store_true",
+        help="One part of a multi-part build: skip finalize (run `parts stats` after all parts)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1537,6 +1590,8 @@ def main() -> None:
         finalize=args.finalize,
         stream=args.stream,
         static_file=Path(args.static_file) if args.static_file else None,
+        max_days=args.smoke_days,
+        part=args.part,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")

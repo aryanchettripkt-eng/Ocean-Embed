@@ -92,3 +92,13 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - `publish.hf_dataset_repo` = `zenzone3/oceanscope-outputs` (in use since P2).
 - Still `[CONFIRM]`, to be settled by validation experiments in P4: `history_days`, `long_history.days`, `aux_weight`, `depth_weights.in_band`, `finetune_argo.lambda`.
 - Proposed by Claude (REVIEW_P3 A8); approved by Aryan ("approved"), 2026-10-25.
+
+## 2026-10-27 — GREP end date and SSS version (from `copernicusmarine describe`)
+- **GREP end date:** `cmems_mod_glo_phy-mnstd_my_0.25deg_P1D-m` covers 1993-01-01 to 2025-12-31, so the 2020-12-15 cutoff no longer applies. Under the 2026-10-25 rule ("unless `copernicusmarine describe` shows later data"), GREP is built for 2021 and the 2021 headline compares the model with GLORYS12, GREP and ARMOR3D (PRD_AI_ML §1.1).
+- **SSS version:** `cmems_obs-mob_glo_phy-sss_my_multi_P1D` has only version 202311 (released 2023-11-30, retired 2026-11-24 13:00 UTC). The version is pinned in `PRODUCT_SPECS` so every year uses 202311, and all years must be built before 24 Nov.
+- Recorded by Claude from the `describe` output Aryan ran on 2026-10-27.
+
+## 2026-10-27 — Smoke run before the full build, and a multi-part store
+- Before any long build, one short Kaggle run (`ml/notebooks/smoke_cell.py`) builds the first 14 days of 1993, 2000, 2007, 2014, 2020 and 2021, each as its own part, then runs the stats step, the OK/FAIL check and the baselines. The full build starts only after it is clean. Its metrics are not results (mean-only climatology on 14 days per year).
+- The full build runs as part stores built with `build_store --part`, which skips the per-store finalize. `python -m oceanscope_ml.data.parts stats` then fits the train-only climatology and norm stats across all parts into a separate stats store, and baselines read `--store <parts…> --stats <stats>`. Parts are not merged.
+- Asked for by Aryan ("test whatever we have to in the smaller builds… before starting the large ones"), 2026-10-27.
