@@ -102,3 +102,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Before any long build, one short Kaggle run (`ml/notebooks/smoke_cell.py`) builds the first 14 days of 1993, 2000, 2007, 2014, 2020 and 2021, each as its own part, then runs the stats step, the OK/FAIL check and the baselines. The full build starts only after it is clean. Its metrics are not results (mean-only climatology on 14 days per year).
 - The full build runs as part stores built with `build_store --part`, which skips the per-store finalize. `python -m oceanscope_ml.data.parts stats` then fits the train-only climatology and norm stats across all parts into a separate stats store, and baselines read `--store <parts…> --stats <stats>`. Parts are not merged.
 - Asked for by Aryan ("test whatever we have to in the smaller builds… before starting the large ones"), 2026-10-27.
+
+## 2026-10-27 — Training plan decisions (OceanScope training plan doc)
+1. **Build:** the full 1993–2021 store is built as 4 parallel Kaggle parts (A 1993–1999, B 2000–2006, C 2007–2013, D 2014–2021, reusing the built 2017–2018), plus one separate stats step across the parts. Parts are not merged.
+2. **Training code** is written and tested on the existing 2017–2018 store while the full build runs.
+3. **Ablations** all use the same reduced budget (about 25 epochs) so they compare fairly; only the final model gets the full budget.
+4. **GPU:** Colab (Google AI Pro, 200 compute units per month) is the main GPU; Kaggle (about 30 GPU h) is the backup and runs the builds.
+- Proposed by Claude in the training plan; approved by Aryan ("I approve of the 4 decisions in the training plan"), 2026-10-27.
