@@ -281,6 +281,7 @@ def stream_copernicus(
     variables: list[str] | None = None,
     depths: tuple[float, float] | None = None,
     depth_levels: list[float] | None = None,
+    bracket_levels: list[float] | None = None,
 ) -> xr.Dataset:
     """Stream a remote Copernicus Marine dataset via copernicusmarine.open_dataset."""
     try:
@@ -319,7 +320,30 @@ def stream_copernicus(
                 matched_idx.append(idx)
         if len(matched_idx) == len(depth_levels):
             ds = ds.isel(depth=matched_idx)
+    elif bracket_levels is not None and "depth" in ds.coords:
+        # Keep only the source levels that linear interpolation to bracket_levels uses, so
+        # the download skips the other levels (same result as interpolating from all).
+        keep = bracketing_depth_indices(np.asarray(ds.coords["depth"].values), bracket_levels)
+        ds = ds.isel(depth=keep)
     return ds
+
+
+def bracketing_depth_indices(src_depths: np.ndarray, target_depths: list[float]) -> list[int]:
+    """Indices of the source levels at-or-above and at-or-below each target depth.
+
+    Linear interpolation (interpolate_depths_1d, including its exact-match and 5 cm clamp
+    paths) only reads these levels, so dropping the rest gives the same result.
+    """
+    src = np.asarray(src_depths, dtype=np.float64)
+    keep: set[int] = set()
+    for t in target_depths:
+        above = np.where(src <= t)[0]
+        below = np.where(src >= t)[0]
+        if len(above):
+            keep.add(int(above[np.argmax(src[above])]))
+        if len(below):
+            keep.add(int(below[np.argmin(src[below])]))
+    return sorted(keep)
 
 
 def _open_cds_download(path: Path) -> xr.Dataset:
@@ -399,6 +423,8 @@ def stream_era5_daily(
     ds.attrs["is_daily_mean"] = True
     return ds
 
+
+STREAM_DOWNLOAD_THREADS = 16
 
 ARCO_ERA5_URL = (
     "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
@@ -943,6 +969,7 @@ def reduce_year_dataset(
                 dates=(start_date, end_date),
                 variables=["thetao_mean"],
                 depths=(0.0, 1250.0),
+                bracket_levels=depths_m,
             )
             source_files.append(f"copernicusmarine:{PRODUCT_SPECS['grep']['dataset_id']}:{year}")
         except Exception as e:
@@ -993,6 +1020,7 @@ def reduce_year_dataset(
                 dates=(start_date, end_date),
                 variables=["to"],
                 depths=(0.0, 1100.0),
+                bracket_levels=depths_m,
             )
             source_files.append(f"copernicusmarine:{PRODUCT_SPECS['armor3d']['dataset_id']}:{year}")
         except Exception as e:
@@ -1110,6 +1138,12 @@ def build_store(
         plan = plan_store_build(years_to_process, config)
         print_dry_run_plan(plan)
         return Path(out_dir or config.paths.processed) / f"oceanscope_{config.dataset_version}.zarr"
+
+    if stream:
+        import dask
+
+        # Remote reads are latency-bound, not CPU-bound: fetch many chunks at once.
+        dask.config.set(scheduler="threads", num_workers=STREAM_DOWNLOAD_THREADS)
 
     out_base = Path(out_dir or config.paths.processed)
     out_base.mkdir(parents=True, exist_ok=True)

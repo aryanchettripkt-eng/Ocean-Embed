@@ -187,3 +187,35 @@ def test_hourly_to_daily_mean_matches_hourly_reducer() -> None:
     ref_wind = reduce_era5_winds(hourly, grid, target_time=days.values)
     new_wind = reduce_era5_winds(daily, grid, target_time=days.values)
     np.testing.assert_allclose(new_wind["u_wind"].values, ref_wind["u_wind"].values, rtol=1e-4)
+
+
+def test_bracketing_levels_give_same_interpolation() -> None:
+    """Interpolating from only the bracketing levels equals interpolating from all levels."""
+    from oceanscope_ml.data.build_store import bracketing_depth_indices
+    from oceanscope_ml.data.reduce import interpolate_depths_1d
+
+    src = np.array([0.506, 1.5, 2.6, 5.1, 10.0, 20.0, 47.0, 100.0, 300.0, 1045.0, 1245.0])
+    targets = [0.494, 5.078, 9.573, 18.496, 47.374, 222.475, 1062.44]
+    rng = np.random.default_rng(1)
+    values = rng.normal(20, 3, (len(src), 4, 5)).astype(np.float32)
+    values[8:, 0, 0] = np.nan  # seafloor above 300 m in one column
+
+    keep = bracketing_depth_indices(src, targets)
+    assert len(keep) < len(src)
+    full = interpolate_depths_1d(values, src, targets)
+    sub = interpolate_depths_1d(values[keep], src[keep], targets)
+    np.testing.assert_allclose(sub, full, equal_nan=True)
+
+
+def test_bracketing_levels_exact_match_path() -> None:
+    """When every target matches a level within 5 cm, the subset takes the same fast path."""
+    from oceanscope_ml.data.build_store import bracketing_depth_indices
+    from oceanscope_ml.data.reduce import interpolate_depths_1d
+
+    src = np.array([0.494, 1.5, 5.078, 7.0, 9.573, 1062.4399])
+    targets = [0.494, 5.078, 9.573, 1062.44]
+    values = np.random.default_rng(2).normal(20, 3, (len(src), 3, 3)).astype(np.float32)
+    keep = bracketing_depth_indices(src, targets)
+    full = interpolate_depths_1d(values, src, targets)
+    sub = interpolate_depths_1d(values[keep], src[keep], targets)
+    np.testing.assert_allclose(sub, full, equal_nan=True)
