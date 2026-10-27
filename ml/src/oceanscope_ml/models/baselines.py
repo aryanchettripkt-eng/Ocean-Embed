@@ -69,6 +69,15 @@ def compute_valid_pixel_mask(
         if v in ds_t:
             valid_cell_mask &= np.isfinite(ds_t[v].values)
 
+    # Static features have their own land masks (GEBCO, WOA23) that can differ from the
+    # dynamic inputs at the coast; a NaN there breaks the Ridge normal equations.
+    if "bathymetry" in ds:
+        valid_cell_mask &= np.isfinite(ds["bathymetry"].values)
+    if "woa_clim_profile" in ds:
+        woa = ds["woa_clim_profile"].values
+        woa_surface = woa[0] if woa.ndim == 3 else woa[0, 0]
+        valid_cell_mask &= np.isfinite(woa_surface)
+
     return valid_cell_mask, clim_t
 
 
@@ -276,7 +285,7 @@ def fit_ridge_baseline(
 
     for d in range(n_depths):
         y_d = Y_train[:, d]
-        valid_idx = np.where(np.isfinite(y_d))[0]
+        valid_idx = np.where(np.isfinite(y_d) & np.all(np.isfinite(X_norm), axis=1))[0]
         if len(valid_idx) == 0:
             continue
         X_sub = X_norm[valid_idx]

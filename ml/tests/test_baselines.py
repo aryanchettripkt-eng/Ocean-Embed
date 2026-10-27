@@ -251,6 +251,36 @@ def test_ridge_baseline_fit_and_evaluate(
     assert (df_ridge["rmse_c"] >= 0.0).all()
 
 
+def test_ridge_skips_cells_with_nan_static_fields(
+    test_processed_store: tuple[Path, MockConfig],
+) -> None:
+    """Ridge must not see NaN where GEBCO/WOA land masks differ from the dynamic inputs."""
+    store_path, cfg = test_processed_store
+    ds = xr.open_zarr(store_path).load()
+
+    bathy = ds["bathymetry"].values.copy()
+    bathy[0, 0] = np.nan
+    ds["bathymetry"] = (ds["bathymetry"].dims, bathy)
+    woa = ds["woa_clim_profile"].values.copy()
+    if woa.ndim == 3:
+        woa[:, 1, 1] = np.nan
+    else:
+        woa[:, :, 1, 1] = np.nan
+    ds["woa_clim_profile"] = (ds["woa_clim_profile"].dims, woa)
+
+    train_dates = pd.date_range("2019-01-01", periods=3, freq="D")
+    X_train, Y_train, _ = extract_pixel_features_and_targets(
+        ds=ds, target_dates=train_dates, depths_m=cfg.depths_m
+    )
+    assert np.isfinite(X_train).all()
+
+    # A stray NaN feature row must be dropped by the fit, not crash the solver.
+    X_bad = X_train.copy()
+    X_bad[0, 0] = np.nan
+    W, _, _, _ = fit_ridge_baseline(X_bad, Y_train, alpha=1.0)
+    assert np.isfinite(W).all()
+
+
 def test_run_baselines_end_to_end(
     test_processed_store: tuple[Path, MockConfig], tmp_path: Path
 ) -> None:
