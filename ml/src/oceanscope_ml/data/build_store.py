@@ -400,6 +400,95 @@ def stream_era5_daily(
     return ds
 
 
+ARCO_ERA5_URL = (
+    "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
+)
+# ARCO long name -> ERA5 short name, and whether the field is an hourly accumulation.
+ARCO_ERA5_VARIABLES = {
+    "10m_u_component_of_wind": ("u10", False),
+    "10m_v_component_of_wind": ("v10", False),
+    "surface_net_solar_radiation": ("ssr", True),
+    "surface_net_thermal_radiation": ("str", True),
+    "surface_sensible_heat_flux": ("sshf", True),
+    "surface_latent_heat_flux": ("slhf", True),
+    "total_precipitation": ("tp", True),
+}
+
+
+def hourly_to_daily_mean(ds_hourly: xr.Dataset, days: pd.DatetimeIndex) -> xr.Dataset:
+    """Daily means of hourly ERA5, matching the CDS daily-statistics product.
+
+    Accumulations are labelled by the end of the hour, so they are shifted back one hour
+    before grouping by UTC day (same rule as reduce_era5_fluxes). Days with fewer than
+    18 hours are NaN.
+    """
+    out = {}
+    times = pd.to_datetime(ds_hourly["time"].values)
+    for name, da in ds_hourly.data_vars.items():
+        accum = bool(da.attrs.get("is_accumulation", False))
+        day_of = (times - pd.Timedelta(hours=1) if accum else times).normalize()
+        daily = np.full((len(days),) + da.shape[1:], np.nan, dtype=np.float32)
+        values = da.values
+        for i, day in enumerate(days):
+            sel = day_of == day
+            if int(sel.sum()) >= 18:
+                daily[i] = np.nanmean(values[sel], axis=0)
+        attrs = {k: v for k, v in da.attrs.items() if k != "is_accumulation"}
+        out[name] = xr.DataArray(
+            daily,
+            dims=da.dims,
+            coords={"time": days, **{d: ds_hourly[d] for d in da.dims[1:]}},
+            attrs=attrs,
+        )
+    ds = xr.Dataset(out)
+    ds.attrs["daily_statistic"] = "daily_mean"  # a string attr, so it survives netCDF
+    return ds
+
+
+def stream_era5_arco(
+    year: int,
+    bbox: tuple[float, float, float, float],
+    scratch_dir: Path,
+    url: str = ARCO_ERA5_URL,
+) -> xr.Dataset:
+    """Daily-mean ERA5 for one year from Google's public ARCO ERA5 Zarr (no CDS queue).
+
+    Reads hourly fields month by month, reduces them to daily means right away (one month
+    of hourly data is ~0.7 GB) and caches each month in scratch_dir.
+    """
+    lon_min, lon_max, lat_min, lat_max = bbox
+    zarr.config.set({"async.concurrency": 64})
+    src: xr.Dataset | None = None
+    months = []
+    for month in range(1, 13):
+        month_file = scratch_dir / f"era5_arco_daily_{year}_{month:02d}.nc"
+        if not (month_file.exists() and month_file.stat().st_size > 0):
+            if src is None:
+                src = xr.open_zarr(url, chunks=None, consolidated=True, zarr_format=2)
+            start = pd.Timestamp(year=year, month=month, day=1)
+            days = pd.date_range(start, start + pd.offsets.MonthEnd(0), freq="D")
+            logger.info("Reading ERA5 %d-%02d from ARCO ERA5 (Google Cloud)...", year, month)
+            # Include 00 UTC of the next day: it closes the last day's accumulations.
+            hourly = (
+                src[list(ARCO_ERA5_VARIABLES)]
+                .sel(
+                    time=slice(days[0], days[-1] + pd.Timedelta(days=1)),
+                    latitude=slice(lat_max + 1.0, lat_min - 1.0),
+                    longitude=slice(lon_min - 1.0, lon_max + 1.0),
+                )
+                .load()
+            )
+            for long_name, (short, accum) in ARCO_ERA5_VARIABLES.items():
+                hourly[long_name].attrs["is_accumulation"] = accum
+            hourly = hourly.rename({k: v[0] for k, v in ARCO_ERA5_VARIABLES.items()})
+            hourly_to_daily_mean(hourly, days).to_netcdf(month_file)
+        months.append(xr.open_dataset(month_file))
+    ds = xr.concat(months, dim="time")
+    ds.attrs["daily_statistic"] = "daily_mean"
+    ds.attrs["is_daily_mean"] = True
+    return ds
+
+
 def stream_oscar(
     year: int,
     bbox: tuple[float, float, float, float],
@@ -723,8 +812,13 @@ def reduce_year_dataset(
         ds_raw_winds = xr.open_dataset(winds_files[0])
         ds_raw_flux = xr.open_dataset(flux_files[0])
     elif stream:
-        ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch)
-        source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
+        try:
+            ds_raw_era5 = stream_era5_arco(year, bbox, effective_scratch)
+            source_files.append(f"arco-era5:full_37-1h-0p25deg-chunk-1:{year}")
+        except Exception as e:
+            logger.warning("ARCO ERA5 failed (%s); falling back to CDS daily statistics.", e)
+            ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch)
+            source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
         ds_raw_winds = ds_raw_era5
         ds_raw_flux = ds_raw_era5
     else:

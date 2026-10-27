@@ -461,6 +461,7 @@ def test_stream_build_store_full_year_mocked(
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream_copernicus)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_era5)
+    monkeypatch.setattr(bs_mod, "stream_era5_arco", lambda *args, **kwargs: ds_mock_era5)
     monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_oscar)
     monkeypatch.setattr(bs_mod, "stream_gebco", lambda *args, **kwargs: ds_mock_gebco)
     monkeypatch.setattr(bs_mod, "stream_woa", lambda *args, **kwargs: da_mock_woa)
@@ -646,6 +647,7 @@ def test_stream_silent_failures_raise(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", lambda *args, **kwargs: ds_mock)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock)
+    monkeypatch.setattr(bs_mod, "stream_era5_arco", lambda *args, **kwargs: ds_mock)
     monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock)
 
     def failing_stream(*args: Any, **kwargs: Any) -> Any:
@@ -816,6 +818,7 @@ def test_grep_ends_partway_through_year(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_2d)
+    monkeypatch.setattr(bs_mod, "stream_era5_arco", lambda *args, **kwargs: ds_mock_2d)
     monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_2d)
 
     ds_year, _ = bs_mod.reduce_year_dataset(

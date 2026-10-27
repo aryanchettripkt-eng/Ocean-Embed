@@ -66,6 +66,16 @@ def era5():
     return f"file={kind} vars={list(ds.data_vars)} dims={dict(ds.sizes)}"
 
 
+def era5_arco():
+    ds = xr.open_zarr(bs.ARCO_ERA5_URL, chunks=None, consolidated=True, zarr_format=2)
+    sub = ds["total_precipitation"].sel(
+        time=slice("2017-01-01T00", "2017-01-01T03"),
+        latitude=slice(bbox[3] + 1, bbox[2] - 1),
+        longitude=slice(bbox[0] - 1, bbox[1] + 1),
+    )
+    return f"dims={dict(sub.load().sizes)}"
+
+
 def find_static():
     hits = (
         sorted(Path("/kaggle/input").rglob("static_fields.nc"))
@@ -102,4 +112,4 @@ chk("OSCAR (Earthdata)", oscar)
 chk("Static fields (GEBCO + WOA)", static)
 chk("GREP (Copernicus)", cm("grep", "thetao_mean", (0.0, 1250.0)))
 chk("ARMOR3D (Copernicus)", cm("armor3d", "to", (0.0, 1100.0)))
-chk("ERA5 (CDS, may queue a few minutes)", era5)
+chk("ERA5 (Google Cloud ARCO)", era5_arco)

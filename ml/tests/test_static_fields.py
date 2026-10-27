@@ -142,3 +142,48 @@ def test_stream_era5_daily_requests_month_by_month(
     calls.clear()
     stream_era5_daily(2017, (60.0, 62.0, 10.0, 12.0), tmp_path)
     assert calls == []  # every month is cached
+
+
+def test_hourly_to_daily_mean_matches_hourly_reducer() -> None:
+    """ARCO hourly -> daily means gives the same fluxes as feeding hourly data to the reducer."""
+    from oceanscope_ml.data.build_store import hourly_to_daily_mean
+    from oceanscope_ml.data.reduce import reduce_era5_fluxes, reduce_era5_winds
+
+    grid = TargetGrid.from_bounds(60.0, 61.0, 10.0, 11.0, 0.25)
+    lats = np.arange(11.5, 9.4, -0.25)
+    lons = np.arange(59.5, 61.6, 0.25)
+    hours = pd.date_range("2017-01-01T00", "2017-01-04T00", freq="h")
+    rng = np.random.default_rng(0)
+    shape = (len(hours), len(lats), len(lons))
+    data = {
+        "u10": ("m s**-1", False, rng.normal(0, 5, shape)),
+        "v10": ("m s**-1", False, rng.normal(0, 5, shape)),
+        "ssr": ("J m**-2", True, rng.uniform(0, 3e6, shape)),
+        "str": ("J m**-2", True, rng.uniform(-3e5, 0, shape)),
+        "sshf": ("J m**-2", True, rng.uniform(-1e5, 0, shape)),
+        "slhf": ("J m**-2", True, rng.uniform(-5e5, 0, shape)),
+        "tp": ("m", True, rng.uniform(0, 1e-3, shape)),
+    }
+    hourly = xr.Dataset(
+        {
+            k: xr.DataArray(
+                v.astype(np.float32),
+                dims=("time", "latitude", "longitude"),
+                attrs={"units": u, "is_accumulation": acc},
+            )
+            for k, (u, acc, v) in data.items()
+        },
+        coords={"time": hours, "latitude": lats, "longitude": lons},
+    )
+    days = pd.date_range("2017-01-01", "2017-01-03", freq="D")
+    daily = hourly_to_daily_mean(hourly, days)
+    assert daily.attrs["daily_statistic"] == "daily_mean"
+    assert daily["ssr"].attrs["units"] == "J m**-2"
+
+    ref_flux = reduce_era5_fluxes(hourly, grid, target_time=days.values)
+    new_flux = reduce_era5_fluxes(daily, grid, target_time=days.values)
+    for v in ("net_heat_flux", "precip"):
+        np.testing.assert_allclose(new_flux[v].values, ref_flux[v].values, rtol=1e-4)
+    ref_wind = reduce_era5_winds(hourly, grid, target_time=days.values)
+    new_wind = reduce_era5_winds(daily, grid, target_time=days.values)
+    np.testing.assert_allclose(new_wind["u_wind"].values, ref_wind["u_wind"].values, rtol=1e-4)
