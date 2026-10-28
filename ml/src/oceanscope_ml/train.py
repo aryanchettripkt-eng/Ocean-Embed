@@ -304,6 +304,7 @@ def train_run(
     device_choice: str = "auto",
     epochs: int | None = None,
     stats_path: str | Path | None = None,
+    cache_dir: str | Path | None = None,
 ) -> TrainResult:
     """Train or resume one run, up to ``epochs`` completed epochs (default: max_epochs)."""
     train_cfg = config.train
@@ -351,8 +352,12 @@ def train_run(
         logger.info("Run %s has nothing left to do (epoch %d)", run_id, state.epoch)
         return _result(run_id, state, len(channels), model, ckpt_dir)
 
-    train_ds = OceanScopeDataset(store_path, config, split="train", stats_path=stats_path)
-    val_ds = OceanScopeDataset(store_path, config, split="val", stats_path=stats_path)
+    train_ds = OceanScopeDataset(
+        store_path, config, split="train", stats_path=stats_path, cache_dir=cache_dir
+    )
+    val_ds = OceanScopeDataset(
+        store_path, config, split="val", stats_path=stats_path, cache_dir=cache_dir
+    )
     if train_ds.n_channels != len(channels):
         raise ValueError("Dataset channel count does not match channel_list")
     sigma_d = torch.tensor(train_ds.sigma_d, dtype=torch.float32, device=device)
@@ -487,6 +492,11 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stats", default=None, help="Stats store with clim and norm_stats, for a multi-part build"
     )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Local fast-disk folder for the training cache, built on first use (much faster)",
+    )
     parser.add_argument("--run-id", default=None, help="Run name (default: date_unet_githash)")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument(
@@ -509,7 +519,13 @@ def main() -> None:
     )
     run_id = args.run_id or default_run_id(str(config.train.get("model", "unet")))
     result = train_run(
-        config, store, run_id, device_choice=args.device, epochs=args.epochs, stats_path=args.stats
+        config,
+        store,
+        run_id,
+        device_choice=args.device,
+        epochs=args.epochs,
+        stats_path=args.stats,
+        cache_dir=args.cache_dir,
     )
     logger.info(
         "Run %s: %d epochs complete, best epoch %d (val RMSE %.3f C), finished=%s",

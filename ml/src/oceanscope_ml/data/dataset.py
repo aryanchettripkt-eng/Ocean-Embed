@@ -20,6 +20,7 @@ import torch
 import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
+from oceanscope_ml.data.cache import build_cache, open_cache
 from oceanscope_ml.data.channels import ChannelSpec, channel_list
 from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.transform import TestLeakageError, check_no_test_leakage
@@ -81,6 +82,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         config: ExperimentConfig,
         split: str,
         stats_path: str | Path | None = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         if split not in TRAINABLE_SPLITS:
             raise TestLeakageError(
@@ -98,7 +100,15 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         self.depth_levels = int(config.train.get("depth_levels", 4))
         self.pad_multiple = 2**self.depth_levels
         self._lookback = _lookback_days(self.channels)
+        # Each variable reads only the days its own channels need (sla/adt: 60, others: 6).
+        self._var_lookback = {
+            var: _lookback_days([c for c in self.channels if c.source == var])
+            for var in self._window_vars()
+        }
         self._ds: xr.Dataset | None = None
+        # With a cache dir, samples come from the fast local cache (oceanscope_ml.data.cache).
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
+        self._arrays: dict[str, np.ndarray] | None = None
 
         with self._open_store() as ds:
             _check_store_matches_config(ds, config)
@@ -111,6 +121,21 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             self._n_lon = int(ds.sizes["lon"])
             self._has_grep = "grep_mean" in ds.data_vars
             self._has_target_valid = "target_valid" in ds.data_vars
+            # Static fields are small and read for every sample, so keep them in memory.
+            self._static = {
+                v: np.asarray(ds[v].values) for v in ("bathymetry", "ocean_mask") if v in ds
+            }
+            if "woa_clim_profile" in ds:
+                woa = ds["woa_clim_profile"]
+                # Months 1..12 unless the store labels them otherwise.
+                months = woa["month"].values if "month" in woa.coords else np.arange(1, 13)
+                self._woa_months = [int(m) for m in months]
+                self._static["woa_clim_profile"] = np.asarray(woa.values)
+            if self.cache_dir is not None:
+                build_cache(ds, config, self._window_vars(), self.cache_dir)
+                n_cached = open_cache(self.cache_dir)[0]["n_days"]
+                if int(self._positions.max()) >= n_cached:
+                    raise ValueError("Training cache does not cover every sample of this split")
 
         if self.sigma_d.shape != (len(config.depths_m),) or np.any(self.sigma_d <= 0):
             raise ValueError("norm_stats sigma_d must be positive, one value per depth")
@@ -206,6 +231,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_ds"] = None  # open handles do not cross process boundaries
+        state["_arrays"] = None  # memory maps reopen in each worker
         return state
 
     def _open_store(self) -> xr.Dataset:
@@ -216,15 +242,28 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             self._ds = self._open_store()
         return self._ds
 
+    def _cache(self) -> dict[str, np.ndarray]:
+        if self._arrays is None:
+            assert self.cache_dir is not None
+            self._arrays = open_cache(self.cache_dir)[1]
+        return self._arrays
+
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         ds = self._open()
         t = int(self._positions[index])
         day = pd.Timestamp(ds["time"].values[t])
         doy = day.day_of_year
-        window = {
-            var: ds[var].isel(time=slice(t - self._lookback, t + 1)).values
-            for var in self._window_vars()
-        }
+        if self.cache_dir is not None:
+            cache = self._cache()
+            window = {
+                var: np.asarray(cache[var][t - self._var_lookback[var] : t + 1], dtype=np.float64)
+                for var in self._window_vars()
+            }
+        else:
+            window = {
+                var: ds[var].isel(time=slice(t - self._var_lookback[var], t + 1)).values
+                for var in self._window_vars()
+            }
 
         planes = [self._input_plane(c, ds, window, t, day, doy) for c in self.channels]
         x = np.stack(planes).astype(np.float32)
@@ -262,21 +301,22 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         kind = channel.kind
 
         if kind == "dynamic":
-            plane = window[channel.source][self._lookback - channel.lag]
-            return self._normalize(channel.source, plane)
+            plane = window[channel.source][self._var_lookback[channel.source] - channel.lag]
+            return self._normalize_window(channel.source, plane)
 
         if kind == "long_history":
-            # Index 0 of the window block is lag _lookback; lag L is at index _lookback - L.
+            # Index 0 of the window block is the variable's own lookback lag; lag L is at
+            # index lookback - L.
             first = channel.lag
             rows = [
-                window[channel.source][self._lookback - (first + k)]
+                window[channel.source][self._var_lookback[channel.source] - (first + k)]
                 for k in range(channel.window_days)
             ]
             with warnings.catch_warnings():
                 # All-NaN cells (land) are expected here and become 0 after nan_to_num.
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 frame = np.nanmean(np.stack(rows), axis=0)
-            return self._normalize(channel.source, frame)
+            return self._normalize_window(channel.source, frame)
 
         if kind == "index":
             value = float(ds[channel.source].isel(time=t).values)
@@ -284,10 +324,10 @@ class OceanScopeDataset(torch.utils.data.Dataset):
 
         if kind == "static":
             if channel.source == "bathymetry":
-                return self._normalize("bathymetry", ds["bathymetry"].values)
-            month = day.month
-            woa = ds["woa_clim_profile"].sel(month=month).isel(depth=channel.depth_index)
-            return self._normalize_depth("woa_clim_profile", channel.depth_index, woa.values)
+                return self._normalize("bathymetry", self._static["bathymetry"])
+            month_index = self._woa_months.index(day.month)
+            woa = self._static["woa_clim_profile"][month_index, channel.depth_index]
+            return self._normalize_depth("woa_clim_profile", channel.depth_index, woa)
 
         if kind == "extra":
             if channel.source == "doy_sin":
@@ -299,9 +339,15 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             if channel.source == "lon":
                 return np.broadcast_to(self._lon_scaled[None, :], shape).astype(np.float64)
             if channel.source == "ocean_mask":
-                return np.asarray(ds["ocean_mask"].values, dtype=np.float64)
+                return np.asarray(self._static["ocean_mask"], dtype=np.float64)
 
         raise NotImplementedError(f"Channel kind {kind!r} is not built yet")
+
+    def _normalize_window(self, source: str, plane: np.ndarray) -> np.ndarray:
+        """Dynamic inputs: the cache already holds them z-scored (the mean is linear)."""
+        if self.cache_dir is not None:
+            return np.asarray(plane, dtype=np.float64)
+        return self._normalize(source, plane)
 
     def _normalize(self, source: str, plane: np.ndarray) -> np.ndarray:
         mean, std = self._norm[source]
@@ -320,6 +366,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     def _targets(
         self, ds: xr.Dataset, t: int, doy: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+        if self.cache_dir is not None:
+            return self._cached_targets(t)
         clim_day = self._clim(ds, doy)
         sigma = self.sigma_d[:, None, None]
 
@@ -336,6 +384,23 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         if self._has_grep:
             grep = np.asarray(ds["grep_mean"].isel(time=t).values, dtype=np.float64)
             grep_anomaly = (grep - clim_day) / sigma
+            grep_mask = np.isfinite(grep_anomaly)
+            has_grep = bool(grep_mask.any())
+            grep_y = np.where(grep_mask, grep_anomaly, 0.0).astype(np.float32)
+        return y, mask, grep_y, grep_mask, has_grep
+
+    def _cached_targets(
+        self, t: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
+        cache = self._cache()
+        anomaly = np.asarray(cache["y"][t], dtype=np.float32)
+        mask = np.isfinite(anomaly)
+        y = np.where(mask, anomaly, 0.0).astype(np.float32)
+        grep_y = np.zeros_like(y)
+        grep_mask = np.zeros(mask.shape, dtype=bool)
+        has_grep = False
+        if "grep_y" in cache:
+            grep_anomaly = np.asarray(cache["grep_y"][t], dtype=np.float32)
             grep_mask = np.isfinite(grep_anomaly)
             has_grep = bool(grep_mask.any())
             grep_y = np.where(grep_mask, grep_anomaly, 0.0).astype(np.float32)
