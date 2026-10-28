@@ -110,3 +110,26 @@ def test_reads_a_part_store_with_a_separate_stats_store(
     assert len(parted) == len(single)
     for key, value in single[0].items():
         assert torch.equal(parted[0][key], value), key
+
+
+def test_drops_days_whose_history_crosses_a_gap_between_parts(
+    tmp_path: Path, store: Path, config: ExperimentConfig
+) -> None:
+    """Parts built for separate years leave gaps; no sample may read history across one."""
+    import pandas as pd
+    import xarray as xr
+
+    ds = xr.open_zarr(store)
+    times = pd.to_datetime(ds["time"].values)
+    hole = pd.date_range("2000-04-01", "2000-04-10")
+    gappy = ds.sel(time=times[~times.isin(hole)])
+    gappy.to_zarr(tmp_path / "gappy.zarr", mode="w")
+
+    full = OceanScopeDataset(store, config, split="train")
+    parted = OceanScopeDataset(tmp_path / "gappy.zarr", config, split="train")
+    lookback = pd.Timedelta(days=full._lookback)
+    full_dates = times[full._positions]
+    want = [d for d in full_dates if not ((hole >= d - lookback) & (hole <= d)).any()]
+    got = pd.to_datetime(gappy["time"].values)[parted._positions]
+    assert list(got) == want
+    assert 0 < len(parted) < len(full)

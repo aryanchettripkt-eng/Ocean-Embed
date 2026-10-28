@@ -42,8 +42,10 @@ def _lookback_days(channels: list[ChannelSpec]) -> int:
 
 def _check_store_matches_config(ds: xr.Dataset, config: ExperimentConfig) -> None:
     times = pd.to_datetime(ds["time"].values)
-    if len(times) > 1 and not np.all(np.diff(times.values) == np.timedelta64(1, "D")):
-        raise ValueError("Store time axis must be consecutive days without gaps")
+    # Parts may leave gaps between built years; samples whose history crosses one are dropped
+    # in _select_positions. Duplicates or a reversed axis are still errors.
+    if len(times) > 1 and not np.all(np.diff(times.values) > np.timedelta64(0, "D")):
+        raise ValueError("Store time axis must be strictly increasing")
 
     store_depths = np.asarray(ds["depth"].values, dtype=np.float64)
     cfg_depths = np.asarray(config.depths_m, dtype=np.float64)
@@ -208,10 +210,14 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         in_split = (times >= start) & (times <= last_day)
         candidates = np.flatnonzero(in_split)
         positions = candidates[candidates >= self._lookback]
+        # The history window is read by position, so it must be unbroken calendar days:
+        # a day just after a gap between built years has no real history.
+        span = times.values[positions] - times.values[positions - self._lookback]
+        positions = positions[span == np.timedelta64(self._lookback, "D")]
         dropped = len(candidates) - len(positions)
         if dropped:
             logger.info(
-                "%s: %d days dropped for lack of %d days of history",
+                "%s: %d days dropped for lack of %d unbroken days of history",
                 self.split,
                 dropped,
                 self._lookback,
