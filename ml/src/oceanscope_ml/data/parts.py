@@ -336,7 +336,12 @@ def check_parts(
             bad = [
                 ch
                 for ch, s in ns.get("channels", {}).items()
-                if not (np.isfinite(s["mean"]) and np.isfinite(s["std"]) and s["std"] > 0)
+                # WOA stats are per depth (lists); the other channels are scalars.
+                if not (
+                    np.all(np.isfinite(s["mean"]))
+                    and np.all(np.isfinite(s["std"]))
+                    and np.all(np.asarray(s["std"]) > 0)
+                )
             ]
             sigma = ns.get("sigma_d", [])
             n_ch = len(ns.get("channels", {}))

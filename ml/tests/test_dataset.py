@@ -78,3 +78,35 @@ def test_missing_channel_stats_are_refused(store: Path, config: ExperimentConfig
     _set_root_attr(store, "norm_stats", {**stats, "channels": channels})
     with pytest.raises(KeyError, match="sla"):
         OceanScopeDataset(store, config, split="train")
+
+
+def test_reads_a_part_store_with_a_separate_stats_store(
+    tmp_path: Path, store: Path, config: ExperimentConfig
+) -> None:
+    """A multi-part build keeps clim and norm_stats in a stats store; items must not change."""
+    import pandas as pd
+    import xarray as xr
+
+    ds = xr.open_zarr(store)
+    times = pd.to_datetime(ds["time"].values)
+    stats = ds[["clim"]].copy()
+    stats.attrs = {k: ds.attrs[k] for k in ("norm_stats", "split_dates")}
+    stats.to_zarr(tmp_path / "stats.zarr", mode="w")
+
+    part = ds.drop_vars("clim")
+    part.attrs = {k: v for k, v in ds.attrs.items() if k not in ("norm_stats", "split_dates")}
+    years = sorted(set(times.year))
+    part.attrs["built_years"] = years
+    part.attrs["built_ranges"] = {
+        str(y): [str(times[times.year == y][0].date()), str(times[times.year == y][-1].date())]
+        for y in years
+    }
+    part.to_zarr(tmp_path / "part.zarr", mode="w")
+
+    single = OceanScopeDataset(store, config, split="train")
+    parted = OceanScopeDataset(
+        [tmp_path / "part.zarr"], config, split="train", stats_path=tmp_path / "stats.zarr"
+    )
+    assert len(parted) == len(single)
+    for key, value in single[0].items():
+        assert torch.equal(parted[0][key], value), key

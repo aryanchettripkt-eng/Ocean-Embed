@@ -87,6 +87,7 @@ def test_parts_stats_check_and_baselines(
     assert ds_stats.attrs["n_train_dates"] == 5
     assert ds_stats.attrs["clim_harmonics"] == 0  # 5 days cannot fit an annual cycle
     assert ds_stats.attrs["built_years"] == [2018, 2019]
+    assert "woa_clim_profile" in ds_stats.attrs["norm_stats"]["channels"]
     np.testing.assert_allclose(ds_stats["clim"].isel(dayofyear=200, depth=0).values, 24.0)
 
     ds = open_parts([part_a, part_b], stats)

@@ -299,10 +299,11 @@ def _gpu_name(device: torch.device) -> str:
 
 def train_run(
     config: ExperimentConfig,
-    store_path: str | Path,
+    store_path: str | Path | list[Path],
     run_id: str,
     device_choice: str = "auto",
     epochs: int | None = None,
+    stats_path: str | Path | None = None,
 ) -> TrainResult:
     """Train or resume one run, up to ``epochs`` completed epochs (default: max_epochs)."""
     train_cfg = config.train
@@ -350,8 +351,8 @@ def train_run(
         logger.info("Run %s has nothing left to do (epoch %d)", run_id, state.epoch)
         return _result(run_id, state, len(channels), model, ckpt_dir)
 
-    train_ds = OceanScopeDataset(store_path, config, split="train")
-    val_ds = OceanScopeDataset(store_path, config, split="val")
+    train_ds = OceanScopeDataset(store_path, config, split="train", stats_path=stats_path)
+    val_ds = OceanScopeDataset(store_path, config, split="val", stats_path=stats_path)
     if train_ds.n_channels != len(channels):
         raise ValueError("Dataset channel count does not match channel_list")
     sigma_d = torch.tensor(train_ds.sigma_d, dtype=torch.float32, device=device)
@@ -477,7 +478,15 @@ def _result(
 def build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train or resume the OceanScope U-Net.")
     parser.add_argument("--config", default="configs/experiment.yaml")
-    parser.add_argument("--store", default=None, help="Processed Zarr store (default from config)")
+    parser.add_argument(
+        "--store",
+        nargs="+",
+        default=None,
+        help="Processed Zarr store, or the part stores of a multi-part build (default from config)",
+    )
+    parser.add_argument(
+        "--stats", default=None, help="Stats store with clim and norm_stats, for a multi-part build"
+    )
     parser.add_argument("--run-id", default=None, help="Run name (default: date_unet_githash)")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument(
@@ -493,11 +502,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = build_cli().parse_args()
     config = load_config(args.config)
-    store = args.store or (
-        Path(config.paths.processed) / f"oceanscope_{config.dataset_version}.zarr"
+    store: Path | list[Path] = (
+        [Path(p) for p in args.store]
+        if args.store
+        else Path(config.paths.processed) / f"oceanscope_{config.dataset_version}.zarr"
     )
     run_id = args.run_id or default_run_id(str(config.train.get("model", "unet")))
-    result = train_run(config, store, run_id, device_choice=args.device, epochs=args.epochs)
+    result = train_run(
+        config, store, run_id, device_choice=args.device, epochs=args.epochs, stats_path=args.stats
+    )
     logger.info(
         "Run %s: %d epochs complete, best epoch %d (val RMSE %.3f C), finished=%s",
         result.run_id,

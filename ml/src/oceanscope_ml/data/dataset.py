@@ -21,6 +21,7 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.channels import ChannelSpec, channel_list
+from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.transform import TestLeakageError, check_no_test_leakage
 
 logger = logging.getLogger("oceanscope_ml.data.dataset")
@@ -74,13 +75,23 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     - ``has_grep``: bool scalar; True when GREP exists for this date.
     """
 
-    def __init__(self, store_path: str | Path, config: ExperimentConfig, split: str) -> None:
+    def __init__(
+        self,
+        store_path: str | Path | list[Path],
+        config: ExperimentConfig,
+        split: str,
+        stats_path: str | Path | None = None,
+    ) -> None:
         if split not in TRAINABLE_SPLITS:
             raise TestLeakageError(
                 f"Dataset split must be one of {TRAINABLE_SPLITS}; got {split!r}. "
                 "The test period is read only by final_test (PRD_AI_ML §0 rule 3)."
             )
-        self.store_path = Path(store_path)
+        # One store, or the part stores of a multi-part build plus the stats store that
+        # holds `clim` and `norm_stats` (oceanscope_ml.data.parts).
+        paths = store_path if isinstance(store_path, list) else [store_path]
+        self.store_paths = [Path(p) for p in paths]
+        self.stats_path = Path(stats_path) if stats_path is not None else None
         self.config = config
         self.split = split
         self.channels = channel_list(config)
@@ -89,7 +100,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         self._lookback = _lookback_days(self.channels)
         self._ds: xr.Dataset | None = None
 
-        with xr.open_zarr(self.store_path) as ds:
+        with self._open_store() as ds:
             _check_store_matches_config(ds, config)
             self._check_norm_stats(ds)
             self.sigma_d = np.asarray(ds.attrs["norm_stats"]["sigma_d"], dtype=np.float32)
@@ -197,9 +208,12 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         state["_ds"] = None  # open handles do not cross process boundaries
         return state
 
+    def _open_store(self) -> xr.Dataset:
+        return open_parts(self.store_paths, self.stats_path)
+
     def _open(self) -> xr.Dataset:
         if self._ds is None:
-            self._ds = xr.open_zarr(self.store_path)
+            self._ds = self._open_store()
         return self._ds
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:

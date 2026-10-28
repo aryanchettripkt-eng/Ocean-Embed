@@ -116,7 +116,7 @@ def compute_norm_stats(
     ]
     target_channels = channels or [c for c in default_channels if c in ds_train.data_vars]
 
-    channel_stats: dict[str, dict[str, float]] = {}
+    channel_stats: dict[str, dict[str, Any]] = {}
 
     for ch in target_channels:
         vals = ds_train[ch].values  # shape (time, lat, lon)
@@ -145,6 +145,22 @@ def compute_norm_stats(
                 "mean": float(np.mean(valid_bathy)),
                 "std": float(np.std(valid_bathy)),
             }
+
+    # Static channel: WOA monthly climatology, one mean/std per depth over months and ocean
+    # cells. It has no time axis, so the train-only rule does not restrict it.
+    if "woa_clim_profile" in ds_train.data_vars:
+        woa = np.asarray(ds_train["woa_clim_profile"].values, dtype=np.float64)
+        if woa.ndim == 3:  # (depth, lat, lon) without a month axis
+            woa = woa[None]
+        woa_means: list[float] = []
+        woa_stds: list[float] = []
+        for d_idx in range(woa.shape[1]):
+            vals = woa[:, d_idx][:, ocean_mask]
+            vals = vals[np.isfinite(vals)]
+            std = float(np.std(vals)) if len(vals) else 1.0
+            woa_means.append(float(np.mean(vals)) if len(vals) else 0.0)
+            woa_stds.append(std if np.isfinite(std) and std > 1e-12 else 1.0)
+        channel_stats["woa_clim_profile"] = {"mean": woa_means, "std": woa_stds}
 
     # Per-depth anomaly standard deviation sigma_d: std(thetao - clim) over train dates
     # Computed via streaming running sums over time chunks (REVIEW_P3 R3 / memory)
