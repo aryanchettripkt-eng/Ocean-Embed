@@ -109,3 +109,8 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 3. **Ablations** all use the same reduced budget (about 25 epochs) so they compare fairly; only the final model gets the full budget.
 4. **GPU:** Colab (Google AI Pro, 200 compute units per month) is the main GPU; Kaggle (about 30 GPU h) is the backup and runs the builds.
 - Proposed by Claude in the training plan; approved by Aryan ("I approve of the 4 decisions in the training plan"), 2026-10-27.
+
+## 2026-10-28 — ARMOR3D only for validation and test years
+- Part C's first round took 3.7 h per year, and ARMOR3D alone was 170 min of 2007 and 80 min of 2008 (GLORYS about 51 min, GREP about 25 min, ERA5 about 14 min, the rest under 5 min).
+- ARMOR3D is only an external competitor at ARGO points (PRD_AI_ML §3, PHASES P3-4: "for the validation and test periods"), never an input or a target. `build_store` now fetches it only for years with a val or test date (2018–2021) and writes it as NaN for train-only years, listed in the store attr `armor3d_skipped_years`. The check reports those rows as "skipped (train-only year)". Train years already built with ARMOR3D keep it.
+- Proposed by Claude from the part C log, 2026-10-28.

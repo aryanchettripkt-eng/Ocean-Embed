@@ -172,3 +172,26 @@ def test_max_hours_stops_cleanly_and_resume_continues(
     first.chmod(0o755)
     assert zarr.open_group(str(second), mode="r").attrs["built_years"] == [2018, 2019]
     assert len(open_parts([second]).time) == 6
+
+
+def test_train_only_year_skips_armor3d(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, smoke_cfg: MockConfig
+) -> None:
+    """ARMOR3D is fetched only for val/test years; train years store NaN and still check OK."""
+    calls = install_stream_mocks(
+        monkeypatch, smoke_cfg.depths_m, pd.date_range("2018-01-01", "2019-01-31")
+    )
+    part = _build_part(tmp_path, smoke_cfg, "a", [2018, 2019], smoke_days=3)
+
+    armor_years = [s[:4] for ds_id, s, _ in calls["copernicus"] if "0.125deg_P1D-m" in ds_id]
+    assert armor_years == ["2019"]  # 2018 is train-only, 2019 is the val year
+    root = zarr.open_group(str(part), mode="r")
+    assert root.attrs["armor3d_skipped_years"] == [2018]
+    ds = open_parts([part])
+    assert bool(ds["armor3d"].sel(time="2018").isnull().all())
+    assert bool(np.isfinite(ds["armor3d"].sel(time="2019").isel(depth=0)).any())
+
+    rows = check_parts([part], expected_years=[2018, 2019])
+    assert print_check(rows) == 0, rows
+    armor = {r["year"]: r["detail"] for r in rows if r["item"] == "ARMOR3D"}
+    assert armor[2018] == "skipped (train-only year)"

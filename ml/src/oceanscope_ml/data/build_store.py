@@ -661,11 +661,13 @@ def reduce_year_dataset(
     cached_bathymetry: xr.DataArray | None = None,
     cached_woa_profile: xr.DataArray | None = None,
     max_days: int | None = None,
+    skip_armor3d: bool = False,
 ) -> tuple[xr.Dataset, list[str]]:
     """Reduce all products for a given year using shared reduce functions from raw files.
 
     Strictly uses find_product_files (PRD §0 Rule 1, REVIEW A1); never synthesizes missing files.
     ``max_days`` limits streaming to the first N days of the year (smoke test only).
+    ``skip_armor3d`` writes ARMOR3D as all-NaN instead of fetching it (train-only years).
     """
     source_files: list[str] = []
     processed_vars: dict[str, xr.DataArray] = {}
@@ -1021,6 +1023,26 @@ def reduce_year_dataset(
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
 
     # --- ARMOR3D 3D Temperature ---
+    # ARMOR3D is only an external competitor at ARGO points in the val and test periods
+    # (PRD_AI_ML §3, PHASES P3-4), so train-only years skip the slowest download of the build.
+    if skip_armor3d:
+        logger.info("Skipping ARMOR3D for %d: train-only year, never compared.", year)
+        processed_vars["armor3d"] = xr.DataArray(
+            np.full(
+                (len(target_dates), len(depths_m), len(target_grid.lats), len(target_grid.lons)),
+                np.nan,
+                dtype=np.float32,
+            ),
+            dims=("time", "depth", "lat", "lon"),
+            coords={
+                "time": target_dates,
+                "depth": np.array(depths_m, dtype=np.float64),
+                "lat": target_grid.lats,
+                "lon": target_grid.lons,
+            },
+        )
+        return xr.Dataset(data_vars=processed_vars), source_files
+
     armor_files = filter_files_by_year(find_product_files(raw_path, "armor3d", manifest), year)
     if armor_files:
         source_files.append(
@@ -1129,6 +1151,14 @@ def load_static_fields(
     )
     ds.close()
     return bathymetry, woa_profile
+
+
+def armor3d_needed(year: int, config: Any) -> bool:
+    """True if ``year`` has a validation or test date, where ARMOR3D is compared."""
+    for split in (config.splits.val, config.splits.test):
+        if pd.Timestamp(split[0]).year <= year <= pd.Timestamp(split[1]).year:
+            return True
+    return False
 
 
 def build_store(
@@ -1310,6 +1340,7 @@ def build_store(
             cached_bathymetry=cached_bathymetry,
             cached_woa_profile=cached_woa_profile,
             max_days=max_days,
+            skip_armor3d=not armor3d_needed(yr, config),
         )
         if cached_bathymetry is None and "bathymetry" in ds_yr.data_vars:
             cached_bathymetry = ds_yr["bathymetry"]
@@ -1436,6 +1467,12 @@ def build_store(
             yr_dates[-1].strftime("%Y-%m-%d"),
         ]
         root.attrs["built_ranges"] = built_ranges
+        raw_skipped: Any = root.attrs.get("armor3d_skipped_years", [])
+        skipped = {int(y) for y in raw_skipped}
+        skipped.discard(yr)
+        if not armor3d_needed(yr, config):
+            skipped.add(yr)
+        root.attrs["armor3d_skipped_years"] = sorted(skipped)
         if max_days is not None:
             root.attrs["smoke_days"] = int(max_days)
         root.attrs["source_files"] = sorted(list(set(accumulated_sources)))

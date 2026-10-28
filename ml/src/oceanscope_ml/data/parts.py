@@ -312,7 +312,11 @@ def check_parts(
                 rows.append(_row("dates", yr, "OK", f"{len(dates)} days"))
             if len(dates) == 0:
                 continue
+            armor_skipped = {int(y) for y in ds.attrs.get("armor3d_skipped_years", [])}
             for product in PRODUCT_VARS:
+                if product == "ARMOR3D" and yr in armor_skipped:
+                    rows.append(_row(product, yr, "OK", "skipped (train-only year)"))
+                    continue
                 rows.append(_check_product_year(ds, product, yr, dates, ocean))
 
     for yr in sorted(set(expected_years or []) - seen_years):
