@@ -1145,6 +1145,8 @@ def build_store(
     static_file: Path | None = None,
     max_days: int | None = None,
     part: bool = False,
+    max_hours: float | None = None,
+    resume_from: Path | None = None,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
@@ -1152,7 +1154,16 @@ def build_store(
     (PRD §4.2, REVIEW A3). With ``part=True`` the store is one part of a multi-part
     build: the finalize step is skipped, and ``oceanscope_ml.data.parts stats`` fits the
     climatology across all parts instead.
+
+    ``max_hours`` stops before a year that would not finish within that many hours of the
+    start, so a run with a hard time limit (Kaggle: 12 h) exits cleanly and keeps its
+    output. ``resume_from`` copies an earlier run's store (read-only input) into
+    ``out_dir`` first, so the next run skips the years it already built.
     """
+    import time
+
+    run_start = time.monotonic()
+    slowest_year_s = 0.0
     start_year = int(pd.Timestamp(config.time.start).year)
     end_year = int(pd.Timestamp(config.time.end).year)
     years_to_process = years if years is not None else list(range(start_year, end_year + 1))
@@ -1171,6 +1182,14 @@ def build_store(
     out_base = Path(out_dir or config.paths.processed)
     out_base.mkdir(parents=True, exist_ok=True)
     zarr_dest = out_base / f"oceanscope_{config.dataset_version}.zarr"
+    if resume_from is not None and not zarr_dest.exists():
+        if not Path(resume_from).exists():
+            raise FileNotFoundError(f"--resume-from store not found: {resume_from}")
+        logger.info("Copying earlier store %s to %s to resume...", resume_from, zarr_dest)
+        # Kaggle inputs are read-only; copy contents only, then make everything writable.
+        shutil.copytree(resume_from, zarr_dest, copy_function=shutil.copyfile)
+        for path in [zarr_dest, *zarr_dest.rglob("*")]:
+            path.chmod(0o755 if path.is_dir() else 0o644)
 
     scratch_base = Path(scratch_dir or (out_base / "scratch"))
     scratch_base.mkdir(parents=True, exist_ok=True)
@@ -1251,6 +1270,26 @@ def build_store(
                 yr,
             )
             continue
+
+        elapsed_s = time.monotonic() - run_start
+        # A year takes about as long as the slowest one so far; add 15% for safety.
+        if (
+            max_hours is not None
+            and slowest_year_s > 0  # the first year always starts
+            and elapsed_s + 1.15 * slowest_year_s > max_hours * 3600
+        ):
+            left = [y for y in years_to_process if y not in built_years]
+            logger.warning(
+                "Stopping before year %d: %.1f h elapsed, slowest year %.1f h, limit %.1f h. "
+                "Not built yet: %s. Rerun with --resume-from to continue.",
+                yr,
+                elapsed_s / 3600,
+                slowest_year_s / 3600,
+                max_hours,
+                left,
+            )
+            break
+        year_start = time.monotonic()
 
         yr_scratch = scratch_base / str(yr)
         yr_scratch.mkdir(parents=True, exist_ok=True)
@@ -1408,6 +1447,8 @@ def build_store(
         if yr_scratch.exists():
             shutil.rmtree(yr_scratch, ignore_errors=True)
         check_budget(scratch_base, zarr_dest)
+        slowest_year_s = max(slowest_year_s, time.monotonic() - year_start)
+        logger.info("Year %d took %.1f min.", yr, (time.monotonic() - year_start) / 60)
 
     # 4. Finalize step: Climatology and Norm Stats (A4)
     # Only run if finalize=True or if train split is covered
@@ -1569,6 +1610,17 @@ def main() -> None:
         action="store_true",
         help="One part of a multi-part build: skip finalize (run `parts stats` after all parts)",
     )
+    parser.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="Stop before a year that would not finish within this many hours (Kaggle: 11)",
+    )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Earlier run's store to copy into --out-dir first; its built years are skipped",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1592,6 +1644,8 @@ def main() -> None:
         static_file=Path(args.static_file) if args.static_file else None,
         max_days=args.smoke_days,
         part=args.part,
+        max_hours=args.max_hours,
+        resume_from=Path(args.resume_from) if args.resume_from else None,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")

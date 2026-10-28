@@ -134,3 +134,40 @@ def test_open_parts_rejects_overlapping_years(
     part_b = _build_part(tmp_path, smoke_cfg, "b", [2019], smoke_days=3)
     with pytest.raises(ValueError, match="Year 2019 is built in both"):
         open_parts([part_a, part_b])
+
+
+def test_max_hours_stops_cleanly_and_resume_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, smoke_cfg: MockConfig
+) -> None:
+    """A run that hits --max-hours keeps what it built; --resume-from finishes the rest."""
+    install_stream_mocks(monkeypatch, smoke_cfg.depths_m, pd.date_range("2018-01-01", "2019-01-31"))
+    empty_raw = tmp_path / "empty_raw"
+    empty_raw.mkdir()
+    first = build_store(
+        config=smoke_cfg,
+        years=[2018, 2019],
+        raw_dir=empty_raw,
+        out_dir=tmp_path / "run1",
+        scratch_dir=tmp_path / "s1",
+        stream=True,
+        max_days=3,
+        part=True,
+        max_hours=0.0,  # builds the first year, then stops before the second
+    )
+    assert zarr.open_group(str(first), mode="r").attrs["built_years"] == [2018]
+
+    first.chmod(0o555)  # Kaggle inputs are read-only
+    second = build_store(
+        config=smoke_cfg,
+        years=[2018, 2019],
+        raw_dir=empty_raw,
+        out_dir=tmp_path / "run2",
+        scratch_dir=tmp_path / "s2",
+        stream=True,
+        max_days=3,
+        part=True,
+        resume_from=first,
+    )
+    first.chmod(0o755)
+    assert zarr.open_group(str(second), mode="r").attrs["built_years"] == [2018, 2019]
+    assert len(open_parts([second]).time) == 6
