@@ -437,6 +437,9 @@ STREAM_DOWNLOAD_THREADS = 16
 ARCO_ERA5_URL = (
     "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
 )
+# Google Cloud sometimes answers 503 for a few minutes. Retry a month with these waits
+# (seconds) before giving up: the CDS fallback queues for ~1 h per month.
+ARCO_RETRY_WAITS_S = (30, 60, 120, 240, 480)
 # ARCO long name -> ERA5 short name, and whether the field is an hourly accumulation.
 ARCO_ERA5_VARIABLES = {
     "10m_u_component_of_wind": ("u10", False),
@@ -479,6 +482,21 @@ def hourly_to_daily_mean(ds_hourly: xr.Dataset, days: pd.DatetimeIndex) -> xr.Da
     return ds
 
 
+def _load_with_retries(ds: xr.Dataset, label: str) -> xr.Dataset:
+    """``ds.load()``, retried after ARCO_RETRY_WAITS_S on any error (transient 503s)."""
+    import time
+
+    for attempt, wait in enumerate([*ARCO_RETRY_WAITS_S, None], start=1):
+        try:
+            return ds.load()
+        except Exception as e:
+            if wait is None:
+                raise
+            logger.warning("%s failed (attempt %d: %s); retrying in %d s.", label, attempt, e, wait)
+            time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
 def stream_era5_arco(
     year: int,
     bbox: tuple[float, float, float, float],
@@ -504,15 +522,12 @@ def stream_era5_arco(
             days = pd.date_range(start, start + pd.offsets.MonthEnd(0), freq="D")
             logger.info("Reading ERA5 %d-%02d from ARCO ERA5 (Google Cloud)...", year, month)
             # Include 00 UTC of the next day: it closes the last day's accumulations.
-            hourly = (
-                src[list(ARCO_ERA5_VARIABLES)]
-                .sel(
-                    time=slice(days[0], days[-1] + pd.Timedelta(days=1)),
-                    latitude=slice(lat_max + 1.0, lat_min - 1.0),
-                    longitude=slice(lon_min - 1.0, lon_max + 1.0),
-                )
-                .load()
+            subset = src[list(ARCO_ERA5_VARIABLES)].sel(
+                time=slice(days[0], days[-1] + pd.Timedelta(days=1)),
+                latitude=slice(lat_max + 1.0, lat_min - 1.0),
+                longitude=slice(lon_min - 1.0, lon_max + 1.0),
             )
+            hourly = _load_with_retries(subset, f"ERA5 {year}-{month:02d}")
             for long_name, (short, accum) in ARCO_ERA5_VARIABLES.items():
                 hourly[long_name].attrs["is_accumulation"] = accum
             hourly = hourly.rename({k: v[0] for k, v in ARCO_ERA5_VARIABLES.items()})

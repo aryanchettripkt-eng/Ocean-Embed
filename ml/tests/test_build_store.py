@@ -803,3 +803,32 @@ def test_stream_copernicus_pins_sss_version(monkeypatch: pytest.MonkeyPatch) -> 
         PRODUCT_SPECS["sst"]["dataset_id"], (60.0, 62.0, 10.0, 12.0), ("2019-01-01", "2019-01-02")
     )
     assert "dataset_version" not in seen
+
+
+def test_arco_load_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 503 from Google Cloud is retried instead of dropping the whole year to CDS."""
+    import oceanscope_ml.data.build_store as bs_mod
+
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", waits.append)
+
+    class Flaky:
+        calls = 0
+
+        def load(self) -> str:
+            Flaky.calls += 1
+            if Flaky.calls < 3:
+                raise OSError("503 Service Unavailable")
+            return "loaded"
+
+    assert bs_mod._load_with_retries(Flaky(), "ERA5 1993-08") == "loaded"  # type: ignore[arg-type]
+    assert waits == list(bs_mod.ARCO_RETRY_WAITS_S[:2])
+
+    class Down:
+        def load(self) -> str:
+            raise OSError("503 Service Unavailable")
+
+    waits.clear()
+    with pytest.raises(OSError):
+        bs_mod._load_with_retries(Down(), "ERA5 1993-08")  # type: ignore[arg-type]
+    assert waits == list(bs_mod.ARCO_RETRY_WAITS_S)
