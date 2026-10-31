@@ -803,7 +803,12 @@ def execute_download(
                     d_range = f"{item['start_date']}..{item['end_date']}"
                     print(f"  Querying Argo GDAC ERDDAP for North Indian Ocean ({d_range})...")
                     bbox = item["bbox"]
-                    query_vars = "platform_number,cycle_number,time,latitude,longitude,pres,temp"
+                    # QC flags for PRD §7. The names are not yet checked against the live
+                    # ArgoFloats dataset; a wrong name makes ERDDAP refuse the request.
+                    query_vars = (
+                        "platform_number,cycle_number,time,latitude,longitude,pres,temp,"
+                        "temp_qc,pres_qc,position_qc"
+                    )
                     constraints = (
                         f"&time>={item['start_date']}T00:00:00Z"
                         f"&time<={item['end_date']}T23:59:59Z"
