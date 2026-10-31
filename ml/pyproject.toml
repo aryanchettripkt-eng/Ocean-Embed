@@ -23,6 +23,8 @@ dependencies = [
     "dask>=2024.1.0",
     "netCDF4>=1.6.0",
     "Pillow>=10.0.0",
+    # P6-2 publish step: uploads the run's outputs to the Hugging Face dataset repo.
+    "huggingface_hub>=0.20.0",
 ]
 
 [project.optional-dependencies]
