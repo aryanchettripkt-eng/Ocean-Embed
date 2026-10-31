@@ -207,6 +207,9 @@ def extract_pixel_features_and_targets(
 
     all_X: list[np.ndarray] = []
     all_Y: list[np.ndarray] = []
+    # Keep at most this many cells per day, so memory stays near max_samples rows instead of
+    # every ocean cell of every day (~90 M rows, >20 GB, on the full store).
+    per_day = -(-int(max_samples) // len(valid_dates)) if max_samples is not None else None
 
     for d in valid_dates:
         t_str = d.strftime("%Y-%m-%d")
@@ -228,6 +231,9 @@ def extract_pixel_features_and_targets(
         )
         if day_result is not None:
             day_X, day_Y = day_result
+            if per_day is not None and len(day_X) > per_day:
+                keep = rng.choice(len(day_X), size=per_day, replace=False)
+                day_X, day_Y = day_X[keep], day_Y[keep]
             all_X.append(day_X)
             all_Y.append(day_Y)
 
