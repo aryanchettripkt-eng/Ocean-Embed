@@ -264,11 +264,12 @@ def _rng_state() -> dict[str, Any]:
 
 
 def _restore_rng(state: dict[str, Any]) -> None:
-    torch.set_rng_state(state["torch"])
+    # torch.load(map_location=cuda) moves these ByteTensors to the GPU; the setters need CPU.
+    torch.set_rng_state(state["torch"].cpu())
     np.random.set_state(state["numpy"])
     random.setstate(state["python"])
     if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
 
 
 def _save_atomic(obj: dict[str, Any], path: Path) -> None:
