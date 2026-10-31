@@ -86,13 +86,22 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         stats_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         allow_test: bool = False,
+        live_dates: list[pd.Timestamp] | None = None,
     ) -> None:
         # Only final_test passes allow_test=True, to read the sealed test year once (PRD §0 rule 3).
-        if split not in TRAINABLE_SPLITS and not (split == "test" and allow_test):
+        # Live mode (PRD §12) passes split="live" with the target days to predict: days after
+        # the test period, with no GLORYS target.
+        if split == "live":
+            if not live_dates:
+                raise ValueError("split='live' needs live_dates")
+            if cache_dir is not None:
+                raise ValueError("split='live' reads the store directly, not a training cache")
+        elif split not in TRAINABLE_SPLITS and not (split == "test" and allow_test):
             raise TestLeakageError(
                 f"Dataset split must be one of {TRAINABLE_SPLITS}; got {split!r}. "
                 "The test period is read only by final_test (PRD_AI_ML §0 rule 3)."
             )
+        self._live_dates = pd.DatetimeIndex(live_dates) if live_dates else None
         # One store, or the part stores of a multi-part build plus the stats store that
         # holds `clim` and `norm_stats` (oceanscope_ml.data.parts).
         paths = store_path if isinstance(store_path, list) else [store_path]
@@ -205,6 +214,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     def _select_positions(self, ds: xr.Dataset) -> np.ndarray:
         """Store time positions for this split, after the gap and history checks."""
         times = pd.to_datetime(ds["time"].values)
+        if self.split == "live":
+            return self._select_live_positions(times)
         start, end = _split_range(self.config, self.split)
         gap = pd.Timedelta(days=int(self.config.splits.gap_days))
         last_day = end - gap  # the gap_days at the end of train and val are dropped
@@ -231,6 +242,32 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         if self.split != "test":
             check_no_test_leakage(selected_dates, self.config.splits.test)
         return positions
+
+    def _select_live_positions(self, times: pd.DatetimeIndex) -> np.ndarray:
+        """Store positions of the live target days; each needs its full unbroken history.
+
+        Live mode predicts days after the test period. The NRT check (P9-1) also predicts one
+        past month outside the test period, so only test dates are refused here.
+        """
+        assert self._live_dates is not None
+        test_start, test_end = (pd.Timestamp(d) for d in self.config.splits.test)
+        sealed = [str(d.date()) for d in self._live_dates if test_start <= d <= test_end]
+        if sealed:
+            raise TestLeakageError(f"Live dates fall in the sealed test period: {sealed}")
+        lookup = {t: i for i, t in enumerate(times)}
+        positions: list[int] = []
+        for day in self._live_dates:
+            t = lookup.get(day)
+            if t is None:
+                raise ValueError(f"Live date {day.date()} is not in the store")
+            if t < self._lookback or times[t] - times[t - self._lookback] != pd.Timedelta(
+                days=self._lookback
+            ):
+                raise ValueError(
+                    f"Live date {day.date()} lacks {self._lookback} unbroken days of history"
+                )
+            positions.append(t)
+        return np.asarray(positions, dtype=np.int64)
 
     # ------------------------------------------------------------- dataset API
 
@@ -377,6 +414,11 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
         if self.cache_dir is not None:
             return self._cached_targets(t)
+        if self.split == "live":
+            # No reference exists for live days (PRD §12): all-masked zero targets.
+            shape = (len(self.sigma_d), self._n_lat, self._n_lon)
+            zeros = np.zeros(shape, dtype=np.float32)
+            return zeros, np.zeros(shape, dtype=bool), zeros.copy(), np.zeros(shape, bool), False
         clim_day = self._clim(ds, doy)
         sigma = self.sigma_d[:, None, None]
 
