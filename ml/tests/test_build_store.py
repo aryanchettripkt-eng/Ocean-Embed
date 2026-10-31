@@ -832,3 +832,32 @@ def test_arco_load_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(OSError):
         bs_mod._load_with_retries(Down(), "ERA5 1993-08")  # type: ignore[arg-type]
     assert waits == list(bs_mod.ARCO_RETRY_WAITS_S)
+
+
+def test_oscar_search_retries_a_bad_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Part A crashed on one 502 from NASA's granule search; it must be retried."""
+    import sys
+    import types
+
+    import oceanscope_ml.data.build_store as bs_mod
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    calls = {"search": 0}
+
+    def search_data(**kwargs: object) -> list[str]:
+        calls["search"] += 1
+        if calls["search"] == 1:
+            raise OSError("502 Server Error: Bad Gateway")
+        return ["granule"]
+
+    fake = types.SimpleNamespace(
+        login=lambda strategy: None,
+        search_data=search_data,
+        download=lambda results, path: [str(tmp_path / "g.nc")],
+    )
+    monkeypatch.setitem(sys.modules, "earthaccess", fake)
+    monkeypatch.setattr(bs_mod.xr, "open_dataset", lambda path: "opened")
+    assert bs_mod.stream_oscar(1997, (40.0, 100.0, 0.0, 30.0), tmp_path) == "opened"
+    assert calls["search"] == 2

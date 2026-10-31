@@ -484,11 +484,16 @@ def hourly_to_daily_mean(ds_hourly: xr.Dataset, days: pd.DatetimeIndex) -> xr.Da
 
 def _load_with_retries(ds: xr.Dataset, label: str) -> xr.Dataset:
     """``ds.load()``, retried after ARCO_RETRY_WAITS_S on any error (transient 503s)."""
+    return _with_retries(ds.load, label)
+
+
+def _with_retries(fn: Any, label: str) -> Any:
+    """``fn()``, retried after ARCO_RETRY_WAITS_S on any error (transient 5xx from a server)."""
     import time
 
     for attempt, wait in enumerate([*ARCO_RETRY_WAITS_S, None], start=1):
         try:
-            return ds.load()
+            return fn()
         except Exception as e:
             if wait is None:
                 raise
@@ -555,15 +560,22 @@ def stream_oscar(
         raise RuntimeError("earthaccess package is required to stream OSCAR currents.") from e
 
     earthaccess.login(strategy="environment")
-    results = earthaccess.search_data(
-        short_name="OSCAR_L4_OC_FINAL_V2.0",
-        temporal=(f"{year}-01-01", end_date or f"{year}-12-31"),
-        # earthaccess wants (west, south, east, north); bbox is (lon_min, lon_max, lat_min, lat_max)
-        bounding_box=(bbox[0], bbox[2], bbox[1], bbox[3]),
+    # NASA's search service sometimes answers 502 for a few minutes; retry like ARCO.
+    results = _with_retries(
+        lambda: earthaccess.search_data(
+            short_name="OSCAR_L4_OC_FINAL_V2.0",
+            temporal=(f"{year}-01-01", end_date or f"{year}-12-31"),
+            # earthaccess wants (west, south, east, north); bbox is (lon_min, lon_max,
+            # lat_min, lat_max)
+            bounding_box=(bbox[0], bbox[2], bbox[1], bbox[3]),
+        ),
+        f"OSCAR search {year}",
     )
     if not results:
         raise FileNotFoundError(f"No OSCAR granules found for year {year} in bbox {bbox}")
-    downloaded = earthaccess.download(results, str(out_dir))
+    downloaded = _with_retries(
+        lambda: earthaccess.download(results, str(out_dir)), f"OSCAR download {year}"
+    )
     if len(downloaded) == 1:
         return xr.open_dataset(downloaded[0])
     return xr.open_mfdataset(downloaded, combine="nested", concat_dim="time")
