@@ -85,8 +85,10 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         split: str,
         stats_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
+        allow_test: bool = False,
     ) -> None:
-        if split not in TRAINABLE_SPLITS:
+        # Only final_test passes allow_test=True, to read the sealed test year once (PRD §0 rule 3).
+        if split not in TRAINABLE_SPLITS and not (split == "test" and allow_test):
             raise TestLeakageError(
                 f"Dataset split must be one of {TRAINABLE_SPLITS}; got {split!r}. "
                 "The test period is read only by final_test (PRD_AI_ML §0 rule 3)."
@@ -226,7 +228,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             raise ValueError(f"No {self.split} samples with enough history in the store")
 
         selected_dates = times[positions]
-        check_no_test_leakage(selected_dates, self.config.splits.test)
+        if self.split != "test":
+            check_no_test_leakage(selected_dates, self.config.splits.test)
         return positions
 
     # ------------------------------------------------------------- dataset API

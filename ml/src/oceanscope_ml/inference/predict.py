@@ -34,6 +34,7 @@ from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
+from oceanscope_ml.data.transform import TestLeakageError
 from oceanscope_ml.train import _crop_to_target, build_model, resolve_device
 
 logger = logging.getLogger("oceanscope_ml.inference.predict")
@@ -109,15 +110,30 @@ def predict_store(
     cache_dir: Path | None = None,
     device_choice: str = "auto",
     run_id: str | None = None,
+    split: str | None = None,
+    allow_test: bool = False,
 ) -> Path:
-    """Run the model on every validation day and write the prediction store."""
+    """Run the model on every validation day (or on ``split``) and write the prediction store.
+
+    The test split is read only when ``allow_test`` is set, which only final_test does
+    (PRD_AI_ML §0 rule 3).
+    """
     device = resolve_device(device_choice)
     model, ckpt_run_id = load_checkpoint(config, checkpoint, device)
     run_id = run_id or ckpt_run_id
-    split = _publish_splits(config)[0]
+    split = split or _publish_splits(config)[0]
+    if split not in ("val", "test"):
+        raise ValueError(f"predict_store writes the val or test split, not {split!r}")
+    if split == "test" and not allow_test:
+        raise TestLeakageError("The test split is read only by final_test (PRD_AI_ML §0 rule 3).")
 
     dataset = OceanScopeDataset(
-        store_path, config, split=split, stats_path=stats_path, cache_dir=cache_dir
+        store_path,
+        config,
+        split=split,
+        stats_path=stats_path,
+        cache_dir=cache_dir,
+        allow_test=allow_test,
     )
     ds = open_parts(store_path if isinstance(store_path, list) else [store_path], stats_path)
     times = pd.to_datetime(ds["time"].values)
