@@ -315,7 +315,7 @@ export default function AboutPage() {
                 <p className="text-slate-300 leading-relaxed">{meta.caveats.live}</p>
               </div>
             )}
-            {meta.caveats?.synthetic && (
+            {meta.synthetic && meta.caveats?.synthetic && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 text-xs space-y-1">
                 <span className="font-semibold text-rose-300 uppercase tracking-wider text-[10px] block">
                   Demo Environment Notice
