@@ -7,6 +7,7 @@ import {
   apiClient,
   type ArgoProfilesResponse,
   type ArgoResponse,
+  type EventsResponse,
   type HeadlineResponse,
   type MapResponse,
   type MetaResponse,
@@ -236,5 +237,18 @@ export function useHeadline() {
     queryKey: ["headline"],
     queryFn: () => apiClient.getHeadline(),
     staleTime: Infinity,
+  });
+}
+
+/**
+ * Curated events for the time machine (PRD_FRONTEND §3.4c). The backend filters out
+ * events in the sealed test period; the frontend never adds or edits events.
+ */
+export function useEvents(options?: { enabled?: boolean }) {
+  return useQuery<EventsResponse>({
+    queryKey: ["events"],
+    queryFn: () => apiClient.getEvents(),
+    staleTime: Infinity,
+    enabled: options?.enabled !== false,
   });
 }

@@ -16,6 +16,15 @@ export type ArgoProfilesResponse = components["schemas"]["ArgoProfilesResponse"]
 export type ArgoProfileMatch = components["schemas"]["ArgoProfileMatch"];
 export type HeadlineResponse = components["schemas"]["HeadlineResponse"];
 export type SectionResponse = components["schemas"]["SectionResponse"];
+export type ChatRequest = components["schemas"]["ChatRequest"];
+export type ChatResponse = components["schemas"]["ChatResponse"];
+export type ChatMessage = components["schemas"]["ChatMessage"];
+export type ChatContext = components["schemas"]["ChatContext"];
+export type UIAction = components["schemas"]["UIAction"];
+export type ToolCallRecord = components["schemas"]["ToolCallRecord"];
+export type EventItem = components["schemas"]["EventItem"];
+export type EventsResponse = components["schemas"]["EventsResponse"];
+export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 
 export class ApiError extends Error {
   code: string;
@@ -200,5 +209,28 @@ export const apiClient = {
 
   getHeadline(): Promise<HeadlineResponse> {
     return fetchApi<HeadlineResponse>("/headline");
+  },
+
+  /** Ocean guide (PRD_BACKEND §6, PRD_FRONTEND §3.4a). Cancel with `signal`. */
+  postChat(body: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+    return fetchApi<ChatResponse>("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  },
+
+  /** Curated events for the time machine (PRD_BACKEND §4.14). */
+  getEvents(): Promise<EventsResponse> {
+    return fetchApi<EventsResponse>("/events");
+  },
+
+  /** Speech to text for the voice dive (PRD_BACKEND §4.13). */
+  postTranscribe(audio: Blob, lang = "en", signal?: AbortSignal): Promise<TranscribeResponse> {
+    const form = new FormData();
+    form.append("audio", audio, "clip");
+    form.append("lang", lang);
+    return fetchApi<TranscribeResponse>("/transcribe", { method: "POST", body: form, signal });
   },
 };

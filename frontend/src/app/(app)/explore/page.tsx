@@ -1,13 +1,22 @@
 "use client";
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle, CalendarRange, MessageCircle } from "lucide-react";
 
-import { useArgoProfiles, useMap, useMeta, useSection } from "../../../lib/api/hooks";
-import { apiClient } from "../../../lib/api/client";
+import { useArgoProfiles, useEvents, useMap, useMeta, useSection } from "../../../lib/api/hooks";
+import { apiClient, type ChatResponse, type EventItem } from "../../../lib/api/client";
+import {
+  applyEventPhase,
+  applyUiActions,
+  describeChanges,
+  type CameraFocus,
+  type CameraTarget,
+  type EventPhase,
+} from "../../../lib/guide/ui-actions";
+import type { GuidePrompt, NavigateResult } from "../../../components/guide/GuideDrawer";
 import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
 import { DatePicker } from "../../../components/controls/DatePicker";
 import { DepthSelector } from "../../../components/controls/DepthSelector";
@@ -39,6 +48,16 @@ const DetailsPanel = dynamic(
   }
 );
 
+// Meta features (PRD_FRONTEND §3.4) load only on first open, outside the initial bundle
+const GuideDrawer = dynamic(
+  () => import("../../../components/guide/GuideDrawer").then((mod) => mod.GuideDrawer),
+  { ssr: false }
+);
+const TimeMachine = dynamic(
+  () => import("../../../components/events/TimeMachine").then((mod) => mod.TimeMachine),
+  { ssr: false }
+);
+
 function ExplorerContent() {
   const searchParams = useSearchParams();
   const { data: meta, isLoading: isMetaLoading, error: metaError, refetch: refetchMeta } = useMeta();
@@ -56,6 +75,18 @@ function ExplorerContent() {
   const [isExploded, setIsExploded] = useState(false);
   const [isSmoothed, setIsSmoothed] = useState(false);
   const [showContours, setShowContours] = useState(true);
+
+  // Meta features: guide drawer, time machine, camera moves, undo (PRD_FRONTEND §3.4a, c)
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [guidePrompt, setGuidePrompt] = useState<GuidePrompt | null>(null);
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [activeEvent, setActiveEvent] = useState<{ event: EventItem; phase: EventPhase } | null>(null);
+  const [focus, setFocus] = useState<CameraFocus | null>(null);
+  const focusIdRef = useRef(0);
+  const undoSnapshots = useRef(new Map<number, ExplorerState>());
+  const undoIdRef = useRef(0);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Sync state once metadata loads
   useEffect(() => {
@@ -227,6 +258,89 @@ function ExplorerContent() {
     }
   }, []);
 
+  const chatEnabled = !!meta?.features?.chat;
+  const {
+    data: eventsData,
+    isLoading: isEventsLoading,
+    isError: isEventsError,
+  } = useEvents({ enabled: !!meta });
+  const events = useMemo(() => eventsData?.events ?? [], [eventsData]);
+
+  const moveCamera = useCallback((camera: CameraTarget | null) => {
+    if (!camera) return;
+    focusIdRef.current += 1;
+    setFocus({ ...camera, id: focusIdRef.current });
+  }, []);
+
+  const openEventPhase = useCallback(
+    (event: EventItem, phase: EventPhase, opts?: { pickDepth?: boolean }) => {
+      if (!meta) return;
+      const applied = applyEventPhase(stateRef.current, event, phase, meta, opts);
+      setState(applied.state);
+      moveCamera(applied.camera);
+      setActiveEvent({ event, phase });
+      setEventsOpen(true);
+    },
+    [meta, moveCamera]
+  );
+
+  const handleGuideNavigate = useCallback(
+    (response: ChatResponse): NavigateResult => {
+      if (!meta) return { summary: null, undoToken: null };
+      const before = stateRef.current;
+      const applied = applyUiActions(before, response.ui_actions, meta);
+      let summary = describeChanges(applied.changes);
+      let next = applied.state;
+      let camera = applied.camera;
+
+      if (applied.openEvent) {
+        const ev = events.find((e) => e.id === applied.openEvent!.event_id);
+        if (ev) {
+          const phase = applied.openEvent.phase ?? "before";
+          const evApplied = applyEventPhase(next, ev, phase, meta);
+          next = evApplied.state;
+          camera = evApplied.camera;
+          setActiveEvent({ event: ev, phase });
+          setEventsOpen(true);
+          summary = `Opened ${ev.title} · ${phase}`;
+        }
+      }
+
+      const moved = JSON.stringify(next) !== JSON.stringify(before) || camera !== null;
+      if (!moved) return { summary: null, undoToken: null };
+      setState(next);
+      moveCamera(camera);
+      undoIdRef.current += 1;
+      undoSnapshots.current.set(undoIdRef.current, before);
+      return { summary: summary ?? "Moved the map", undoToken: undoIdRef.current };
+    },
+    [meta, events, moveCamera]
+  );
+
+  const handleGuideUndo = useCallback(
+    (token: number) => {
+      const prev = undoSnapshots.current.get(token);
+      if (!prev) return;
+      undoSnapshots.current.delete(token);
+      setState(prev);
+      if (prev.lat !== null && prev.lon !== null) moveCamera({ kind: "center", lat: prev.lat, lon: prev.lon });
+    },
+    [moveCamera]
+  );
+
+  const handleExplainEvent = useCallback((event: EventItem) => {
+    const s = stateRef.current;
+    const b = event.bbox;
+    setGuidePrompt({
+      nonce: Date.now(),
+      text:
+        `Compare the water before and after ${event.title}: ${event.before} versus ${event.after}, ` +
+        `at ${s.depth} m, in the box ${b.lat_min}–${b.lat_max}°N, ${b.lon_min}–${b.lon_max}°E. ` +
+        `What changed, and can you step me through the phases?`,
+    });
+    setGuideOpen(true);
+  }, []);
+
   if (isMetaLoading) {
     return (
       <>
@@ -281,6 +395,7 @@ function ExplorerContent() {
             isExploded={isExploded}
             isSmoothed={isSmoothed}
             showContours={showContours}
+            focus={focus}
           />
         </ErrorBoundary>
 
@@ -367,6 +482,61 @@ function ExplorerContent() {
             <CoverageLegend />
           </div>
         </div>
+
+        {/* Meta features: Events and Ask the ocean (each hidden when unavailable, PRD_FRONTEND §3.4) */}
+        <div className="absolute top-16 left-4 z-20 flex flex-col items-start gap-2 pointer-events-auto max-w-[calc(100%-2rem)]">
+          {events.length > 0 && !eventsOpen && (
+            <button
+              type="button"
+              onClick={() => setEventsOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900 inline-flex items-center gap-1.5"
+            >
+              <CalendarRange className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+              Events
+            </button>
+          )}
+          {eventsOpen && (
+            <TimeMachine
+              meta={meta}
+              events={events}
+              isLoading={isEventsLoading}
+              isError={isEventsError}
+              active={activeEvent}
+              currentDate={state.date}
+              onOpen={openEventPhase}
+              onSetDate={handleDateChange}
+              onBack={() => setActiveEvent(null)}
+              onClose={() => {
+                setEventsOpen(false);
+                setActiveEvent(null);
+              }}
+              onExplain={chatEnabled ? handleExplainEvent : undefined}
+            />
+          )}
+        </div>
+
+        {chatEnabled && !guideOpen && (
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            className="absolute bottom-24 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2.5 shadow-2xl"
+          >
+            <MessageCircle className="h-4 w-4" />
+            Ask the ocean
+          </button>
+        )}
+
+        {chatEnabled && guideOpen && (
+          <GuideDrawer
+            meta={meta}
+            state={state}
+            eventTitles={events.map((e) => e.title)}
+            onNavigate={handleGuideNavigate}
+            onUndo={handleGuideUndo}
+            onClose={() => setGuideOpen(false)}
+            prompt={guidePrompt}
+          />
+        )}
 
         {/* Details Panel overlay when lat/lon selected */}
         {state.lat !== null && state.lon !== null && (

@@ -16,6 +16,10 @@ import {
   mockRegionSummary,
   mockSection,
 } from "./data";
+import type { ChatRequest } from "../lib/api/client";
+import { mockChatResponse, mockEvents, mockTranscribe, withMockFeatures } from "./guide";
+
+const mockFeaturesOn = process.env.NEXT_PUBLIC_MOCK_META_FEATURES === "true";
 
 export const handlers = [
   // Health
@@ -25,7 +29,7 @@ export const handlers = [
 
   // Meta
   http.get("*/api/v1/meta", () => {
-    return HttpResponse.json(mockMeta);
+    return HttpResponse.json(mockFeaturesOn ? withMockFeatures(mockMeta) : mockMeta);
   }),
 
   // Map
@@ -177,5 +181,21 @@ export const handlers = [
   // Headline
   http.get("*/api/v1/headline", () => {
     return HttpResponse.json(mockHeadline);
+  }),
+
+  // Meta features (PRD_BACKEND §4.12–4.14), offline
+  http.post("*/api/v1/chat", async ({ request }) => {
+    const body = (await request.json()) as ChatRequest;
+    await new Promise((r) => setTimeout(r, 600));
+    return HttpResponse.json(mockChatResponse(body));
+  }),
+
+  http.get("*/api/v1/events", () => {
+    return HttpResponse.json(mockEvents);
+  }),
+
+  http.post("*/api/v1/transcribe", async () => {
+    await new Promise((r) => setTimeout(r, 400));
+    return HttpResponse.json(mockTranscribe);
   }),
 ];

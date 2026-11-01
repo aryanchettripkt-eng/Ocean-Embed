@@ -7,6 +7,7 @@ import { renderGridToCanvas } from "./GridCanvas";
 import type { ArgoProfileMatch, MapResponse, SectionResponse } from "../../lib/api/client";
 import type { WallId } from "../map3d/depthScale";
 import type { CutawayLayer } from "../map3d/CutawayLayer";
+import type { CameraFocus } from "../../lib/guide/ui-actions";
 
 export interface RegionBounds {
   lat_min: number;
@@ -39,6 +40,9 @@ interface MapViewProps {
   isExploded?: boolean;
   isSmoothed?: boolean;
   showContours?: boolean;
+
+  /** Camera move requested by the guide or the time machine (PRD_FRONTEND §3.4a, c). */
+  focus?: CameraFocus | null;
 }
 
 interface HoverInfo {
@@ -105,6 +109,7 @@ export function MapView({
   isExploded = false,
   isSmoothed = false,
   showContours = true,
+  focus = null,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -376,6 +381,34 @@ export function MapView({
       cutawayLayerRef.current = null;
     };
   }, [syncGridLayer, sync3DLayer, view]);
+
+  // Guide / time machine camera moves: one short animation (≤ 1.2 s), none under reduced motion
+  const lastFocusIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !focus || lastFocusIdRef.current === focus.id) return;
+    lastFocusIdRef.current = focus.id;
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = reducedMotion ? 0 : 1200;
+    if (focus.kind === "bbox") {
+      map.fitBounds(
+        [
+          [focus.bbox.lon_min, focus.bbox.lat_min],
+          [focus.bbox.lon_max, focus.bbox.lat_max],
+        ],
+        { padding: 48, duration, maxZoom: 7 }
+      );
+    } else {
+      map.easeTo({
+        center: [focus.lon, focus.lat],
+        zoom: focus.zoom ?? Math.max(map.getZoom(), 4.5),
+        ...(focus.bearing !== undefined ? { bearing: focus.bearing } : {}),
+        duration,
+      });
+    }
+  }, [focus, mapLoaded]);
 
   // Dynamically switch pitch, bearing, and controls between 2D Map and 3D Cutaway
   useEffect(() => {
