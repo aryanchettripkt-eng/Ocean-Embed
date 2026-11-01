@@ -249,3 +249,15 @@ def test_run_refuses_test_period_predictions(
     holdout_path.write_text(json.dumps({"held_out_floats": ["1900000"]}), encoding="utf-8")
     with pytest.raises(TestLeakageError):
         av.run(config, pred_path, [tmp_path / "s.zarr"], [argo_path], holdout_path)
+
+
+def test_per_depth_table_fills_every_reference_column(depths: np.ndarray) -> None:
+    pred, refs = _datasets(depths, MODEL_WORSE)
+    per_depth = av.validate(_profiles(), pred, refs).per_depth
+    assert list(per_depth.columns) == av.DEPTH_COLUMNS
+    filled = per_depth[per_depth["n_obs"] > 0]
+    assert len(filled) > 0
+    for col in av.DEPTH_COLUMNS[3:]:
+        assert filled[col].notna().all(), col
+    # GLORYS sits 0.1 °C off the truth here, the model 0.6 °C.
+    assert (filled["glorys_rmse_c"] < filled["rmse_c"]).all()

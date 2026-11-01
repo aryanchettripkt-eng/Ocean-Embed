@@ -69,6 +69,8 @@ ARGO_VARIABLES = (
 )
 MODEL = "model"
 COMPETITORS = {"glorys12": "temp_glorys_c", "grep": "temp_grep_c", "armor3d": "temp_armor3d_c"}
+# Column prefix of each reference in argo_<run_id>.csv (PRD_AI_ML §6: glorys_, grep_, armor3d_).
+DEPTH_PREFIX = {"glorys12": "glorys_", "grep": "grep_", "armor3d": "armor3d_"}
 MATCH_COLUMNS = [
     "platform_number",
     "cycle",
@@ -261,7 +263,10 @@ def depth_table(common: pd.DataFrame, depths: np.ndarray) -> pd.DataFrame:
             "n_obs": len(sub),
         }
         ref = sub["temp_obs_c"].to_numpy(float)
-        for prefix, col in (("", "temp_pred_c"), *((k + "_", v) for k, v in COMPETITORS.items())):
+        for prefix, col in (
+            ("", "temp_pred_c"),
+            *((DEPTH_PREFIX[k], v) for k, v in COMPETITORS.items()),
+        ):
             if len(sub):
                 mae, rmse, bias = _error_stats(sub[col].to_numpy(float), ref)
             else:
