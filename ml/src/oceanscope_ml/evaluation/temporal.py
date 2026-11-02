@@ -501,7 +501,7 @@ def temporal_checks(
                     acc.add(err_k, np.zeros_like(err_k), valid_new[sel].reshape(k, n_d, -1))
 
         _count_physics(blk, first_new, phys)
-        cell_ok = blk.valid[:, heat_levels].all(axis=1)
+        cell_ok: np.ndarray = np.asarray(blk.valid[:, heat_levels].all(axis=1))
         hc_p = _heat_content(blk.pred[:, heat_levels], weights[heat_levels])
         hc_g = _heat_content(blk.glorys[:, heat_levels], weights[heat_levels])
         for j in range(first_new, len(blk.dates)):
