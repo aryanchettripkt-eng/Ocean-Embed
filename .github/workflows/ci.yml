@@ -59,12 +59,12 @@ jobs:
       - name: Install dependencies
         if: ${{ needs.filter.outputs.ml == 'true' }}
         run: |
-          python -m pip install --upgrade pip
-          # Install CPU torch first. The dev extras pull torch, and pip's resolver gives up
-          # (resolution-too-deep) while it backtracks through torch's CUDA wheels. A preinstalled
-          # CPU torch satisfies torch>=2.2.0, so the resolver never has to walk that graph.
+          python -m pip install --upgrade pip uv
+          # CPU torch first, so the install does not pull torch's CUDA wheels from PyPI.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -e ".[dev]"
+          # uv resolves the dev extras in seconds. pip hit resolution-too-deep on the
+          # earthaccess -> s3fs -> fsspec chain. No dependency versions change.
+          uv pip install --system -e ".[dev]"
 
       - name: Run Ruff Lint
         if: ${{ needs.filter.outputs.ml == 'true' }}
