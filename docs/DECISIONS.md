@@ -114,3 +114,14 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Part C's first round took 3.7 h per year, and ARMOR3D alone was 170 min of 2007 and 80 min of 2008 (GLORYS about 51 min, GREP about 25 min, ERA5 about 14 min, the rest under 5 min).
 - ARMOR3D is only an external competitor at ARGO points (PRD_AI_ML §3, PHASES P3-4: "for the validation and test periods"), never an input or a target. `build_store` now fetches it only for years with a val or test date (2018–2021) and writes it as NaN for train-only years, listed in the store attr `armor3d_skipped_years`. The check reports those rows as "skipped (train-only year)". Train years already built with ARMOR3D keep it.
 - Proposed by Claude from the part C log, 2026-10-28.
+
+## 2026-11-02 — Temporal checks: train-year sample and Ridge (PRD_AI_ML §5.8)
+- The §5.8.2 train-year bias rows come from a day-sampled train store (`predict --split train`, every 30th day, `TRAIN_SAMPLE_STRIDE_DAYS`). It is ML-internal: it is not published, not in the manifest and not in the §6 contract. The store is written as `predictions_<run_id>_train.zarr`, so it cannot overwrite the validation store.
+- Flicker (§5.8.1) is not computed on the day-sampled store: its days are not consecutive. Physics (§5.8.3) uses only the full validation store.
+- The Ridge baseline enters the flicker and bias checks, rebuilt day by day from `baseline_ridge.npz` with the same features as `baselines.py`. Its validity mask is the U-Net's mask intersected with its finite predictions. With zero weights and zero intercept it reproduces climatology exactly (test).
+- `experiment.yaml` is unchanged, so the config hash of stores and checkpoints is unchanged.
+- Proposed by Claude, 2026-11-02. Owner review at the P5-4 review.
+
+## 2026-11-02 — Fine-tune λ and the published run
+- The ARGO fine-tune sweep picked λ = 0.3 (`finetune_argo.lambda`, [CONFIRM] in PRD_AI_ML §5.9). `experiment.yaml` still holds the default; the value used for `main2_ft` is 0.3 and is recorded here until the owner confirms it.
+- `main2_ft` is the fine-tuned run, published to zenzone3/oceanscope-outputs. The served run is `active_run_id` in manifest.json. Owner to confirm it is `main2_ft`.

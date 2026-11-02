@@ -4,15 +4,17 @@ Usage (from ml/):
 
     python -m oceanscope_ml.evaluation.temporal --config configs/experiment.yaml \
         --predictions outputs/predictions/predictions_<run_id>.zarr \
-        --store <parts...> [--stats <stats.zarr>] [--out-dir outputs]
+        --store <parts...> [--stats <stats.zarr>] [--out-dir outputs] \
+        [--ridge models/baseline_ridge.npz] [--train-predictions <..._train.zarr>]
 
 Writes ML-internal files. They are not part of the §6 contract and are not listed in the
 manifest:
 
-- ``metrics/<run_id>_val_temporal.csv``: §5.8.1 day-to-day flicker per depth, for the U-Net and
-  for the climatology baseline. Ridge needs the model to rebuild its daily values, so it is not
-  included here.
-- ``metrics/<run_id>_bias_by_year.csv``: §5.8.2 bias and RMSE per split, year and depth.
+- ``metrics/<run_id>_val_temporal.csv``: §5.8.1 day-to-day flicker per depth, for the U-Net, the
+  climatology and (with ``--ridge``) the Ridge baseline, rebuilt day by day from its weights.
+- ``metrics/<run_id>_bias_by_year.csv``: §5.8.2 bias and RMSE per split, year and depth. With
+  ``--train-predictions`` (a day-sampled train store from predict ``--split train``), the train
+  years are included too, labelled ``train``.
 - ``metrics/<run_id>_bias_trend.csv``: §5.8.2 least-squares slope of the yearly bias (degC/yr).
 - ``metrics/<run_id>_physics.csv``: §5.8.3 monthly heat content against ERA5 net heat flux,
   inversions and gross outliers.
@@ -41,6 +43,11 @@ from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.transform import check_no_test_leakage
 from oceanscope_ml.evaluation.evaluate import _Acc, region_masks
+from oceanscope_ml.models.baselines import (
+    CANDIDATE_2D_VARS,
+    compute_valid_pixel_mask,
+    extract_day_features_and_targets,
+)
 
 logger = logging.getLogger("oceanscope_ml.evaluation.temporal")
 
@@ -57,6 +64,7 @@ HEAT_RMS_RATIO_FLAG = 2.0
 INVERSION_FLAG_FRAC = 0.01
 BLOCK_DAYS = 16
 CLIMATOLOGY = "climatology"
+RIDGE = "ridge"
 ONE_DAY = pd.Timedelta(days=1)
 FLICKER_COLUMNS = [
     "model", "depth_m", "n", "tend_rmse_pred_c", "tend_rmse_glorys_c", "tend_err_rmse_c",
@@ -209,18 +217,22 @@ def _pack(blk: _Block, pred: np.ndarray, sl: slice) -> dict[str, np.ndarray]:
 
 
 def _flicker_inputs(
-    blk: _Block, pred: np.ndarray, first_new: int
+    blk: _Block, pred: np.ndarray, first_new: int, valid: np.ndarray | None = None
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray] | None:
-    """Consecutive-day pairs whose later day is a new day of the block (index >= first_new)."""
+    """Consecutive-day pairs whose later day is a new day of the block (index >= first_new).
+
+    ``valid`` defaults to the U-Net's validity; a baseline passes its own.
+    """
     n = len(blk.dates)
     j0 = max(first_new, 1)
     if j0 >= n:
         return None
+    valid = blk.valid if valid is None else valid
     prev_sl, cur_sl = slice(j0 - 1, n - 1), slice(j0, n)
     consecutive = np.array([blk.dates[j] - blk.dates[j - 1] == ONE_DAY for j in range(j0, n)])
     if not consecutive.any():
         return None
-    w = blk.valid[prev_sl] & blk.valid[cur_sl] & consecutive[:, None, None, None]
+    w = valid[prev_sl] & valid[cur_sl] & consecutive[:, None, None, None]
     return _pack(blk, pred, prev_sl), _pack(blk, pred, cur_sl), w
 
 
@@ -442,38 +454,124 @@ def timeseries_figure(pred: xr.Dataset, figure_config: Path, out_path: Path) -> 
     return out_path
 
 
-def temporal_checks(
-    config: ExperimentConfig,
-    predictions: Path,
-    store_path: Path | list[Path],
-    stats_path: Path | None = None,
-    out_dir: Path | None = None,
-    figure_config: Path = DEFAULT_FIGURE_CONFIG,
-) -> dict[str, Path]:
-    """Run §5.8 on one prediction store and write its ML-internal files; return their paths."""
-    pred = xr.open_zarr(predictions)
-    run_id = str(pred.attrs["run_id"])
-    model = str(pred.attrs.get("model_name", "unet"))
+@dataclass
+class _Ridge:
+    """The per-pixel Ridge baseline (PRD_AI_ML §5.6), rebuilt day by day for §5.8.1 and §5.8.2."""
+
+    weights: np.ndarray  # (features, depth)
+    intercept: np.ndarray  # (depth,)
+    mu_x: np.ndarray  # (features,)
+    sigma_x: np.ndarray  # (features,)
+    depths: list[float]
+    feature_2d_vars: list[str]
+    bathy_vals: np.ndarray | None
+    woa_vals: np.ndarray | None
+    lat_norm: np.ndarray  # (lat, lon), as in baselines.evaluate_ridge_baseline
+    lon_norm: np.ndarray
+
+    @classmethod
+    def load(cls, path: Path, ds: xr.Dataset, depths: list[float]) -> _Ridge:
+        with np.load(path) as f:
+            weights = np.asarray(f["weights"], dtype=np.float32)
+            intercept = np.asarray(f["intercept"], dtype=np.float32)
+            mu_x = np.asarray(f["mu_X"], dtype=np.float32)
+            sigma_x = np.asarray(f["sigma_X"], dtype=np.float32)
+        feature_2d_vars = [v for v in CANDIDATE_2D_VARS if v in ds.data_vars]
+        has_bathy = "bathymetry" in ds.data_vars
+        has_woa = "woa_clim_profile" in ds.data_vars
+        n_features = (
+            len(feature_2d_vars) + int(has_bathy) + int(has_woa) + 4
+        )  # + sin, cos, lat, lon
+        if weights.shape != (n_features, len(depths)):
+            raise ValueError(
+                f"Ridge weights {weights.shape} do not match this store "
+                f"({n_features} features, {len(depths)} depths)"
+            )
+        lats = np.asarray(ds["lat"].values, dtype=np.float64)
+        lons = np.asarray(ds["lon"].values, dtype=np.float64)
+        lon_2d, lat_2d = np.meshgrid(lons, lats)
+        lat_span, lon_span = float(lats.max() - lats.min()), float(lons.max() - lons.min())
+        lat_norm = (
+            (lat_2d - lats.min()) / lat_span * 2.0 - 1.0 if lat_span > 0 else np.zeros_like(lat_2d)
+        )
+        lon_norm = (
+            (lon_2d - lons.min()) / lon_span * 2.0 - 1.0 if lon_span > 0 else np.zeros_like(lon_2d)
+        )
+        return cls(
+            weights=weights,
+            intercept=intercept,
+            mu_x=mu_x,
+            sigma_x=sigma_x,
+            depths=depths,
+            feature_2d_vars=feature_2d_vars,
+            bathy_vals=ds["bathymetry"].values if has_bathy else None,
+            woa_vals=ds["woa_clim_profile"].values if has_woa else None,
+            lat_norm=lat_norm,
+            lon_norm=lon_norm,
+        )
+
+    def anomaly(self, ds: xr.Dataset, k: int, doy: int) -> np.ndarray:
+        """Predicted anomaly [depth, lat, lon] on day ``k`` of ``ds``; NaN where no value."""
+        out = np.full((len(self.depths), ds.sizes["lat"], ds.sizes["lon"]), np.nan, np.float32)
+        ds_t = ds.isel(time=k)
+        mask, _ = compute_valid_pixel_mask(ds, ds_t, doy, self.feature_2d_vars)
+        rows = extract_day_features_and_targets(
+            ds=ds,
+            ds_t=ds_t,
+            doy=doy,
+            depths_m=self.depths,
+            feature_2d_vars=self.feature_2d_vars,
+            lat_norm_grid=self.lat_norm,
+            lon_norm_grid=self.lon_norm,
+            has_bathymetry=self.bathy_vals is not None,
+            has_woa=self.woa_vals is not None,
+            bathy_vals=self.bathy_vals,
+            woa_vals=self.woa_vals,
+        )
+        if rows is None:
+            return out
+        day_x, _ = rows
+        y_idx, x_idx = np.nonzero(mask)
+        pred = ((day_x - self.mu_x) / self.sigma_x) @ self.weights + self.intercept
+        out[:, y_idx, x_idx] = pred.T
+        return out
+
+
+def _store_dates(pred: xr.Dataset, config: ExperimentConfig) -> pd.DatetimeIndex:
+    """Dates of a prediction store, refused unless they are train or validation dates."""
     dates = pd.DatetimeIndex(pd.to_datetime(pred["time"].values))
     check_no_test_leakage(dates, config.splits.test)
     if len(dates) < 2 or dates.min() < pd.Timestamp(config.splits.train[0]) or (
         dates.max() > pd.Timestamp(config.splits.val[1])
     ):  # fmt: skip
         raise ValueError("The prediction store must hold train or validation dates only")
+    return dates
 
-    stores = store_path if isinstance(store_path, list) else [store_path]
+
+def _scan_store(
+    config: ExperimentConfig,
+    pred: xr.Dataset,
+    stores: list[Path],
+    stats_path: Path | None,
+    model: str,
+    regions: dict[str, np.ndarray],
+    weights: np.ndarray,
+    heat_levels: np.ndarray,
+    ridge: _Ridge | None,
+    bias: dict[tuple[str, str, int], _Acc],
+    flicker: dict[str, _Flicker] | None = None,
+    phys: _Physics | None = None,
+) -> None:
+    """Read one prediction store block by block into the flicker, bias and physics sums.
+
+    ``flicker`` and ``phys`` are optional: a day-sampled store has no consecutive days (so no
+    flicker), and only the full validation store feeds the physics checks.
+    """
+    dates = _store_dates(pred, config)
     parts = open_parts(stores, stats_path).sel(time=dates)
-    depths = [float(d) for d in pred["depth"].values]
-    n_d = len(depths)
-    regions = region_masks(np.asarray(pred["lat"].values), np.asarray(pred["lon"].values))
+    n_d = int(pred.sizes["depth"])
     clim_all = np.asarray(parts["clim"].values, dtype=np.float32)
-    weights = heat_content_weights(np.asarray(depths))
-    heat_levels = weights > 0
-
-    flicker = {model: _Flicker(n_d), CLIMATOLOGY: _Flicker(n_d)}
-    bias: dict[tuple[str, str, int], _Acc] = {}
-    phys = _Physics(flux_region=np.full((len(dates), len(regions)), np.nan))
-    month_starts = {i for i, d in enumerate(dates) if d.day == 1}
+    month_starts = {i for i, d in enumerate(dates) if d.day == 1} if phys is not None else set()
 
     for b0 in range(0, len(dates), BLOCK_DAYS):
         b1 = min(b0 + BLOCK_DAYS, len(dates))
@@ -482,16 +580,31 @@ def temporal_checks(
         first_new = b0 - s
         new_dates = blk.dates[first_new:]
 
-        for name, pred_arr in ((model, blk.pred), (CLIMATOLOGY, blk.clim)):
-            inputs = _flicker_inputs(blk, pred_arr, first_new)
-            if inputs is not None:
-                flicker[name].add(*inputs)
+        fields: dict[str, tuple[np.ndarray, np.ndarray]] = {
+            model: (blk.pred, blk.valid),
+            CLIMATOLOGY: (blk.clim, blk.valid),
+        }
+        if ridge is not None:
+            ridge_pred = np.stack(
+                [
+                    blk.clim[j] + ridge.anomaly(parts, blk.start + j, int(blk.dates[j].day_of_year))
+                    for j in range(len(blk.dates))
+                ]
+            ).astype(np.float32)
+            fields[RIDGE] = (ridge_pred, blk.valid & np.isfinite(ridge_pred))
+
+        if flicker is not None:
+            for name, (arr, valid) in fields.items():
+                if name in flicker:
+                    inputs = _flicker_inputs(blk, arr, first_new, valid)
+                    if inputs is not None:
+                        flicker[name].add(*inputs)
 
         splits = _split_labels(new_dates, config)
         years = new_dates.year.values
-        for name, pred_arr in ((model, blk.pred), (CLIMATOLOGY, blk.clim)):
-            err = pred_arr[first_new:] - blk.glorys[first_new:]
-            valid_new = blk.valid[first_new:]
+        for name, (arr, valid) in fields.items():
+            err = arr[first_new:] - blk.glorys[first_new:]
+            valid_new = valid[first_new:]
             for split in np.unique(splits):
                 for year in np.unique(years[splits == split]):
                     sel = (splits == split) & (years == year)
@@ -500,17 +613,64 @@ def temporal_checks(
                     err_k = err[sel].reshape(k, n_d, -1)
                     acc.add(err_k, np.zeros_like(err_k), valid_new[sel].reshape(k, n_d, -1))
 
-        _count_physics(blk, first_new, phys)
-        cell_ok: np.ndarray = np.asarray(blk.valid[:, heat_levels].all(axis=1))
-        hc_p = _heat_content(blk.pred[:, heat_levels], weights[heat_levels])
-        hc_g = _heat_content(blk.glorys[:, heat_levels], weights[heat_levels])
-        for j in range(first_new, len(blk.dates)):
-            gi = blk.start + j
-            if gi in month_starts:
-                phys.heat[gi] = (hc_p[j], hc_g[j], cell_ok[j])
-        block_slice = slice(blk.start + first_new, blk.start + len(blk.dates))
-        for r, mask in enumerate(regions.values()):
-            phys.flux_region[block_slice, r] = _region_mean(blk.flux[first_new:], mask)
+        if phys is not None:
+            _count_physics(blk, first_new, phys)
+            cell_ok: np.ndarray = np.asarray(blk.valid[:, heat_levels].all(axis=1))
+            hc_p = _heat_content(blk.pred[:, heat_levels], weights[heat_levels])
+            hc_g = _heat_content(blk.glorys[:, heat_levels], weights[heat_levels])
+            for j in range(first_new, len(blk.dates)):
+                gi = blk.start + j
+                if gi in month_starts:
+                    phys.heat[gi] = (hc_p[j], hc_g[j], cell_ok[j])
+            block_slice = slice(blk.start + first_new, blk.start + len(blk.dates))
+            for r, mask in enumerate(regions.values()):
+                phys.flux_region[block_slice, r] = _region_mean(blk.flux[first_new:], mask)
+
+
+def temporal_checks(
+    config: ExperimentConfig,
+    predictions: Path,
+    store_path: Path | list[Path],
+    stats_path: Path | None = None,
+    out_dir: Path | None = None,
+    figure_config: Path = DEFAULT_FIGURE_CONFIG,
+    ridge_path: Path | None = None,
+    train_predictions: Path | None = None,
+) -> dict[str, Path]:
+    """Run §5.8 on one validation prediction store and write its ML-internal files.
+
+    ``ridge_path`` adds the Ridge baseline to the flicker and bias checks. ``train_predictions``
+    adds the train years to the bias check (its flicker and physics are not used).
+    """
+    stores = store_path if isinstance(store_path, list) else [store_path]
+    pred = xr.open_zarr(predictions)
+    run_id = str(pred.attrs["run_id"])
+    model = str(pred.attrs.get("model_name", "unet"))
+    dates = _store_dates(pred, config)
+    depths = [float(d) for d in pred["depth"].values]
+    n_d = len(depths)
+    regions = region_masks(np.asarray(pred["lat"].values), np.asarray(pred["lon"].values))
+    weights = heat_content_weights(np.asarray(depths))
+    heat_levels = weights > 0
+    ridge = _Ridge.load(ridge_path, open_parts(stores, stats_path), depths) if ridge_path else None
+
+    flicker = {model: _Flicker(n_d), CLIMATOLOGY: _Flicker(n_d)}
+    if ridge is not None:
+        flicker[RIDGE] = _Flicker(n_d)
+    bias: dict[tuple[str, str, int], _Acc] = {}
+    phys = _Physics(flux_region=np.full((len(dates), len(regions)), np.nan))
+    _scan_store(
+        config, pred, stores, stats_path, model, regions, weights, heat_levels, ridge, bias,
+        flicker=flicker, phys=phys,
+    )  # fmt: skip
+    if train_predictions is not None:
+        train_pred = xr.open_zarr(train_predictions)
+        if str(train_pred.attrs.get("run_id")) != run_id:
+            raise ValueError(f"{train_predictions} is from run {train_pred.attrs.get('run_id')}")
+        _scan_store(
+            config, train_pred, stores, stats_path, model, regions, weights, heat_levels, ridge,
+            bias,
+        )  # fmt: skip
 
     metrics_dir = Path(out_dir or config.paths.outputs) / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -576,6 +736,11 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--store", nargs="+", required=True)
     parser.add_argument("--stats", default=None)
     parser.add_argument("--out-dir", default=None, help="Outputs dir (default paths.outputs)")
+    parser.add_argument("--ridge", default=None, help="models/baseline_ridge.npz (optional)")
+    parser.add_argument(
+        "--train-predictions", default=None,
+        help="Day-sampled train-year prediction store, for the train rows of the bias check",
+    )  # fmt: skip
     return parser
 
 
@@ -589,6 +754,8 @@ def main() -> None:
         [Path(p) for p in args.store],
         stats_path=Path(args.stats) if args.stats else None,
         out_dir=Path(args.out_dir) if args.out_dir else None,
+        ridge_path=Path(args.ridge) if args.ridge else None,
+        train_predictions=Path(args.train_predictions) if args.train_predictions else None,
     )
 
 

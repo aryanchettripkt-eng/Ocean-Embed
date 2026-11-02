@@ -18,9 +18,11 @@ from oceanscope_ml.evaluation.temporal import (
     _Flicker,
     _flicker_inputs,
     _Physics,
+    _Ridge,
     heat_content_weights,
     temporal_checks,
 )
+from oceanscope_ml.models.baselines import CANDIDATE_2D_VARS
 
 
 def _block(pred: np.ndarray, glorys: np.ndarray, dates: pd.DatetimeIndex) -> _Block:
@@ -92,11 +94,18 @@ def test_inversion_and_outlier_counts() -> None:
 
 
 def _write_predictions(
-    path: Path, config: ExperimentConfig, store: Path, offset: float, extra_end: str | None = None
+    path: Path,
+    config: ExperimentConfig,
+    store: Path,
+    offset: float,
+    extra_end: str | None = None,
+    start: str | None = None,
+    stride: int = 1,
 ) -> Path:
     parts = open_parts([store])
     end = extra_end or config.splits.val[1]
-    sel = parts.sel(time=slice(pd.Timestamp(config.splits.train[0]), pd.Timestamp(end)))
+    sel = parts.sel(time=slice(pd.Timestamp(start or config.splits.train[0]), pd.Timestamp(end)))
+    sel = sel.isel(time=slice(None, None, stride))
     truth = np.asarray(sel["thetao"].values, dtype=np.float32)
     ds = xr.Dataset(
         {
@@ -156,3 +165,103 @@ def test_temporal_checks_refuses_test_dates(
     )
     with pytest.raises(TestLeakageError):
         temporal_checks(config, pred_path, store, out_dir=tmp_path / "out")
+
+
+def _zero_ridge(path: Path, store: Path, n_depths: int, intercept: float = 0.0) -> Path:
+    """A Ridge file with zero weights: its prediction is the climatology plus ``intercept``."""
+    ds = open_parts([store])
+    n_features = (
+        len([v for v in CANDIDATE_2D_VARS if v in ds.data_vars])
+        + int("bathymetry" in ds.data_vars)
+        + int("woa_clim_profile" in ds.data_vars)
+        + 4
+    )
+    np.savez(
+        path,
+        weights=np.zeros((n_features, n_depths), np.float32),
+        intercept=np.full(n_depths, intercept, np.float32),
+        mu_X=np.zeros(n_features, np.float32),
+        sigma_X=np.ones(n_features, np.float32),
+    )
+    return path
+
+
+def test_ridge_anomaly_is_its_intercept_on_valid_cells(
+    store: Path, config: ExperimentConfig
+) -> None:
+    ds = open_parts([store])
+    n_depths = len(config.depths_m)
+    ridge = _Ridge.load(_zero_ridge(store.parent / "ridge0.npz", store, n_depths, 0.25), ds,
+                        [float(d) for d in config.depths_m])  # fmt: skip
+    day = pd.Timestamp(config.splits.val[0])
+    k = int(np.flatnonzero(pd.to_datetime(ds["time"].values) == day)[0])
+    anom = ridge.anomaly(ds, k, int(day.day_of_year))
+    assert anom.shape == (n_depths, ds.sizes["lat"], ds.sizes["lon"])
+    finite = np.isfinite(anom)
+    assert finite.any()
+    assert np.allclose(anom[finite], 0.25)
+
+
+def test_ridge_with_zero_weights_matches_climatology(
+    config: ExperimentConfig, store: Path, tmp_path: Path
+) -> None:
+    pred_path = _write_predictions(tmp_path / "pred_r.zarr", config, store, offset=0.3)
+    ridge_path = _zero_ridge(tmp_path / "ridge_zero.npz", store, len(config.depths_m))
+    paths = temporal_checks(
+        config, pred_path, store, out_dir=tmp_path / "out_r", ridge_path=ridge_path
+    )
+    temporal = pd.read_csv(paths["temporal"])
+    assert set(temporal["model"]) == {"unet", "climatology", "ridge"}
+    clim = temporal[temporal["model"] == "climatology"].reset_index(drop=True)
+    ridge = temporal[temporal["model"] == "ridge"].reset_index(drop=True)
+    assert np.allclose(ridge["tend_rmse_pred_c"], clim["tend_rmse_pred_c"], equal_nan=True)
+    assert np.allclose(ridge["lag1_autocorr_pred"], clim["lag1_autocorr_pred"], equal_nan=True)
+    bias = pd.read_csv(paths["bias_by_year"])
+    assert "ridge" in set(bias["model"])
+
+
+def test_train_sample_adds_train_years_to_the_bias_check(
+    config: ExperimentConfig, store: Path, tmp_path: Path
+) -> None:
+    val_path = _write_predictions(tmp_path / "pred_v.zarr", config, store, offset=0.3)
+    train_path = _write_predictions(
+        tmp_path / "pred_train.zarr", config, store, offset=0.3,
+        extra_end=config.splits.train[1], start=config.splits.train[0], stride=7,
+    )  # fmt: skip
+    paths = temporal_checks(
+        config, val_path, store, out_dir=tmp_path / "out_t", train_predictions=train_path
+    )
+    bias = pd.read_csv(paths["bias_by_year"])
+    unet = bias[bias["model"] == "unet"]
+    assert {"train", "val"} <= set(unet["split"])
+    train_rows = unet[unet["split"] == "train"]
+    assert np.allclose(train_rows["bias_c"].to_numpy(), 0.3, atol=0.02)
+    # The day-sampled store adds no flicker: its days are not consecutive.
+    temporal = pd.read_csv(paths["temporal"])
+    assert (
+        int(temporal[(temporal["model"] == "unet") & (temporal["depth_m"] == "all")]["n"].iloc[0])
+        > 0
+    )
+    physics = pd.read_csv(paths["physics"])
+    assert physics["value"].notna().any()
+
+
+def test_train_sample_from_another_run_is_refused(
+    config: ExperimentConfig, store: Path, tmp_path: Path
+) -> None:
+    val_path = _write_predictions(tmp_path / "pred_v2.zarr", config, store, offset=0.0)
+    train_path = _write_predictions(
+        tmp_path / "pred_t2.zarr", config, store, offset=0.0,
+        extra_end=config.splits.train[1], start=config.splits.train[0], stride=7,
+    )  # fmt: skip
+    xr.open_zarr(train_path).load().assign_attrs(run_id="other").to_zarr(
+        tmp_path / "pred_other.zarr", mode="w", zarr_format=2
+    )
+    with pytest.raises(ValueError, match="is from run"):
+        temporal_checks(
+            config,
+            val_path,
+            store,
+            out_dir=tmp_path / "out_t2",
+            train_predictions=tmp_path / "pred_other.zarr",
+        )

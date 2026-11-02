@@ -9,7 +9,9 @@ Usage (from ml/):
 Writes ``<out>/predictions/predictions_<run_id>.zarr`` with ``temp_pred`` (°C, climatology
 added back), ``temp_glorys`` and ``coverage`` on the dates of ``inference.publish_splits``.
 
-Only the validation split is written here. Test dates are sealed (PRD §0 rule 3): they are read
+``--split train --day-stride N`` writes a sample of the training years instead, to
+``predictions_<run_id>_train.zarr`` (every N-th day). It feeds the train-year rows of the §5.8.2
+bias check only; it is never published. Test dates are sealed (PRD §0 rule 3): they are read
 only by ``oceanscope_ml.evaluation.final_test``, run once on the owner's request.
 """
 
@@ -45,6 +47,8 @@ REQUIRED_INPUTS = ("sla", "sst", "u_wind", "v_wind")
 MIN_CORE_VALID = 7
 COVERAGE_LAND, COVERAGE_VALID, COVERAGE_INSUFFICIENT = 0, 1, 2
 WRITE_BLOCK_DAYS = 32
+# Every 30th training day: about 300 days over 1993-2017, enough for per-year bias rows.
+TRAIN_SAMPLE_STRIDE_DAYS = 30
 
 
 def load_checkpoint(
@@ -112,20 +116,25 @@ def predict_store(
     run_id: str | None = None,
     split: str | None = None,
     allow_test: bool = False,
+    day_stride: int | None = None,
 ) -> Path:
     """Run the model on every validation day (or on ``split``) and write the prediction store.
 
-    The test split is read only when ``allow_test`` is set, which only final_test does
-    (PRD_AI_ML §0 rule 3).
+    ``split="train"`` writes every ``day_stride``-th training day (default
+    ``TRAIN_SAMPLE_STRIDE_DAYS``) to a ``_train`` store. The test split is read only when
+    ``allow_test`` is set, which only final_test does (PRD_AI_ML §0 rule 3).
     """
     device = resolve_device(device_choice)
     model, ckpt_run_id = load_checkpoint(config, checkpoint, device)
     run_id = run_id or ckpt_run_id
     split = split or _publish_splits(config)[0]
-    if split not in ("val", "test"):
-        raise ValueError(f"predict_store writes the val or test split, not {split!r}")
+    if split not in ("val", "train", "test"):
+        raise ValueError(f"predict_store writes the val, train or test split, not {split!r}")
     if split == "test" and not allow_test:
         raise TestLeakageError("The test split is read only by final_test (PRD_AI_ML §0 rule 3).")
+    stride = int(day_stride or (TRAIN_SAMPLE_STRIDE_DAYS if split == "train" else 1))
+    if stride < 1:
+        raise ValueError(f"day_stride must be at least 1, not {stride}")
 
     dataset = OceanScopeDataset(
         store_path,
@@ -137,7 +146,8 @@ def predict_store(
     )
     ds = open_parts(store_path if isinstance(store_path, list) else [store_path], stats_path)
     times = pd.to_datetime(ds["time"].values)
-    positions = np.asarray(dataset._positions)
+    sample_idx = np.arange(0, len(dataset._positions), stride)  # dataset index of each day
+    positions = np.asarray(dataset._positions)[sample_idx]
     dates = pd.DatetimeIndex(times[positions])
     ocean = np.asarray(ds["ocean_mask"].values, dtype=bool)
     sigma = dataset.sigma_d.astype(np.float32)[:, None, None]
@@ -148,7 +158,8 @@ def predict_store(
 
     out_base = Path(out_dir or config.paths.outputs) / "predictions"
     out_base.mkdir(parents=True, exist_ok=True)
-    dest = out_base / f"predictions_{run_id}.zarr"
+    suffix = "_train" if split == "train" else ""
+    dest = out_base / f"predictions_{run_id}{suffix}.zarr"
     if dest.exists():
         shutil.rmtree(dest)
 
@@ -159,6 +170,7 @@ def predict_store(
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "split_of_each_date": json.dumps(split_runs(dates, split)),
         "depths_m": depths,
+        "day_stride": stride,
     }
     coords = {
         "time": dates.values,
@@ -207,7 +219,7 @@ def predict_store(
         for b0 in range(0, len(dates), WRITE_BLOCK_DAYS):
             b1 = min(b0 + WRITE_BLOCK_DAYS, len(dates))
             loader = DataLoader(
-                Subset(dataset, list(range(b0, b1))),
+                Subset(dataset, sample_idx[b0:b1].tolist()),
                 batch_size=batch_size,
                 shuffle=False,
                 num_workers=int(config.train.get("num_workers", 2)),
@@ -254,6 +266,11 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--out-dir", default=None, help="Outputs dir (default paths.outputs)")
     parser.add_argument("--run-id", default=None, help="Default: the checkpoint's run id")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--split", default="val", choices=["val", "train"])
+    parser.add_argument(
+        "--day-stride", type=int, default=None,
+        help=f"Write every N-th day (default 1 for val, {TRAIN_SAMPLE_STRIDE_DAYS} for train)",
+    )  # fmt: skip
     return parser
 
 
@@ -270,6 +287,8 @@ def main() -> None:
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         device_choice=args.device,
         run_id=args.run_id,
+        split=args.split,
+        day_stride=args.day_stride,
     )
 
 
