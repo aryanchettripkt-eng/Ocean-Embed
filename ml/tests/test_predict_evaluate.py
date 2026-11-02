@@ -11,6 +11,7 @@ import pytest
 import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
+from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.evaluation.evaluate import evaluate_predictions, write_manifest
 from oceanscope_ml.inference.predict import predict_store, split_runs
 from oceanscope_ml.train import train_run
@@ -78,3 +79,30 @@ def test_split_runs_groups_unbroken_days() -> None:
         "2018-01-01/2018-01-02": "val",
         "2018-01-05/2018-01-05": "val",
     }
+
+
+def test_train_sample_is_day_strided_and_labelled_train(
+    config: ExperimentConfig, store: Path, checkpoint: Path
+) -> None:
+    train_path = predict_store(
+        config, store, checkpoint, device_choice="cpu", split="train", day_stride=7
+    )
+    assert train_path.name == "predictions_run1_train.zarr"
+    sample = xr.open_zarr(train_path)
+    times = pd.DatetimeIndex(sample["time"].values)
+    assert len(times) > 0
+    assert times.min() >= pd.Timestamp(config.splits.train[0])
+    assert times.max() <= pd.Timestamp(config.splits.train[1])
+    assert sample.attrs["day_stride"] == 7
+    assert set(json.loads(sample.attrs["split_of_each_date"]).values()) == {"train"}
+    # The sample is a strided subset of the training days, not the whole training period.
+    full_days = pd.DatetimeIndex(open_parts([store]).time.values)
+    n_train = int(
+        ((full_days >= config.splits.train[0]) & (full_days <= config.splits.train[1])).sum()
+    )
+    assert len(times) <= n_train // 7 + 1
+    # The validation store is still the one that feeds the rest of the pipeline.
+    assert (
+        predict_store(config, store, checkpoint, device_choice="cpu").name
+        == "predictions_run1.zarr"
+    )
