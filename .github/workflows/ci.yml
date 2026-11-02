@@ -60,6 +60,10 @@ jobs:
         if: ${{ needs.filter.outputs.ml == 'true' }}
         run: |
           python -m pip install --upgrade pip
+          # Install CPU torch first. The dev extras pull torch, and pip's resolver gives up
+          # (resolution-too-deep) while it backtracks through torch's CUDA wheels. A preinstalled
+          # CPU torch satisfies torch>=2.2.0, so the resolver never has to walk that graph.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
 
       - name: Run Ruff Lint
