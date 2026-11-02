@@ -38,8 +38,9 @@ inputs:
     stride: 5              # frames at t-5, t-10, ..., t-60 (12 frames)
     reduce: mean           # each frame = mean over its 5-day window
   indices: [nino34, dmi, mjo_rmm1, mjo_rmm2]   # daily scalars broadcast to grid
+  indices_enabled: false   # off until the index inputs are built (B9)
   argo_input:              # recent ARGO profiles as sparse input channels
-    enabled: true
+    enabled: false         # off until ARGO inputs are built (P4-6)
     window_days: 10        # profiles from days t-9..t
     min_year: 2004         # before this, channels are all-empty (mask 0)
     train_drop_frac: 0.3   # randomly hide fraction of input profiles during training
@@ -91,8 +92,11 @@ train:
   weight_decay: 1.0e-4
   max_epochs: 80
   early_stopping_patience: 10
-  amp: true
-  num_workers: 2
+  amp: true                 # used only when CUDA is available
+  scheduler: cosine         # CosineAnnealingLR over max_epochs, stepped once per epoch
+  min_lr: 1.0e-5
+  num_workers: 2            # DataLoader workers (Kaggle/Colab: 2 is safe)
+  pin_memory: true          # pinned host memory for GPU copies (ignored on CPU)
 
 inference:
   publish_splits: [val, test]   # dates written to the published prediction store

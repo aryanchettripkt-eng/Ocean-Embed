@@ -128,12 +128,17 @@ def fit_harmonic_climatology(
     clim_out = np.full((366, n_depth, n_lat, n_lon), np.nan, dtype=np.float32)
     n_cells = n_depth * n_lat * n_lon
 
-    # Chunked accumulation of X^T X and X^T Y (PRD §4.2, REVIEW_P3 R3: < 100 MB RAM)
-    xt_x = x_train.T @ x_train  # (p, p)
+    # Streaming normal equations per cell, so memory does not grow with n_time
+    # (PRD §4.2, REVIEW_P3 R3). A cell's X^T X only sums the rows where that cell is
+    # finite, which is the same fit as lstsq on its valid rows. Rows of
+    # x_outer = x_t x_t^T flattened, so valid.T @ x_outer gives every cell's X^T X in
+    # one matrix product.
+    x_outer = np.einsum("tp,tq->tpq", x_train, x_train).reshape(n_time, p * p)
+    xt_x_cell = np.zeros((n_cells, p * p), dtype=np.float64)
     xt_y = np.zeros((p, n_cells), dtype=np.float64)
     n_valid_per_cell = np.zeros(n_cells, dtype=np.int32)
 
-    chunk_size = 365
+    chunk_size = 64
     for start_i in range(0, n_time, chunk_size):
         end_i = min(start_i + chunk_size, n_time)
         x_chunk = x_train[start_i:end_i]
@@ -141,7 +146,7 @@ def fit_harmonic_climatology(
         if isinstance(thetao, xr.DataArray):
             t_chunk = thetao.isel(time=slice(start_i, end_i)).values
         else:
-            t_chunk = thetao[start_i:end_i]
+            t_chunk = np.asarray(thetao[start_i:end_i])
 
         t_chunk_flat = t_chunk.reshape((t_chunk.shape[0], n_cells)).astype(np.float64)
         valid_chunk = np.isfinite(t_chunk_flat)
@@ -149,45 +154,28 @@ def fit_harmonic_climatology(
 
         t_chunk_clean = np.where(valid_chunk, t_chunk_flat, 0.0)
         xt_y += x_chunk.T @ t_chunk_clean
+        xt_x_cell += valid_chunk.T.astype(np.float64) @ x_outer[start_i:end_i]
 
-    # Cells with full valid observations across all training dates
+    target_slice = clim_out.reshape((366, n_cells))
+
+    # Cells with full valid observations across all training dates share one X^T X
     full_valid_cells = np.where(n_valid_per_cell == n_time)[0]
     if len(full_valid_cells) > 0:
-        try:
-            beta = np.linalg.solve(xt_x, xt_y[:, full_valid_cells])  # (p, n_full)
-            pred_366 = x_366 @ beta  # (366, n_full)
-            target_slice = clim_out.reshape((366, n_cells))
-            target_slice[:, full_valid_cells] = pred_366.astype(np.float32)
-        except np.linalg.LinAlgError:
-            logger.warning("LinAlgError in vectorized harmonic fit; falling back to lstsq")
+        xt_x = x_train.T @ x_train
+        beta = np.linalg.lstsq(xt_x, xt_y[:, full_valid_cells], rcond=None)[0]
+        target_slice[:, full_valid_cells] = (x_366 @ beta).astype(np.float32)
 
-    # Cells with partial missing values
+    # Cells with some missing values: solve their own normal equations in batches
     partial_cells = np.where((n_valid_per_cell < n_time) & (n_valid_per_cell >= min_valid_samples))[
         0
     ]
-    if len(partial_cells) > 0:
-        # Read only partial cells chunk by chunk without loading full thetao into memory
-        t_full_partial = np.full((n_time, len(partial_cells)), np.nan, dtype=np.float64)
-        for s_i in range(0, n_time, chunk_size):
-            e_i = min(s_i + chunk_size, n_time)
-            if isinstance(thetao, xr.DataArray):
-                c_data = thetao.isel(time=slice(s_i, e_i)).values
-            else:
-                c_data = thetao[s_i:e_i]
-            c_flat = c_data.reshape((e_i - s_i, n_cells))
-            t_full_partial[s_i:e_i] = c_flat[:, partial_cells]
-
-        for idx_in_partial, cell_idx in enumerate(partial_cells):
-            y_col = t_full_partial[:, idx_in_partial]
-            c_mask = np.isfinite(y_col)
-            x_sub = x_train[c_mask]
-            y_sub = y_col[c_mask]
-            try:
-                beta_sub, _, _, _ = np.linalg.lstsq(x_sub, y_sub, rcond=None)
-                pred_sub = x_366 @ beta_sub
-                clim_out.reshape((366, n_cells))[:, cell_idx] = pred_sub.astype(np.float32)
-            except Exception:
-                pass
+    batch = 20_000
+    for b0 in range(0, len(partial_cells), batch):
+        cells = partial_cells[b0 : b0 + batch]
+        a_mat = xt_x_cell[cells].reshape(len(cells), p, p)
+        rhs = xt_y[:, cells].T[:, :, None]
+        beta_b = (np.linalg.pinv(a_mat) @ rhs)[:, :, 0]  # (n_batch, p)
+        target_slice[:, cells] = (x_366 @ beta_b.T).astype(np.float32)
 
     return clim_out
 

@@ -29,6 +29,7 @@ from oceanscope_ml.data.preprocess import (
     run_preprocessing,
 )
 from oceanscope_ml.data.reduce import TargetGrid
+from tests.stream_mocks import install_stream_mocks
 from tests.synthetic_data import generate_synthetic_raw_sample
 
 
@@ -340,8 +341,6 @@ def test_stream_build_store_full_year_mocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify build_store with stream=True builds full year from empty raw folder."""
-    import oceanscope_ml.data.build_store as bs_mod
-
     empty_raw = tmp_path / "empty_raw"
     empty_raw.mkdir()
     out_dir = tmp_path / "out"
@@ -350,120 +349,9 @@ def test_stream_build_store_full_year_mocked(
     scratch_dir.mkdir()
 
     cfg = MockConfig(empty_raw, out_dir, tmp_path / "outputs")
-    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
-    sample_dates = pd.date_range("2019-01-01", periods=3, freq="D")
-
-    lats = grid.lats
-    lons = grid.lons
-    n_t = len(sample_dates)
-    n_d = len(cfg.depths_m)
-    n_lat = len(lats)
-    n_lon = len(lons)
-
-    ds_mock_glorys = xr.Dataset(
-        data_vars={
-            "thetao": (
-                ("time", "depth", "lat", "lon"),
-                np.full((n_t, n_d, n_lat, n_lon), 24.0, dtype=np.float32),
-            )
-        },
-        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
+    install_stream_mocks(
+        monkeypatch, cfg.depths_m, pd.date_range("2019-01-01", periods=3, freq="D")
     )
-    ds_mock_sla = xr.Dataset(
-        data_vars={
-            "sla": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.05, dtype=np.float32)),
-            "adt": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.85, dtype=np.float32)),
-        },
-        coords={"time": sample_dates, "lat": lats, "lon": lons},
-    )
-    ds_mock_sst = xr.Dataset(
-        data_vars={
-            "analysed_sst": (
-                ("time", "lat", "lon"),
-                np.full((n_t, n_lat, n_lon), 299.15, dtype=np.float32),
-            )
-        },
-        coords={"time": sample_dates, "lat": lats, "lon": lons},
-    )
-    ds_mock_sst["analysed_sst"].attrs["units"] = "Kelvin"
-    ds_mock_sss = xr.Dataset(
-        data_vars={
-            "sos": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 35.0, dtype=np.float32))
-        },
-        coords={"time": sample_dates, "lat": lats, "lon": lons},
-    )
-    ds_mock_grep = xr.Dataset(
-        data_vars={
-            "thetao_mean": (
-                ("time", "depth", "lat", "lon"),
-                np.full((n_t, n_d, n_lat, n_lon), 23.5, dtype=np.float32),
-            )
-        },
-        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
-    )
-    ds_mock_armor = xr.Dataset(
-        data_vars={
-            "to": (
-                ("time", "depth", "lat", "lon"),
-                np.full((n_t, n_d, n_lat, n_lon), 24.2, dtype=np.float32),
-            )
-        },
-        coords={"time": sample_dates, "depth": cfg.depths_m, "lat": lats, "lon": lons},
-    )
-    ds_mock_era5 = xr.Dataset(
-        data_vars={
-            "u10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -3.0, dtype=np.float32)),
-            "v10": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -4.0, dtype=np.float32)),
-            "ssr": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 15.0, dtype=np.float32)),
-            "str": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 10.0, dtype=np.float32)),
-            "sshf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
-            "slhf": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 5.0, dtype=np.float32)),
-            "tp": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.002, dtype=np.float32)),
-        },
-        coords={"time": sample_dates, "lat": lats, "lon": lons},
-    )
-    for v in ["ssr", "str", "sshf", "slhf"]:
-        ds_mock_era5[v].attrs["units"] = "W m**-2"
-    ds_mock_era5["tp"].attrs["units"] = "m"
-
-    ds_mock_oscar = xr.Dataset(
-        data_vars={
-            "u": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), 0.1, dtype=np.float32)),
-            "v": (("time", "lat", "lon"), np.full((n_t, n_lat, n_lon), -0.05, dtype=np.float32)),
-        },
-        coords={"time": sample_dates, "lat": lats, "lon": lons},
-    )
-    ds_mock_gebco = xr.Dataset(
-        data_vars={
-            "elevation": (("lat", "lon"), np.full((n_lat, n_lon), -1500.0, dtype=np.float32))
-        },
-        coords={"lat": lats, "lon": lons},
-    )
-    da_mock_woa = xr.DataArray(
-        np.full((12, n_d, n_lat, n_lon), 25.0, dtype=np.float32),
-        dims=("month", "depth", "lat", "lon"),
-        coords={"month": np.arange(1, 13), "depth": cfg.depths_m, "lat": lats, "lon": lons},
-    )
-
-    expected_datasets: dict[str, xr.Dataset] = {
-        PRODUCT_SPECS["glorys12"]["dataset_id"]: ds_mock_glorys,
-        PRODUCT_SPECS["sla"]["dataset_id"]: ds_mock_sla,
-        PRODUCT_SPECS["sst"]["dataset_id"]: ds_mock_sst,
-        PRODUCT_SPECS["sss"]["dataset_id"]: ds_mock_sss,
-        PRODUCT_SPECS["grep"]["dataset_id"]: ds_mock_grep,
-        PRODUCT_SPECS["armor3d"]["dataset_id"]: ds_mock_armor,
-    }
-
-    def mock_stream_copernicus(dataset_id: str, **kwargs: Any) -> xr.Dataset:
-        if dataset_id not in expected_datasets:
-            raise ValueError(f"Wrong dataset_id: {dataset_id}")
-        return expected_datasets[dataset_id]
-
-    monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream_copernicus)
-    monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_era5)
-    monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_oscar)
-    monkeypatch.setattr(bs_mod, "stream_gebco", lambda *args, **kwargs: ds_mock_gebco)
-    monkeypatch.setattr(bs_mod, "stream_woa", lambda *args, **kwargs: da_mock_woa)
 
     # Build store in streaming mode from empty raw folder
     store_dest = build_store(
@@ -646,6 +534,7 @@ def test_stream_silent_failures_raise(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", lambda *args, **kwargs: ds_mock)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock)
+    monkeypatch.setattr(bs_mod, "stream_era5_arco", lambda *args, **kwargs: ds_mock)
     monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock)
 
     def failing_stream(*args: Any, **kwargs: Any) -> Any:
@@ -816,6 +705,7 @@ def test_grep_ends_partway_through_year(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(bs_mod, "stream_copernicus", mock_stream)
     monkeypatch.setattr(bs_mod, "stream_era5_daily", lambda *args, **kwargs: ds_mock_2d)
+    monkeypatch.setattr(bs_mod, "stream_era5_arco", lambda *args, **kwargs: ds_mock_2d)
     monkeypatch.setattr(bs_mod, "stream_oscar", lambda *args, **kwargs: ds_mock_2d)
 
     ds_year, _ = bs_mod.reduce_year_dataset(
@@ -839,3 +729,135 @@ def test_grep_ends_partway_through_year(tmp_path: Path, monkeypatch: pytest.Monk
     assert np.isnan(dec_16_vals).all()
     dec_31_vals = ds_year["grep_mean"].sel(time="2020-12-31").values
     assert np.isnan(dec_31_vals).all()
+
+
+def test_finalize_fits_climatology_on_built_years_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unbuilt (all-NaN) years in the pre-allocated store must not reach the climatology fit.
+
+    On Kaggle a 2017-2018 build passed all 1993-2017 train dates to the fit, which made
+    every cell "partial" and ran out of memory before `clim` was written.
+    """
+    import oceanscope_ml.data.build_store as bs
+
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    outputs_dir = tmp_path / "outputs"
+    outputs_dir.mkdir()
+
+    cfg = MockConfig(raw_dir, out_dir, outputs_dir)
+    grid = TargetGrid.from_bounds(60.0, 62.0, 10.0, 12.0, 0.25)
+    generate_synthetic_raw_sample(
+        raw_dir, grid, cfg.depths_m, dates=pd.date_range("2019-01-01", periods=2, freq="D")
+    )
+
+    seen_years: list[set[int]] = []
+    real_fit = bs.fit_harmonic_climatology
+
+    def spy_fit(thetao: Any, time_coords: Any, **kwargs: Any) -> np.ndarray:
+        seen_years.append(set(pd.to_datetime(time_coords).year))
+        return real_fit(thetao, time_coords, **kwargs)
+
+    monkeypatch.setattr(bs, "fit_harmonic_climatology", spy_fit)
+
+    store_path = build_store(
+        config=cfg,
+        years=[2019],
+        raw_dir=raw_dir,
+        out_dir=out_dir,
+        scratch_dir=tmp_path / "scratch",
+        dry_run=False,
+        finalize=True,
+    )
+
+    assert seen_years == [{2019}]
+    assert "clim" in xr.open_zarr(store_path).data_vars
+
+
+def test_stream_copernicus_pins_sss_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SSS 202311 is retired 2026-11-24; every year must stream that same pinned version."""
+    import sys
+    import types
+
+    import oceanscope_ml.data.build_store as bs
+
+    seen: dict[str, Any] = {}
+
+    def fake_open_dataset(**kwargs: Any) -> xr.Dataset:
+        seen.update(kwargs)
+        return xr.Dataset()
+
+    fake = types.ModuleType("copernicusmarine")
+    fake.open_dataset = fake_open_dataset  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "copernicusmarine", fake)
+
+    bs.stream_copernicus(
+        PRODUCT_SPECS["sss"]["dataset_id"], (60.0, 62.0, 10.0, 12.0), ("2019-01-01", "2019-01-02")
+    )
+    assert seen["dataset_version"] == "202311"
+    seen.clear()
+    bs.stream_copernicus(
+        PRODUCT_SPECS["sst"]["dataset_id"], (60.0, 62.0, 10.0, 12.0), ("2019-01-01", "2019-01-02")
+    )
+    assert "dataset_version" not in seen
+
+
+def test_arco_load_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 503 from Google Cloud is retried instead of dropping the whole year to CDS."""
+    import oceanscope_ml.data.build_store as bs_mod
+
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", waits.append)
+
+    class Flaky:
+        calls = 0
+
+        def load(self) -> str:
+            Flaky.calls += 1
+            if Flaky.calls < 3:
+                raise OSError("503 Service Unavailable")
+            return "loaded"
+
+    assert bs_mod._load_with_retries(Flaky(), "ERA5 1993-08") == "loaded"  # type: ignore[arg-type]
+    assert waits == list(bs_mod.ARCO_RETRY_WAITS_S[:2])
+
+    class Down:
+        def load(self) -> str:
+            raise OSError("503 Service Unavailable")
+
+    waits.clear()
+    with pytest.raises(OSError):
+        bs_mod._load_with_retries(Down(), "ERA5 1993-08")  # type: ignore[arg-type]
+    assert waits == list(bs_mod.ARCO_RETRY_WAITS_S)
+
+
+def test_oscar_search_retries_a_bad_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Part A crashed on one 502 from NASA's granule search; it must be retried."""
+    import sys
+    import types
+
+    import oceanscope_ml.data.build_store as bs_mod
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    calls = {"search": 0}
+
+    def search_data(**kwargs: object) -> list[str]:
+        calls["search"] += 1
+        if calls["search"] == 1:
+            raise OSError("502 Server Error: Bad Gateway")
+        return ["granule"]
+
+    fake = types.SimpleNamespace(
+        login=lambda strategy: None,
+        search_data=search_data,
+        download=lambda results, path: [str(tmp_path / "g.nc")],
+    )
+    monkeypatch.setitem(sys.modules, "earthaccess", fake)
+    monkeypatch.setattr(bs_mod.xr, "open_dataset", lambda path: "opened")
+    assert bs_mod.stream_oscar(1997, (40.0, 100.0, 0.0, 30.0), tmp_path) == "opened"
+    assert calls["search"] == 2

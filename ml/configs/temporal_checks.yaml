@@ -1,0 +1,11 @@
+# PRD_AI_ML §5.8 settings for evaluation/temporal.py. Kept out of experiment.yaml on purpose:
+# compute_config_hash hashes all of experiment.yaml, so editing it changes the hash of stores
+# and checkpoints that are already being built.
+figure:
+  days: 90
+  start: "2019-06-01"             # [CONFIRM] first day of the 90-day window; must be a prediction date
+  depths_m: [0.0, 100.0, 300.0]   # the nearest model level is plotted
+  points:                         # [CONFIRM] fixed points for §5.8.4
+    arabian_sea: {lat: 15.0, lon: 65.0}
+    bay_of_bengal: {lat: 15.0, lon: 88.0}
+    equatorial: {lat: 0.0, lon: 80.0}

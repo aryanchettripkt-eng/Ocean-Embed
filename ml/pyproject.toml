@@ -23,6 +23,8 @@ dependencies = [
     "dask>=2024.1.0",
     "netCDF4>=1.6.0",
     "Pillow>=10.0.0",
+    # P6-2 publish step: uploads the run's outputs to the Hugging Face dataset repo.
+    "huggingface_hub>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +34,8 @@ dev = [
     "ruff>=0.1.0",
     "types-PyYAML",
     "types-jsonschema",
+    # P4-1: the U-Net, loss and training tests import torch, so CI needs it here.
+    "torch>=2.2.0",
 ]
 
 [tool.setuptools.packages.find]

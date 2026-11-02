@@ -74,6 +74,9 @@ PRODUCT_SPECS: dict[str, dict[str, Any]] = {
         "provider": "Copernicus Marine Service",
         "source_id": "MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013",
         "dataset_id": "cmems_obs-mob_glo_phy-sss_my_multi_P1D",
+        # Only version on the server (checked 2026-10-27); it is retired 2026-11-24, so
+        # pin it to keep every year of the build on the same version.
+        "dataset_version": "202311",
         "source_url": "https://marine.copernicus.eu",
         "variables": ["sos"],
         "needs_lead_in": True,
@@ -800,7 +803,12 @@ def execute_download(
                     d_range = f"{item['start_date']}..{item['end_date']}"
                     print(f"  Querying Argo GDAC ERDDAP for North Indian Ocean ({d_range})...")
                     bbox = item["bbox"]
-                    query_vars = "platform_number,cycle_number,time,latitude,longitude,pres,temp"
+                    # QC flags for PRD §7. The names are not yet checked against the live
+                    # ArgoFloats dataset; a wrong name makes ERDDAP refuse the request.
+                    query_vars = (
+                        "platform_number,cycle_number,time,latitude,longitude,pres,temp,"
+                        "temp_qc,pres_qc,position_qc"
+                    )
                     constraints = (
                         f"&time>={item['start_date']}T00:00:00Z"
                         f"&time<={item['end_date']}T23:59:59Z"

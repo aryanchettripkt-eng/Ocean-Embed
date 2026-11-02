@@ -17,6 +17,7 @@ import pandas as pd
 import scipy.linalg
 import xarray as xr
 
+from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.preprocess import ExperimentConfig, load_config
 from oceanscope_ml.data.transform import check_no_test_leakage
 
@@ -68,6 +69,15 @@ def compute_valid_pixel_mask(
     for v in feature_2d_vars:
         if v in ds_t:
             valid_cell_mask &= np.isfinite(ds_t[v].values)
+
+    # Static features have their own land masks (GEBCO, WOA23) that can differ from the
+    # dynamic inputs at the coast; a NaN there breaks the Ridge normal equations.
+    if "bathymetry" in ds:
+        valid_cell_mask &= np.isfinite(ds["bathymetry"].values)
+    if "woa_clim_profile" in ds:
+        woa = ds["woa_clim_profile"].values
+        woa_surface = woa[0] if woa.ndim == 3 else woa[0, 0]
+        valid_cell_mask &= np.isfinite(woa_surface)
 
     return valid_cell_mask, clim_t
 
@@ -197,6 +207,9 @@ def extract_pixel_features_and_targets(
 
     all_X: list[np.ndarray] = []
     all_Y: list[np.ndarray] = []
+    # Keep at most this many cells per day, so memory stays near max_samples rows instead of
+    # every ocean cell of every day (~90 M rows, >20 GB, on the full store).
+    per_day = -(-int(max_samples) // len(valid_dates)) if max_samples is not None else None
 
     for d in valid_dates:
         t_str = d.strftime("%Y-%m-%d")
@@ -218,6 +231,9 @@ def extract_pixel_features_and_targets(
         )
         if day_result is not None:
             day_X, day_Y = day_result
+            if per_day is not None and len(day_X) > per_day:
+                keep = rng.choice(len(day_X), size=per_day, replace=False)
+                day_X, day_Y = day_X[keep], day_Y[keep]
             all_X.append(day_X)
             all_Y.append(day_Y)
 
@@ -276,7 +292,7 @@ def fit_ridge_baseline(
 
     for d in range(n_depths):
         y_d = Y_train[:, d]
-        valid_idx = np.where(np.isfinite(y_d))[0]
+        valid_idx = np.where(np.isfinite(y_d) & np.all(np.isfinite(X_norm), axis=1))[0]
         if len(valid_idx) == 0:
             continue
         X_sub = X_norm[valid_idx]
@@ -562,11 +578,12 @@ def evaluate_ridge_baseline(
 
 def run_baselines(
     config: ExperimentConfig,
-    store_path: Path | None = None,
+    store_path: Path | list[Path] | None = None,
     out_dir: Path | None = None,
     models_dir: Path | None = None,
     max_train_samples: int | None = None,
     ridge_alpha: float | None = None,
+    stats_path: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Train and evaluate non-neural baselines (Climatology and Ridge).
 
@@ -574,8 +591,9 @@ def run_baselines(
     ----------
     config : ExperimentConfig
         Experiment configuration.
-    store_path : Path, optional
-        Path to processed Zarr store (default: data/processed/oceanscope_<version>.zarr).
+    store_path : Path or list of Path, optional
+        Processed Zarr store, or the part stores of a multi-part build
+        (default: data/processed/oceanscope_<version>.zarr).
     out_dir : Path, optional
         Metrics output directory (default: outputs/metrics).
     models_dir : Path, optional
@@ -586,6 +604,8 @@ def run_baselines(
     ridge_alpha : float, optional
         Regularization parameter for Ridge.
         Defaults to config.baselines.ridge_alpha.
+    stats_path : Path, optional
+        Stats store holding `clim` and norm stats for a multi-part build.
 
     Returns
     -------
@@ -610,8 +630,10 @@ def run_baselines(
     out_dir.mkdir(parents=True, exist_ok=True)
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Opening processed Zarr store from %s...", store_path)
-    ds = xr.open_zarr(store_path)
+    store_paths = store_path if isinstance(store_path, list) else [store_path]
+    logger.info("Opening processed Zarr store(s) %s (stats: %s)...", store_paths, stats_path)
+    # Only the dates the store(s) actually wrote; unbuilt pre-allocated dates are all-NaN.
+    ds = open_parts(store_paths, stats_path)
 
     # Date splits
     train_split = config.splits.train
@@ -729,8 +751,16 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--store",
         type=Path,
+        nargs="+",
         default=None,
-        help="Path to processed Zarr store (default: data/processed/oceanscope_<v>.zarr).",
+        help="Processed Zarr store, or several part stores "
+        "(default: data/processed/oceanscope_<v>.zarr).",
+    )
+    parser.add_argument(
+        "--stats",
+        type=Path,
+        default=None,
+        help="Stats store with clim and norm stats, for a multi-part build.",
     )
     parser.add_argument(
         "--out-dir",
@@ -777,6 +807,7 @@ def main() -> None:
         models_dir=args.models_dir,
         max_train_samples=args.max_samples,
         ridge_alpha=args.alpha,
+        stats_path=args.stats,
     )
 
     print("\n" + "=" * 80)

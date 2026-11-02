@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -280,6 +281,7 @@ def stream_copernicus(
     variables: list[str] | None = None,
     depths: tuple[float, float] | None = None,
     depth_levels: list[float] | None = None,
+    bracket_levels: list[float] | None = None,
 ) -> xr.Dataset:
     """Stream a remote Copernicus Marine dataset via copernicusmarine.open_dataset."""
     try:
@@ -297,6 +299,13 @@ def stream_copernicus(
         "start_datetime": dates[0],
         "end_datetime": dates[1],
     }
+    pinned = [
+        spec["dataset_version"]
+        for spec in PRODUCT_SPECS.values()
+        if spec.get("dataset_id") == dataset_id and spec.get("dataset_version")
+    ]
+    if pinned:
+        kwargs["dataset_version"] = pinned[0]
     if variables:
         kwargs["variables"] = variables
     if depths:
@@ -318,18 +327,67 @@ def stream_copernicus(
                 matched_idx.append(idx)
         if len(matched_idx) == len(depth_levels):
             ds = ds.isel(depth=matched_idx)
+    elif bracket_levels is not None and "depth" in ds.coords:
+        # Keep only the source levels that linear interpolation to bracket_levels uses, so
+        # the download skips the other levels (same result as interpolating from all).
+        keep = bracketing_depth_indices(np.asarray(ds.coords["depth"].values), bracket_levels)
+        ds = ds.isel(depth=keep)
     return ds
+
+
+def bracketing_depth_indices(src_depths: np.ndarray, target_depths: list[float]) -> list[int]:
+    """Indices of the source levels at-or-above and at-or-below each target depth.
+
+    Linear interpolation (interpolate_depths_1d, including its exact-match and 5 cm clamp
+    paths) only reads these levels, so dropping the rest gives the same result.
+    """
+    src = np.asarray(src_depths, dtype=np.float64)
+    keep: set[int] = set()
+    for t in target_depths:
+        above = np.where(src <= t)[0]
+        below = np.where(src >= t)[0]
+        if len(above):
+            keep.add(int(above[np.argmax(src[above])]))
+        if len(below):
+            keep.add(int(below[np.argmin(src[below])]))
+    return sorted(keep)
+
+
+def _open_cds_download(path: Path) -> xr.Dataset:
+    """Open a CDS download, which can be a plain netCDF or a zip of several netCDFs."""
+    if not zipfile.is_zipfile(path):
+        return xr.open_dataset(path)
+    extract_dir = path.with_suffix("")
+    with zipfile.ZipFile(path) as zf:
+        members = [m for m in zf.namelist() if m.endswith(".nc")]
+        if not members:
+            raise RuntimeError(f"CDS zip {path} contains no .nc files")
+        zf.extractall(extract_dir, members=members)
+    parts = [xr.open_dataset(extract_dir / m) for m in sorted(members)]
+    return xr.merge(parts, compat="override")
+
+
+ERA5_DAILY_VARIABLES = [
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "surface_net_solar_radiation",
+    "surface_net_thermal_radiation",
+    "surface_sensible_heat_flux",
+    "surface_latent_heat_flux",
+    "total_precipitation",
+]
 
 
 def stream_era5_daily(
     year: int,
     bbox: tuple[float, float, float, float],
     scratch_dir: Path,
+    last_month: int = 12,
 ) -> xr.Dataset:
     """Request and download ERA5 daily-statistics dataset from CDS into scratch_dir."""
     out_file = scratch_dir / f"era5_daily_{year}.nc"
     if out_file.exists() and out_file.stat().st_size > 0:
-        ds = xr.open_dataset(out_file)
+        ds = _open_cds_download(out_file)
         ds.attrs["daily_statistic"] = "daily_mean"
         ds.attrs["is_daily_mean"] = True
         return ds
@@ -342,32 +400,145 @@ def stream_era5_daily(
     lon_min, lon_max, lat_min, lat_max = bbox
     area = [lat_max + 1.0, lon_min - 1.0, lat_min - 1.0, lon_max + 1.0]
 
+    # CDS rejects a whole year in one request ("cost limits exceeded"), so fetch month by
+    # month; each month is cached so a rerun only requests the missing ones.
     c = cdsapi.Client()
-    c.retrieve(
-        "derived-era5-single-levels-daily-statistics",
-        {
-            "product_type": "reanalysis",
-            "variable": [
-                "10m_u_component_of_wind",
-                "10m_v_component_of_wind",
-                "surface_net_solar_radiation",
-                "surface_net_thermal_radiation",
-                "surface_sensible_heat_flux",
-                "surface_latent_heat_flux",
-                "total_precipitation",
-            ],
-            "year": str(year),
-            "month": [f"{m:02d}" for m in range(1, 13)],
-            "day": [f"{d:02d}" for d in range(1, 32)],
-            "daily_statistic": "daily_mean",
-            "time_zone": "utc+00:00",
-            "frequency": "1_hourly",
-            "area": area,
-            "format": "netcdf",
-        },
-        str(out_file),
-    )
-    ds = xr.open_dataset(out_file)
+    months = []
+    for month in range(1, last_month + 1):
+        month_file = scratch_dir / f"era5_daily_{year}_{month:02d}.nc"
+        if not (month_file.exists() and month_file.stat().st_size > 0):
+            logger.info("Requesting ERA5 daily statistics for %d-%02d from CDS...", year, month)
+            c.retrieve(
+                "derived-era5-single-levels-daily-statistics",
+                {
+                    "product_type": "reanalysis",
+                    "variable": ERA5_DAILY_VARIABLES,
+                    "year": str(year),
+                    "month": [f"{month:02d}"],
+                    "day": [f"{d:02d}" for d in range(1, 32)],
+                    "daily_statistic": "daily_mean",
+                    "time_zone": "utc+00:00",
+                    "frequency": "1_hourly",
+                    "area": area,
+                    "format": "netcdf",
+                },
+                str(month_file),
+            )
+        months.append(_open_cds_download(month_file))
+    time_dim = "valid_time" if "valid_time" in months[0].dims else "time"
+    ds = xr.concat(months, dim=time_dim)
+    ds.attrs["daily_statistic"] = "daily_mean"
+    ds.attrs["is_daily_mean"] = True
+    return ds
+
+
+STREAM_DOWNLOAD_THREADS = 16
+
+ARCO_ERA5_URL = (
+    "https://storage.googleapis.com/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3"
+)
+# Google Cloud sometimes answers 503 for a few minutes. Retry a month with these waits
+# (seconds) before giving up: the CDS fallback queues for ~1 h per month.
+ARCO_RETRY_WAITS_S = (30, 60, 120, 240, 480)
+# ARCO long name -> ERA5 short name, and whether the field is an hourly accumulation.
+ARCO_ERA5_VARIABLES = {
+    "10m_u_component_of_wind": ("u10", False),
+    "10m_v_component_of_wind": ("v10", False),
+    "surface_net_solar_radiation": ("ssr", True),
+    "surface_net_thermal_radiation": ("str", True),
+    "surface_sensible_heat_flux": ("sshf", True),
+    "surface_latent_heat_flux": ("slhf", True),
+    "total_precipitation": ("tp", True),
+}
+
+
+def hourly_to_daily_mean(ds_hourly: xr.Dataset, days: pd.DatetimeIndex) -> xr.Dataset:
+    """Daily means of hourly ERA5, matching the CDS daily-statistics product.
+
+    Accumulations are labelled by the end of the hour, so they are shifted back one hour
+    before grouping by UTC day (same rule as reduce_era5_fluxes). Days with fewer than
+    18 hours are NaN.
+    """
+    out = {}
+    times = pd.to_datetime(ds_hourly["time"].values)
+    for name, da in ds_hourly.data_vars.items():
+        accum = bool(da.attrs.get("is_accumulation", False))
+        day_of = (times - pd.Timedelta(hours=1) if accum else times).normalize()
+        daily = np.full((len(days),) + da.shape[1:], np.nan, dtype=np.float32)
+        values = da.values
+        for i, day in enumerate(days):
+            sel = day_of == day
+            if int(sel.sum()) >= 18:
+                daily[i] = np.nanmean(values[sel], axis=0)
+        attrs = {k: v for k, v in da.attrs.items() if k != "is_accumulation"}
+        out[name] = xr.DataArray(
+            daily,
+            dims=da.dims,
+            coords={"time": days, **{d: ds_hourly[d] for d in da.dims[1:]}},
+            attrs=attrs,
+        )
+    ds = xr.Dataset(out)
+    ds.attrs["daily_statistic"] = "daily_mean"  # a string attr, so it survives netCDF
+    return ds
+
+
+def _load_with_retries(ds: xr.Dataset, label: str) -> xr.Dataset:
+    """``ds.load()``, retried after ARCO_RETRY_WAITS_S on any error (transient 503s)."""
+    return _with_retries(ds.load, label)
+
+
+def _with_retries(fn: Any, label: str) -> Any:
+    """``fn()``, retried after ARCO_RETRY_WAITS_S on any error (transient 5xx from a server)."""
+    import time
+
+    for attempt, wait in enumerate([*ARCO_RETRY_WAITS_S, None], start=1):
+        try:
+            return fn()
+        except Exception as e:
+            if wait is None:
+                raise
+            logger.warning("%s failed (attempt %d: %s); retrying in %d s.", label, attempt, e, wait)
+            time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
+def stream_era5_arco(
+    year: int,
+    bbox: tuple[float, float, float, float],
+    scratch_dir: Path,
+    url: str = ARCO_ERA5_URL,
+    last_month: int = 12,
+) -> xr.Dataset:
+    """Daily-mean ERA5 for one year from Google's public ARCO ERA5 Zarr (no CDS queue).
+
+    Reads hourly fields month by month, reduces them to daily means right away (one month
+    of hourly data is ~0.7 GB) and caches each month in scratch_dir.
+    """
+    lon_min, lon_max, lat_min, lat_max = bbox
+    zarr.config.set({"async.concurrency": 64})
+    src: xr.Dataset | None = None
+    months = []
+    for month in range(1, last_month + 1):
+        month_file = scratch_dir / f"era5_arco_daily_{year}_{month:02d}.nc"
+        if not (month_file.exists() and month_file.stat().st_size > 0):
+            if src is None:
+                src = xr.open_zarr(url, chunks=None, consolidated=True, zarr_format=2)
+            start = pd.Timestamp(year=year, month=month, day=1)
+            days = pd.date_range(start, start + pd.offsets.MonthEnd(0), freq="D")
+            logger.info("Reading ERA5 %d-%02d from ARCO ERA5 (Google Cloud)...", year, month)
+            # Include 00 UTC of the next day: it closes the last day's accumulations.
+            subset = src[list(ARCO_ERA5_VARIABLES)].sel(
+                time=slice(days[0], days[-1] + pd.Timedelta(days=1)),
+                latitude=slice(lat_max + 1.0, lat_min - 1.0),
+                longitude=slice(lon_min - 1.0, lon_max + 1.0),
+            )
+            hourly = _load_with_retries(subset, f"ERA5 {year}-{month:02d}")
+            for long_name, (short, accum) in ARCO_ERA5_VARIABLES.items():
+                hourly[long_name].attrs["is_accumulation"] = accum
+            hourly = hourly.rename({k: v[0] for k, v in ARCO_ERA5_VARIABLES.items()})
+            hourly_to_daily_mean(hourly, days).to_netcdf(month_file)
+        months.append(xr.open_dataset(month_file))
+    ds = xr.concat(months, dim="time")
     ds.attrs["daily_statistic"] = "daily_mean"
     ds.attrs["is_daily_mean"] = True
     return ds
@@ -377,6 +548,7 @@ def stream_oscar(
     year: int,
     bbox: tuple[float, float, float, float],
     scratch_dir: Path,
+    end_date: str | None = None,
 ) -> xr.Dataset:
     """Download OSCAR ocean currents from NASA Earthdata into scratch_dir."""
     out_dir = scratch_dir / "oscar"
@@ -388,14 +560,22 @@ def stream_oscar(
         raise RuntimeError("earthaccess package is required to stream OSCAR currents.") from e
 
     earthaccess.login(strategy="environment")
-    results = earthaccess.search_data(
-        short_name="OSCAR_L4_OC_FINAL_V2.0",
-        temporal=(f"{year}-01-01", f"{year}-12-31"),
-        bounding_box=bbox,
+    # NASA's search service sometimes answers 502 for a few minutes; retry like ARCO.
+    results = _with_retries(
+        lambda: earthaccess.search_data(
+            short_name="OSCAR_L4_OC_FINAL_V2.0",
+            temporal=(f"{year}-01-01", end_date or f"{year}-12-31"),
+            # earthaccess wants (west, south, east, north); bbox is (lon_min, lon_max,
+            # lat_min, lat_max)
+            bounding_box=(bbox[0], bbox[2], bbox[1], bbox[3]),
+        ),
+        f"OSCAR search {year}",
     )
     if not results:
         raise FileNotFoundError(f"No OSCAR granules found for year {year} in bbox {bbox}")
-    downloaded = earthaccess.download(results, str(out_dir))
+    downloaded = _with_retries(
+        lambda: earthaccess.download(results, str(out_dir)), f"OSCAR download {year}"
+    )
     if len(downloaded) == 1:
         return xr.open_dataset(downloaded[0])
     return xr.open_mfdataset(downloaded, combine="nested", concat_dim="time")
@@ -507,10 +687,14 @@ def reduce_year_dataset(
     scratch_dir: Path | None = None,
     cached_bathymetry: xr.DataArray | None = None,
     cached_woa_profile: xr.DataArray | None = None,
+    max_days: int | None = None,
+    skip_armor3d: bool = False,
 ) -> tuple[xr.Dataset, list[str]]:
     """Reduce all products for a given year using shared reduce functions from raw files.
 
     Strictly uses find_product_files (PRD §0 Rule 1, REVIEW A1); never synthesizes missing files.
+    ``max_days`` limits streaming to the first N days of the year (smoke test only).
+    ``skip_armor3d`` writes ARMOR3D as all-NaN instead of fetching it (train-only years).
     """
     source_files: list[str] = []
     processed_vars: dict[str, xr.DataArray] = {}
@@ -523,6 +707,13 @@ def reduce_year_dataset(
     )
     start_date = f"{year}-01-01"
     end_date = f"{year}-12-31"
+    last_month = 12
+    if max_days is not None:
+        end_ts = min(
+            pd.Timestamp(start_date) + pd.Timedelta(days=max_days - 1), pd.Timestamp(end_date)
+        )
+        end_date = end_ts.strftime("%Y-%m-%d")
+        last_month = end_ts.month
 
     # --- GLORYS12 Primary Target ---
     glorys_files = filter_files_by_year(find_product_files(raw_path, "glorys12", manifest), year)
@@ -665,7 +856,7 @@ def reduce_year_dataset(
         else:
             ds_raw_curr = xr.open_dataset(oscar_files[0])
     elif stream:
-        ds_raw_curr = stream_oscar(year, bbox, effective_scratch)
+        ds_raw_curr = stream_oscar(year, bbox, effective_scratch, end_date=end_date)
         source_files.append(f"podaac:OSCAR_L4_OC_FINAL_V2.0:{year}")
     else:
         raise FileNotFoundError(f"Missing OSCAR currents raw data for year {year} in {raw_path}")
@@ -695,8 +886,13 @@ def reduce_year_dataset(
         ds_raw_winds = xr.open_dataset(winds_files[0])
         ds_raw_flux = xr.open_dataset(flux_files[0])
     elif stream:
-        ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch)
-        source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
+        try:
+            ds_raw_era5 = stream_era5_arco(year, bbox, effective_scratch, last_month=last_month)
+            source_files.append(f"arco-era5:full_37-1h-0p25deg-chunk-1:{year}")
+        except Exception as e:
+            logger.warning("ARCO ERA5 failed (%s); falling back to CDS daily statistics.", e)
+            ds_raw_era5 = stream_era5_daily(year, bbox, effective_scratch, last_month=last_month)
+            source_files.append(f"cds:derived-era5-single-levels-daily-statistics:{year}")
         ds_raw_winds = ds_raw_era5
         ds_raw_flux = ds_raw_era5
     else:
@@ -821,6 +1017,7 @@ def reduce_year_dataset(
                 dates=(start_date, end_date),
                 variables=["thetao_mean"],
                 depths=(0.0, 1250.0),
+                bracket_levels=depths_m,
             )
             source_files.append(f"copernicusmarine:{PRODUCT_SPECS['grep']['dataset_id']}:{year}")
         except Exception as e:
@@ -853,6 +1050,26 @@ def reduce_year_dataset(
         processed_vars["grep_mean"] = ds_red_grep["grep_mean"]
 
     # --- ARMOR3D 3D Temperature ---
+    # ARMOR3D is only an external competitor at ARGO points in the val and test periods
+    # (PRD_AI_ML §3, PHASES P3-4), so train-only years skip the slowest download of the build.
+    if skip_armor3d:
+        logger.info("Skipping ARMOR3D for %d: train-only year, never compared.", year)
+        processed_vars["armor3d"] = xr.DataArray(
+            np.full(
+                (len(target_dates), len(depths_m), len(target_grid.lats), len(target_grid.lons)),
+                np.nan,
+                dtype=np.float32,
+            ),
+            dims=("time", "depth", "lat", "lon"),
+            coords={
+                "time": target_dates,
+                "depth": np.array(depths_m, dtype=np.float64),
+                "lat": target_grid.lats,
+                "lon": target_grid.lons,
+            },
+        )
+        return xr.Dataset(data_vars=processed_vars), source_files
+
     armor_files = filter_files_by_year(find_product_files(raw_path, "armor3d", manifest), year)
     if armor_files:
         source_files.append(
@@ -871,6 +1088,7 @@ def reduce_year_dataset(
                 dates=(start_date, end_date),
                 variables=["to"],
                 depths=(0.0, 1100.0),
+                bracket_levels=depths_m,
             )
             source_files.append(f"copernicusmarine:{PRODUCT_SPECS['armor3d']['dataset_id']}:{year}")
         except Exception as e:
@@ -920,6 +1138,56 @@ def export_f16_store(
     return dst_zarr
 
 
+def load_static_fields(
+    path: Path, target_grid: TargetGrid, depths_m: list[float]
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Load bathymetry and the WOA monthly profile from a file made by export_static.
+
+    Lets a streamed build skip the GEBCO and WOA servers entirely.
+    """
+    ds = xr.open_dataset(path)
+    lats = np.asarray(target_grid.lats)
+    lons = np.asarray(target_grid.lons)
+    depths = np.asarray(depths_m, dtype=float)
+    for name in ("bathymetry", "woa_clim_profile"):
+        if name not in ds.data_vars:
+            raise ValueError(f"Static file {path} has no '{name}' variable")
+    if not (
+        np.allclose(ds["lat"].values, lats, atol=1e-4)
+        and np.allclose(ds["lon"].values, lons, atol=1e-4)
+    ):
+        raise ValueError(f"Static file {path} grid does not match the target grid")
+    woa = ds["woa_clim_profile"].transpose("month", "depth", "lat", "lon")
+    if woa.shape != (12, len(depths), len(lats), len(lons)):
+        raise ValueError(
+            f"Static file woa_clim_profile has shape {woa.shape}, expected "
+            f"{(12, len(depths), len(lats), len(lons))}"
+        )
+    bathy = ds["bathymetry"].transpose("lat", "lon").load()
+    bathymetry = xr.DataArray(
+        bathy.values.astype(np.float32),
+        dims=("lat", "lon"),
+        coords={"lat": lats, "lon": lons},
+        attrs=bathy.attrs,
+    )
+    woa_profile = xr.DataArray(
+        woa.values.astype(np.float32),
+        dims=("month", "depth", "lat", "lon"),
+        coords={"month": np.arange(1, 13), "depth": depths, "lat": lats, "lon": lons},
+        attrs=woa.attrs,
+    )
+    ds.close()
+    return bathymetry, woa_profile
+
+
+def armor3d_needed(year: int, config: Any) -> bool:
+    """True if ``year`` has a validation or test date, where ARMOR3D is compared."""
+    for split in (config.splits.val, config.splits.test):
+        if pd.Timestamp(split[0]).year <= year <= pd.Timestamp(split[1]).year:
+            return True
+    return False
+
+
 def build_store(
     config: Any,
     years: list[int] | None = None,
@@ -931,12 +1199,28 @@ def build_store(
     export_f16: bool = False,
     finalize: bool = False,
     stream: bool = False,
+    static_file: Path | None = None,
+    max_days: int | None = None,
+    part: bool = False,
+    max_hours: float | None = None,
+    resume_from: Path | None = None,
 ) -> Path:
     """Stream, reduce, and store multi-year ocean dataset one year at a time.
 
     Uses pre-allocated region writes and persists built_years directly on disk
-    (PRD §4.2, REVIEW A3).
+    (PRD §4.2, REVIEW A3). With ``part=True`` the store is one part of a multi-part
+    build: the finalize step is skipped, and ``oceanscope_ml.data.parts stats`` fits the
+    climatology across all parts instead.
+
+    ``max_hours`` stops before a year that would not finish within that many hours of the
+    start, so a run with a hard time limit (Kaggle: 12 h) exits cleanly and keeps its
+    output. ``resume_from`` copies an earlier run's store (read-only input) into
+    ``out_dir`` first, so the next run skips the years it already built.
     """
+    import time
+
+    run_start = time.monotonic()
+    slowest_year_s = 0.0
     start_year = int(pd.Timestamp(config.time.start).year)
     end_year = int(pd.Timestamp(config.time.end).year)
     years_to_process = years if years is not None else list(range(start_year, end_year + 1))
@@ -946,9 +1230,23 @@ def build_store(
         print_dry_run_plan(plan)
         return Path(out_dir or config.paths.processed) / f"oceanscope_{config.dataset_version}.zarr"
 
+    if stream:
+        import dask
+
+        # Remote reads are latency-bound, not CPU-bound: fetch many chunks at once.
+        dask.config.set(scheduler="threads", num_workers=STREAM_DOWNLOAD_THREADS)
+
     out_base = Path(out_dir or config.paths.processed)
     out_base.mkdir(parents=True, exist_ok=True)
     zarr_dest = out_base / f"oceanscope_{config.dataset_version}.zarr"
+    if resume_from is not None and not zarr_dest.exists():
+        if not Path(resume_from).exists():
+            raise FileNotFoundError(f"--resume-from store not found: {resume_from}")
+        logger.info("Copying earlier store %s to %s to resume...", resume_from, zarr_dest)
+        # Kaggle inputs are read-only; copy contents only, then make everything writable.
+        shutil.copytree(resume_from, zarr_dest, copy_function=shutil.copyfile)
+        for path in [zarr_dest, *zarr_dest.rglob("*")]:
+            path.chmod(0o755 if path.is_dir() else 0o644)
 
     scratch_base = Path(scratch_dir or (out_base / "scratch"))
     scratch_base.mkdir(parents=True, exist_ok=True)
@@ -1015,6 +1313,12 @@ def build_store(
     # 3. Process each year
     cached_bathymetry: xr.DataArray | None = None
     cached_woa_profile: xr.DataArray | None = None
+    if static_file is not None:
+        cached_bathymetry, cached_woa_profile = load_static_fields(
+            static_file, target_grid, depths_m
+        )
+        if f"static:{static_file.name}" not in accumulated_sources:
+            accumulated_sources.append(f"static:{static_file.name}")
 
     for yr in years_to_process:
         if yr in built_years and not force:
@@ -1023,6 +1327,26 @@ def build_store(
                 yr,
             )
             continue
+
+        elapsed_s = time.monotonic() - run_start
+        # A year takes about as long as the slowest one so far; add 15% for safety.
+        if (
+            max_hours is not None
+            and slowest_year_s > 0  # the first year always starts
+            and elapsed_s + 1.15 * slowest_year_s > max_hours * 3600
+        ):
+            left = [y for y in years_to_process if y not in built_years]
+            logger.warning(
+                "Stopping before year %d: %.1f h elapsed, slowest year %.1f h, limit %.1f h. "
+                "Not built yet: %s. Rerun with --resume-from to continue.",
+                yr,
+                elapsed_s / 3600,
+                slowest_year_s / 3600,
+                max_hours,
+                left,
+            )
+            break
+        year_start = time.monotonic()
 
         yr_scratch = scratch_base / str(yr)
         yr_scratch.mkdir(parents=True, exist_ok=True)
@@ -1042,6 +1366,8 @@ def build_store(
             scratch_dir=yr_scratch,
             cached_bathymetry=cached_bathymetry,
             cached_woa_profile=cached_woa_profile,
+            max_days=max_days,
+            skip_armor3d=not armor3d_needed(yr, config),
         )
         if cached_bathymetry is None and "bathymetry" in ds_yr.data_vars:
             cached_bathymetry = ds_yr["bathymetry"]
@@ -1159,6 +1485,23 @@ def build_store(
         built_years.append(yr)
         root = zarr.open_group(str(zarr_dest), mode="r+")
         root.attrs["built_years"] = sorted(list(set(built_years)))
+        # First and last date written per year. Shorter than the year only in a smoke
+        # build, and lets readers skip the unwritten (all-NaN) rest of the year.
+        raw_ranges = root.attrs.get("built_ranges", {})
+        built_ranges: dict[str, Any] = dict(raw_ranges) if isinstance(raw_ranges, dict) else {}
+        built_ranges[str(yr)] = [
+            yr_dates[0].strftime("%Y-%m-%d"),
+            yr_dates[-1].strftime("%Y-%m-%d"),
+        ]
+        root.attrs["built_ranges"] = built_ranges
+        raw_skipped: Any = root.attrs.get("armor3d_skipped_years", [])
+        skipped = {int(y) for y in raw_skipped}
+        skipped.discard(yr)
+        if not armor3d_needed(yr, config):
+            skipped.add(yr)
+        root.attrs["armor3d_skipped_years"] = sorted(skipped)
+        if max_days is not None:
+            root.attrs["smoke_days"] = int(max_days)
         root.attrs["source_files"] = sorted(list(set(accumulated_sources)))
         logger.info(
             "Persisted year %d to built_years. Total built: %s", yr, root.attrs["built_years"]
@@ -1168,15 +1511,24 @@ def build_store(
         if yr_scratch.exists():
             shutil.rmtree(yr_scratch, ignore_errors=True)
         check_budget(scratch_base, zarr_dest)
+        slowest_year_s = max(slowest_year_s, time.monotonic() - year_start)
+        logger.info("Year %d took %.1f min.", yr, (time.monotonic() - year_start) / 60)
 
     # 4. Finalize step: Climatology and Norm Stats (A4)
     # Only run if finalize=True or if train split is covered
-    if finalize or set(built_years) == set(years_to_process):
+    if part:
+        logger.info("Part store: skipping finalize; run `oceanscope_ml.data.parts stats` next.")
+    elif finalize or set(built_years) == set(years_to_process):
         ds_master = xr.open_zarr(zarr_dest)
         master_dates = pd.to_datetime(ds_master.coords["time"].values)
         train_start = pd.Timestamp(config.splits.train[0])
         train_end = pd.Timestamp(config.splits.train[1])
-        has_train_dates = np.any((master_dates >= train_start) & (master_dates <= train_end))
+        # Pre-allocated dates of unbuilt years are all-NaN and do not count.
+        has_train_dates = np.any(
+            (master_dates >= train_start)
+            & (master_dates <= train_end)
+            & np.isin(master_dates.year, sorted(set(built_years)))
+        )
 
         if has_train_dates:
             logger.info(
@@ -1185,6 +1537,12 @@ def build_store(
             check_no_test_leakage(config.splits.train, config.splits.test)
 
             t_3d = ds_master["thetao"].sel(time=slice(train_start, train_end))
+            # Only fit on years that were actually built. The store is pre-allocated across
+            # the whole period, so unbuilt years are all-NaN; leaving them in turns every
+            # ocean cell into a "partial" cell and the per-cell fallback allocates
+            # (n_time x n_cells) float64, which ran Kaggle out of memory on a 2-year build.
+            t_years = pd.to_datetime(t_3d.coords["time"].values).year
+            t_3d = t_3d.isel(time=np.where(np.isin(t_years, sorted(set(built_years))))[0])
             train_times = pd.to_datetime(t_3d.coords["time"].values)
 
             clim_366 = fit_harmonic_climatology(
@@ -1300,6 +1658,33 @@ def main() -> None:
         action="store_true",
         help="Stream remote products (Copernicus, CDS, etc.) instead of reading local raw files",
     )
+    parser.add_argument(
+        "--static-file",
+        default=None,
+        help="netCDF with bathymetry and woa_clim_profile (from export_static); skips GEBCO/WOA",
+    )
+    parser.add_argument(
+        "--smoke-days",
+        type=int,
+        default=None,
+        help="Smoke test: build only the first N days of each year (use a separate --out-dir)",
+    )
+    parser.add_argument(
+        "--part",
+        action="store_true",
+        help="One part of a multi-part build: skip finalize (run `parts stats` after all parts)",
+    )
+    parser.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="Stop before a year that would not finish within this many hours (Kaggle: 11)",
+    )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Earlier run's store to copy into --out-dir first; its built years are skipped",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1320,6 +1705,11 @@ def main() -> None:
         export_f16=args.f16,
         finalize=args.finalize,
         stream=args.stream,
+        static_file=Path(args.static_file) if args.static_file else None,
+        max_days=args.smoke_days,
+        part=args.part,
+        max_hours=args.max_hours,
+        resume_from=Path(args.resume_from) if args.resume_from else None,
     )
     if not args.dry_run:
         print("\n[OK] build_store complete. Processed store ready.")
