@@ -24,31 +24,37 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Lifespan context manager for initial loading and periodic manifest reload."""
-    loader.load()
+    """Lifespan context manager for initial loading and periodic manifest reload.
 
-    reload_task = None
-    if settings.RELOAD_INTERVAL_MIN > 0:
+    The first load (which may download the dataset from HF) runs in a worker thread, so
+    uvicorn binds its port at once. Render fails a deploy whose port is not open within
+    its scan window. Until the load finishes, /health and /meta return 503.
+    """
 
-        async def periodic_manifest_reload() -> None:
-            while True:
-                await asyncio.sleep(settings.RELOAD_INTERVAL_MIN * 60)
-                try:
-                    logger.info("Executing periodic manifest reload check...")
-                    loader.load()
-                except Exception as e:
-                    logger.error("Periodic manifest reload failed: %s", e)
+    async def load_then_reload() -> None:
+        try:
+            await asyncio.to_thread(loader.load)
+        except Exception as e:
+            logger.error("Initial data load failed: %s", e)
+        if settings.RELOAD_INTERVAL_MIN <= 0:
+            return
+        while True:
+            await asyncio.sleep(settings.RELOAD_INTERVAL_MIN * 60)
+            try:
+                logger.info("Executing periodic manifest reload check...")
+                await asyncio.to_thread(loader.load)
+            except Exception as e:
+                logger.error("Periodic manifest reload failed: %s", e)
 
-        reload_task = asyncio.create_task(periodic_manifest_reload())
+    load_task = asyncio.create_task(load_then_reload())
 
     yield
 
-    if reload_task is not None:
-        reload_task.cancel()
-        try:
-            await reload_task
-        except asyncio.CancelledError:
-            pass
+    load_task.cancel()
+    try:
+        await load_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(

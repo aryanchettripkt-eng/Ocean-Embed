@@ -125,3 +125,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 ## 2026-11-02 — Fine-tune λ and the published run
 - The ARGO fine-tune sweep picked λ = 0.3 (`finetune_argo.lambda`, [CONFIRM] in PRD_AI_ML §5.9). `experiment.yaml` still holds the default; the value used for `main2_ft` is 0.3 and is recorded here until the owner confirms it.
 - `main2_ft` is the fine-tuned run, published to zenzone3/oceanscope-outputs. The served run is `active_run_id` in manifest.json. Owner to confirm it is `main2_ft`.
+
+## 2026-11-02 — Backend startup on Render (P6)
+- The first data load (which downloads the dataset from HF) runs in a worker thread from the lifespan, so uvicorn binds its port at once. Render's deploy of 479dbf1 failed with "Port scan timeout reached, no open ports detected" while `snapshot_download` was 28% through 9,462 files. Until the load finishes, `/health` and `/meta` return 503.
+- The download is limited to the files the remote `manifest.json` names (`allow_patterns`), so only the active run's prediction store is fetched. If the remote manifest cannot be read, everything is downloaded as before.
+- The module-level `loader` no longer loads at import (`DataLoader(autoload=False)`); `DataLoader(data_dir=...)` still loads at construction, as the tests expect.
+- Proposed by Claude, 2026-11-02.
