@@ -1,0 +1,73 @@
+{
+  "events": [
+    {
+      "id": "cyclone-gaja-2018",
+      "title": "Cyclone Gaja",
+      "kind": "cyclone",
+      "start": "2018-11-10",
+      "end": "2018-11-21",
+      "before": "2018-11-08",
+      "after": "2018-11-22",
+      "bbox": {
+        "lat_min": 8,
+        "lat_max": 14,
+        "lon_min": 78,
+        "lon_max": 84
+      },
+      "suggested_depths_m": [
+        0.5,
+        50,
+        100
+      ],
+      "summary": "A cyclone formed in the Bay of Bengal and made landfall on the coast of Tamil Nadu, southern India.",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/uploads/report/26/26_c04c58_gaja.pdf",
+      "source_name": "India Meteorological Department (RSMC New Delhi), cyclone report"
+    },
+    {
+      "id": "cyclone-nisarga-2020",
+      "title": "Cyclone Nisarga",
+      "kind": "cyclone",
+      "start": "2020-06-01",
+      "end": "2020-06-04",
+      "before": "2020-05-28",
+      "after": "2020-06-08",
+      "bbox": {
+        "lat_min": 15,
+        "lat_max": 22,
+        "lon_min": 68,
+        "lon_max": 76
+      },
+      "suggested_depths_m": [
+        0.5,
+        50,
+        100
+      ],
+      "summary": "A cyclone formed over the Arabian Sea and made landfall on the west coast of Maharashtra, India.",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/uploads/archive/21/21_439c02_Preliminary%20Report%20on%20SCS%20NISARGA%20(04072020).pdf",
+      "source_name": "India Meteorological Department (RSMC New Delhi), preliminary report"
+    },
+    {
+      "id": "cyclone-fani-2019",
+      "title": "Cyclone Fani",
+      "kind": "cyclone",
+      "start": "2019-04-26",
+      "end": "2019-05-05",
+      "before": "2019-04-20",
+      "after": "2019-05-10",
+      "bbox": {
+        "lat_min": 8,
+        "lat_max": 22,
+        "lon_min": 80,
+        "lon_max": 92
+      },
+      "suggested_depths_m": [
+        0.5,
+        50,
+        100
+      ],
+      "summary": "A cyclone formed in the Bay of Bengal and came ashore near Puri on the coast of Odisha, eastern India.",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/uploads/archive/60/60_a53fa0_fani.pdf",
+      "source_name": "India Meteorological Department (RSMC New Delhi), cyclone report"
+    }
+  ]
+}

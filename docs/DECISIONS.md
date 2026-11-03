@@ -139,3 +139,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - The API key stays in Render secrets: not committed, not in fixtures, not logged. The real client stays behind the existing flags (`META_CLIENT=http`, `CHAT_ENABLED`, `VOICE_ENABLED`), off until the owner confirms the key is in Render and approves a first live call.
 - Approved by Aryan, 2026-11-03.
 
+## 2026-11-03 — Time-machine events: three, ranked on validation data
+- `app/data/events.json` ships three events: Cyclone Gaja (2018), Cyclone Fani (2019), Cyclone Nisarga (2020). Titli, Amphan and the 2019 positive Indian Ocean Dipole were dropped.
+- Ranking: a validation-only check, `event_skill_check.py`, run on Kaggle against main2_ft, reading validation dates only. For each event, the area-weighted RMS of pred minus GLORYS in the event box and days, divided by the same measure on a sample of validation days. Gaja 0.77 (15 days), Nisarga 0.85 (12), Fani 0.93 (21). Titli 1.12, Amphan 1.16, the IOD 1.17 (275-day window, not comparable). Lower is better; a ratio below 1 means a better match than a typical validation day.
+- Caveats the time machine must show: the match is with GLORYS, not with observations; the events were chosen by model fit on validation years, which the test year does not affect; the windows are 12 to 21 days, so the scores are noisy.
+- The test split is never read: all three events lie in 2018 to 2020, and the startup validator checks the file against the real grid.
+- Approved by Aryan, 2026-11-03.
+

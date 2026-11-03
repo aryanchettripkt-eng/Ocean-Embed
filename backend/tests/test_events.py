@@ -153,3 +153,17 @@ def test_get_events_serves_validated_list_on_fixture_dates(
     assert set(served) == set(event)
     assert served["suggested_depths_m"] == [0.5, 50.0, 100.0]
     assert load_events(path)[0]["id"] == "sample-event-2020"
+
+
+def test_committed_events_are_valid_for_the_real_grid() -> None:
+    """The events shipped in app/data/events.json must pass on the real region, depths and dates."""
+    committed = Path(events_module.__file__).resolve().parent / "events.json"
+    raw = load_events(committed)
+    cleaned = validate_events(raw, region=REGION, depths_m=REAL_DEPTHS, available=REAL_AVAILABLE)
+    assert {e["id"] for e in cleaned} == {
+        "cyclone-gaja-2018",
+        "cyclone-nisarga-2020",
+        "cyclone-fani-2019",
+    }
+    # Sealed test split: none of the shipped events may fall in 2021.
+    assert visible_events(cleaned, test_range=TEST_RANGE, test_evaluated=False) == cleaned
