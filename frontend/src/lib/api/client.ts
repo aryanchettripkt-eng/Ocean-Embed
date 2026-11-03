@@ -25,6 +25,11 @@ export type ToolCallRecord = components["schemas"]["ToolCallRecord"];
 export type EventItem = components["schemas"]["EventItem"];
 export type EventsResponse = components["schemas"]["EventsResponse"];
 export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
+export type PostcardRequest = components["schemas"]["PostcardRequest"];
+export type PostcardResponse = components["schemas"]["PostcardResponse"];
+export type SegmentRequest = components["schemas"]["SegmentRequest"];
+export type SegmentResponse = components["schemas"]["SegmentResponse"];
+export type NearestOceanResponse = components["schemas"]["NearestOceanResponse"];
 
 export class ApiError extends Error {
   code: string;
@@ -233,4 +238,41 @@ export const apiClient = {
     form.append("lang", lang);
     return fetchApi<TranscribeResponse>("/transcribe", { method: "POST", body: form, signal });
   },
+
+  /** Ocean postcard (PRD_BACKEND §4.15). No free text is ever sent. */
+  postPostcard(body: PostcardRequest, signal?: AbortSignal): Promise<PostcardResponse> {
+    return fetchApi<PostcardResponse>("/postcard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  },
+
+  /** Lasso a region from a tapped grid point (PRD_BACKEND §4.16). */
+  postSegment(body: SegmentRequest, signal?: AbortSignal): Promise<SegmentResponse> {
+    return fetchApi<SegmentResponse>("/segment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  },
+
+  /** Nearest ocean cell for beach mode (PRD_BACKEND §4.17). Location is sent only on tap. */
+  getNearestOcean(
+    params: { lat: number; lon: number; bearing_deg?: number | null },
+    signal?: AbortSignal
+  ): Promise<NearestOceanResponse> {
+    const q = new URLSearchParams({ lat: params.lat.toFixed(4), lon: params.lon.toFixed(4) });
+    if (params.bearing_deg != null) q.set("bearing_deg", params.bearing_deg.toFixed(1));
+    return fetchApi<NearestOceanResponse>(`/nearest-ocean?${q.toString()}`, { signal });
+  },
 };
+
+/** Absolute URL for a backend path such as `/api/v1/postcard/abc.webp`. */
+export function resolveApiUrl(path: string): string {
+  if (/^https?:\/\//.test(path)) return path;
+  const origin = getApiBaseUrl().replace(/\/api\/v1$/, "");
+  return `${origin}${path.startsWith("/") ? "" : "/"}${path}`;
+}

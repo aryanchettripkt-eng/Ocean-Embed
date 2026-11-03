@@ -9,6 +9,11 @@ import type {
   ChatResponse,
   EventsResponse,
   MetaResponse,
+  NearestOceanResponse,
+  PostcardRequest,
+  PostcardResponse,
+  SegmentRequest,
+  SegmentResponse,
   TranscribeResponse,
 } from "../lib/api/client";
 import eventsJson from "./events.json";
@@ -26,7 +31,16 @@ export function withMockFeatures(meta: MetaResponse): MetaResponse {
   return {
     ...meta,
     chat: { enabled: true, provider_label: PROVIDER },
-    features: { ...meta.features, chat: true, voice: true, provider_label: PROVIDER },
+    features: {
+      ...meta.features,
+      chat: true,
+      voice: true,
+      postcards: true,
+      segment: true,
+      segment_method: "threshold",
+      beach: true,
+      provider_label: PROVIDER,
+    },
   };
 }
 
@@ -99,3 +113,63 @@ export const mockTranscribe: TranscribeResponse = {
   run_id: "synthetic_v1",
   synthetic: true,
 };
+
+export function mockPostcard(req: PostcardRequest): PostcardResponse {
+  return {
+    image_url: `/api/v1/postcard/mock-${req.date}.svg`,
+    caption: { date: req.date, depth_m: req.depth_m, mean_c: 24.6, source: "OceanScope model (synthetic demo data)" },
+    label: "Mock postcard (offline) · Muse Image not connected",
+    prompt_version: "mock",
+    provider_label: "Mock image (offline)",
+    run_id: "synthetic_v1",
+    synthetic: true,
+  };
+}
+
+/** A plain SVG standing in for the generated image. It carries no numbers, like the real one. */
+export const MOCK_POSTCARD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="768" height="512" viewBox="0 0 768 512">
+<rect width="768" height="512" fill="#e9dfc8"/>
+<path d="M0 300 Q 96 260 192 300 T 384 300 T 576 300 T 768 300 V512 H0Z" fill="#2b6f8f"/>
+<path d="M0 360 Q 96 320 192 360 T 384 360 T 576 360 T 768 360 V512 H0Z" fill="#1b4b66"/>
+<circle cx="600" cy="140" r="60" fill="#d9843b"/>
+<text x="24" y="40" font-family="sans-serif" font-size="20" fill="#3b3b3b">Mock postcard (synthetic)</text>
+</svg>`;
+
+export function mockSegment(req: SegmentRequest): SegmentResponse {
+  const h = 1.5;
+  const [a, b, c, d] = [req.lon - h, req.lon + h, req.lat - h, req.lat + h];
+  return {
+    method: "threshold",
+    date: req.date,
+    depth_m: req.depth_m,
+    field: req.field ?? "pred",
+    lat: req.lat,
+    lon: req.lon,
+    mask: { lat_index_ranges: [] },
+    stats: { mean: 24.1, min: 23.6, max: 24.6, std: 0.28, n_valid: 9, area_km2: 110000 },
+    outline: [
+      [a, c],
+      [b, c],
+      [b, d],
+      [a, d],
+      [a, c],
+    ],
+    caveat: "The outline is a visual selection, not a scientific boundary. Statistics are computed from the model grid inside it.",
+    provider_label: "Mock lasso (offline)",
+    capped: false,
+    run_id: "synthetic_v1",
+    synthetic: true,
+  };
+}
+
+export function mockNearestOcean(lat: number, lon: number, bearing: number | null): NearestOceanResponse {
+  return {
+    lat: Math.min(29.5, Math.max(0.5, lat - 0.5)),
+    lon: Math.min(99.5, Math.max(40.5, lon + 0.5)),
+    distance_km: 62,
+    bearing_deg: bearing ?? 135,
+    date: "2020-01-10",
+    run_id: "synthetic_v1",
+    synthetic: true,
+  };
+}

@@ -20,7 +20,7 @@ type Phase = "idle" | "explain" | "recording" | "transcribing" | "denied" | "cou
 
 export function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
-  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
+  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
   return options.find((t) => MediaRecorder.isTypeSupported?.(t));
 }
 

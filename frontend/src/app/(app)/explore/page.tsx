@@ -4,10 +4,10 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle, CalendarRange, MessageCircle } from "lucide-react";
+import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle, CalendarRange, MessageCircle, Image as ImageIcon, Lasso } from "lucide-react";
 
 import { useArgoProfiles, useEvents, useMap, useMeta, useSection } from "../../../lib/api/hooks";
-import { apiClient, type ChatResponse, type EventItem } from "../../../lib/api/client";
+import { apiClient, type ChatResponse, type EventItem, type SegmentResponse } from "../../../lib/api/client";
 import {
   applyEventPhase,
   applyUiActions,
@@ -53,6 +53,14 @@ const GuideDrawer = dynamic(
   () => import("../../../components/guide/GuideDrawer").then((mod) => mod.GuideDrawer),
   { ssr: false }
 );
+const PostcardPanel = dynamic(
+  () => import("../../../components/postcard/PostcardPanel").then((mod) => mod.PostcardPanel),
+  { ssr: false }
+);
+const LassoPanel = dynamic(
+  () => import("../../../components/lasso/LassoPanel").then((mod) => mod.LassoPanel),
+  { ssr: false }
+);
 const TimeMachine = dynamic(
   () => import("../../../components/events/TimeMachine").then((mod) => mod.TimeMachine),
   { ssr: false }
@@ -87,6 +95,22 @@ function ExplorerContent() {
   const undoIdRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // Postcard request is a snapshot taken on click, so moving the map never re-prints
+  const [postcard, setPostcard] = useState<{
+    date: string;
+    depth: number;
+    eventId: string | null;
+    eventTitle: string | null;
+    nonce: number;
+  } | null>(null);
+
+  // Lasso (PRD_FRONTEND §3.4e)
+  const [lassoActive, setLassoActive] = useState(false);
+  const [lassoPending, setLassoPending] = useState<{ lat: number; lon: number } | null>(null);
+  const [lassoResult, setLassoResult] = useState<SegmentResponse | null>(null);
+  const [lassoError, setLassoError] = useState<string | null>(null);
+  const lassoAbortRef = useRef<AbortController | null>(null);
 
   // Sync state once metadata loads
   useEffect(() => {
@@ -247,9 +271,54 @@ function ExplorerContent() {
     setState((prev) => ({ ...prev, field: newField }));
   }, []);
 
-  const handleSelectPoint = useCallback((lat: number, lon: number) => {
-    setState((prev) => ({ ...prev, lat, lon }));
+  const lassoActiveRef = useRef(lassoActive);
+  lassoActiveRef.current = lassoActive;
+
+  const runLasso = useCallback(async (lat: number, lon: number) => {
+    lassoAbortRef.current?.abort();
+    const controller = new AbortController();
+    lassoAbortRef.current = controller;
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    const s = stateRef.current;
+    setLassoPending({ lat, lon });
+    setLassoError(null);
+    setLassoResult(null);
+    try {
+      const res = await apiClient.postSegment(
+        { date: s.date, depth_m: s.depth, lat, lon, field: s.field === "glorys" ? "glorys" : "pred" },
+        controller.signal
+      );
+      setLassoResult(res);
+    } catch (err) {
+      const { segmentErrorMessage } = await import("../../../components/lasso/LassoPanel");
+      setLassoError(segmentErrorMessage(err));
+    } finally {
+      clearTimeout(timer);
+      if (lassoAbortRef.current === controller) {
+        lassoAbortRef.current = null;
+        setLassoPending(null);
+      }
+    }
   }, []);
+
+  const closeLasso = useCallback(() => {
+    lassoAbortRef.current?.abort();
+    setLassoActive(false);
+    setLassoPending(null);
+    setLassoResult(null);
+    setLassoError(null);
+  }, []);
+
+  const handleSelectPoint = useCallback(
+    (lat: number, lon: number) => {
+      if (lassoActiveRef.current) {
+        void runLasso(lat, lon);
+        return;
+      }
+      setState((prev) => ({ ...prev, lat, lon }));
+    },
+    [runLasso]
+  );
 
   const handleViewChange = useCallback((newView: "map" | "3d") => {
     setState((prev) => ({ ...prev, view: newView }));
@@ -341,6 +410,23 @@ function ExplorerContent() {
     setGuideOpen(true);
   }, []);
 
+  const handleAskAboutArea = useCallback(async (seg: SegmentResponse) => {
+    const { askAboutAreaPrompt } = await import("../../../components/lasso/LassoPanel");
+    setGuidePrompt({ nonce: Date.now(), text: askAboutAreaPrompt(seg) });
+    setGuideOpen(true);
+  }, []);
+
+  const openPostcard = useCallback((event?: EventItem | null) => {
+    const s = stateRef.current;
+    setPostcard({
+      date: s.date,
+      depth: s.depth,
+      eventId: event?.id ?? null,
+      eventTitle: event?.title ?? null,
+      nonce: Date.now(),
+    });
+  }, []);
+
   if (isMetaLoading) {
     return (
       <>
@@ -396,6 +482,8 @@ function ExplorerContent() {
             isSmoothed={isSmoothed}
             showContours={showContours}
             focus={focus}
+            outline={lassoActive ? lassoResult?.outline ?? null : null}
+            pendingPoint={lassoPending}
           />
         </ErrorBoundary>
 
@@ -494,6 +582,55 @@ function ExplorerContent() {
               <CalendarRange className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
               Events
             </button>
+          )}
+          {(meta.features.postcards || meta.features.segment) && (
+            <div className="flex gap-2">
+              {meta.features.postcards && !postcard && (
+                <button
+                  type="button"
+                  onClick={() => openPostcard(activeEvent?.event)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900 inline-flex items-center gap-1.5"
+                >
+                  <ImageIcon className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  Make a postcard
+                </button>
+              )}
+              {meta.features.segment && (
+                <button
+                  type="button"
+                  aria-pressed={lassoActive}
+                  onClick={() => (lassoActive ? closeLasso() : setLassoActive(true))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md inline-flex items-center gap-1.5 ${
+                    lassoActive
+                      ? "bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900"
+                      : "bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900"
+                  }`}
+                >
+                  <Lasso className="h-3.5 w-3.5" />
+                  Lasso
+                </button>
+              )}
+            </div>
+          )}
+          {meta.features.segment && lassoActive && (
+            <LassoPanel
+              pending={!!lassoPending}
+              error={lassoError}
+              result={lassoResult}
+              onAsk={chatEnabled ? handleAskAboutArea : undefined}
+              onClose={closeLasso}
+            />
+          )}
+          {meta.features.postcards && postcard && (
+            <PostcardPanel
+              key={postcard.nonce}
+              date={postcard.date}
+              depth={postcard.depth}
+              eventId={postcard.eventId}
+              eventTitle={postcard.eventTitle}
+              caveat={meta.caveats.postcard}
+              onClose={() => setPostcard(null)}
+            />
           )}
           {eventsOpen && (
             <TimeMachine
