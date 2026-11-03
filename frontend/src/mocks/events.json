@@ -1,0 +1,60 @@
+{
+  "events": [
+    {
+      "id": "cyclone-fani-2019",
+      "title": "Cyclone Fani",
+      "kind": "cyclone",
+      "start": "2019-04-26",
+      "end": "2019-05-05",
+      "before": "2019-04-20",
+      "after": "2019-05-10",
+      "bbox": {"lat_min": 8, "lat_max": 22, "lon_min": 80, "lon_max": 92},
+      "suggested_depths_m": [0.5, 50, 100],
+      "summary": "A cyclone formed in the Bay of Bengal and came ashore near Puri on the coast of Odisha, eastern India.",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/uploads/archive/60/60_a53fa0_fani.pdf",
+      "source_name": "India Meteorological Department (RSMC New Delhi), cyclone report"
+    },
+    {
+      "id": "cyclone-titli-2018",
+      "title": "Cyclone Titli",
+      "kind": "cyclone",
+      "start": "2018-10-08",
+      "end": "2018-10-12",
+      "before": "2018-10-04",
+      "after": "2018-10-16",
+      "bbox": {"lat_min": 12, "lat_max": 22, "lon_min": 82, "lon_max": 90},
+      "suggested_depths_m": [0.5, 50, 100],
+      "summary": "A cyclone formed in the Bay of Bengal and made landfall on the coast of Andhra Pradesh, eastern India.",
+      "source_url": "https://rsmcnewdelhi.imd.gov.in/uploads/report/26/26_dd893c_Titli.pdf",
+      "source_name": "India Meteorological Department (RSMC New Delhi), cyclone report"
+    },
+    {
+      "id": "cyclone-amphan-2020",
+      "title": "Cyclone Amphan",
+      "kind": "cyclone",
+      "start": "2020-05-16",
+      "end": "2020-05-21",
+      "before": "2020-05-12",
+      "after": "2020-05-26",
+      "bbox": {"lat_min": 10, "lat_max": 24, "lon_min": 82, "lon_max": 94},
+      "suggested_depths_m": [0.5, 50, 100],
+      "summary": "A cyclone formed in the Bay of Bengal and came ashore on the West Bengal coast near Bakkhali, India.",
+      "source_url": "https://wmo.int/node/24333",
+      "source_name": "World Meteorological Organization"
+    },
+    {
+      "id": "positive-iod-2019",
+      "title": "Strong positive Indian Ocean Dipole",
+      "kind": "climate-mode",
+      "start": "2019-07-01",
+      "end": "2019-12-31",
+      "before": "2019-06-01",
+      "after": "2020-03-01",
+      "bbox": {"lat_min": 0, "lat_max": 10, "lon_min": 50, "lon_max": 100},
+      "suggested_depths_m": [0.5, 50, 100],
+      "summary": "A strong positive Indian Ocean Dipole developed, with warm water in the western Indian Ocean and cool water west of Sumatra.",
+      "source_url": "https://publish.csiro.au/es/fulltext/ES24015",
+      "source_name": "CSIRO, Climate summary for the southern hemisphere 2019 to 2020"
+    }
+  ]
+}

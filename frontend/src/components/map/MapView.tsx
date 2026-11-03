@@ -7,6 +7,7 @@ import { renderGridToCanvas } from "./GridCanvas";
 import type { ArgoProfileMatch, MapResponse, SectionResponse } from "../../lib/api/client";
 import type { WallId } from "../map3d/depthScale";
 import type { CutawayLayer } from "../map3d/CutawayLayer";
+import type { CameraFocus } from "../../lib/guide/ui-actions";
 
 export interface RegionBounds {
   lat_min: number;
@@ -39,6 +40,14 @@ interface MapViewProps {
   isExploded?: boolean;
   isSmoothed?: boolean;
   showContours?: boolean;
+
+  /** Camera move requested by the guide or the time machine (PRD_FRONTEND §3.4a, c). */
+  focus?: CameraFocus | null;
+
+  /** Lasso selection (PRD_FRONTEND §3.4e): closed [[lon, lat], ...] ring from /segment. */
+  outline?: number[][] | null;
+  /** Tapped point while /segment runs, shown as a pulsing ring. */
+  pendingPoint?: { lat: number; lon: number } | null;
 }
 
 interface HoverInfo {
@@ -50,6 +59,8 @@ interface HoverInfo {
   coverage: number;
   depth_m?: number;
 }
+
+const LASSO_SOURCE = "lasso-outline";
 
 const DEFAULT_REGION: RegionBounds = {
   lat_min: 0.0,
@@ -105,6 +116,9 @@ export function MapView({
   isExploded = false,
   isSmoothed = false,
   showContours = true,
+  focus = null,
+  outline = null,
+  pendingPoint = null,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -347,6 +361,7 @@ export function MapView({
       if (map.isStyleLoaded()) {
         syncGridLayer();
         sync3DLayer();
+        syncOutlineRef.current();
       }
     };
 
@@ -376,6 +391,34 @@ export function MapView({
       cutawayLayerRef.current = null;
     };
   }, [syncGridLayer, sync3DLayer, view]);
+
+  // Guide / time machine camera moves: one short animation (≤ 1.2 s), none under reduced motion
+  const lastFocusIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !focus || lastFocusIdRef.current === focus.id) return;
+    lastFocusIdRef.current = focus.id;
+    const reducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = reducedMotion ? 0 : 1200;
+    if (focus.kind === "bbox") {
+      map.fitBounds(
+        [
+          [focus.bbox.lon_min, focus.bbox.lat_min],
+          [focus.bbox.lon_max, focus.bbox.lat_max],
+        ],
+        { padding: 48, duration, maxZoom: 7 }
+      );
+    } else {
+      map.easeTo({
+        center: [focus.lon, focus.lat],
+        zoom: focus.zoom ?? Math.max(map.getZoom(), 4.5),
+        ...(focus.bearing !== undefined ? { bearing: focus.bearing } : {}),
+        duration,
+      });
+    }
+  }, [focus, mapLoaded]);
 
   // Dynamically switch pitch, bearing, and controls between 2D Map and 3D Cutaway
   useEffect(() => {
@@ -688,6 +731,59 @@ export function MapView({
       map.off("click", handleClick);
     };
   }, [depth_m, view, mapLoaded]);
+
+  // Lasso outline: an ink-style line with a soft fill, re-added after a theme switch
+  const outlineRef = useRef(outline);
+  outlineRef.current = outline;
+  const syncOutline = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    const ring = outlineRef.current;
+    const data: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features:
+        ring && ring.length >= 4
+          ? [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [ring] } }]
+          : [],
+    };
+    const src = map.getSource(LASSO_SOURCE) as maplibregl.GeoJSONSource | undefined;
+    if (src) {
+      src.setData(data);
+    } else {
+      map.addSource(LASSO_SOURCE, { type: "geojson", data });
+      map.addLayer({
+        id: `${LASSO_SOURCE}-fill`,
+        type: "fill",
+        source: LASSO_SOURCE,
+        paint: { "fill-color": "#f8fafc", "fill-opacity": 0.18 },
+      });
+      map.addLayer({
+        id: `${LASSO_SOURCE}-line`,
+        type: "line",
+        source: LASSO_SOURCE,
+        paint: { "line-color": "#0f172a", "line-width": 2.5, "line-dasharray": [3, 1.5] },
+      });
+    }
+  }, []);
+  const syncOutlineRef = useRef(syncOutline);
+  syncOutlineRef.current = syncOutline;
+  useEffect(() => {
+    if (mapLoaded) syncOutline();
+  }, [outline, mapLoaded, syncOutline]);
+
+  const pendingMarkerRef = useRef<maplibregl.Marker | null>(null);
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    pendingMarkerRef.current?.remove();
+    pendingMarkerRef.current = null;
+    if (!map || !mapLoaded || !pendingPoint) return;
+    const el = document.createElement("div");
+    el.className = "relative flex items-center justify-center pointer-events-none";
+    el.innerHTML = `<span class="animate-ping absolute inline-flex h-10 w-10 rounded-full border-2 border-slate-900 dark:border-white opacity-70"></span>`;
+    pendingMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat([pendingPoint.lon, pendingPoint.lat])
+      .addTo(map);
+  }, [mapLoaded, pendingPoint]);
 
   // Update selection marker
   useEffect(() => {

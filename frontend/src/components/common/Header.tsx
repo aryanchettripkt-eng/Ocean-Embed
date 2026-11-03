@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Waves, BarChart3, Info, ExternalLink, Sun, Moon } from "lucide-react";
+import { Waves, BarChart3, Info, ExternalLink, Sun, Moon, Compass } from "lucide-react";
 import { useMeta } from "../../lib/api/hooks";
 import { Banner } from "./Banner";
 
@@ -39,9 +39,11 @@ export function Header() {
   };
 
   const navLinks = [
-    { href: "/explore", label: "Explorer", icon: Waves },
-    { href: "/validation", label: "Validation", icon: BarChart3 },
-    { href: "/about", label: "About", icon: Info },
+    { href: "/explore", label: "Explorer", icon: Waves, phoneOnly: false },
+    { href: "/validation", label: "Validation", icon: BarChart3, phoneOnly: false },
+    { href: "/about", label: "About", icon: Info, phoneOnly: false },
+    // Beach mode is for phones only and only when its flag is on (PRD_FRONTEND §3.4f)
+    ...(meta?.features?.beach ? [{ href: "/beach", label: "Beach", icon: Compass, phoneOnly: true }] : []),
   ];
 
   return (
@@ -66,7 +68,7 @@ export function Header() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-1 sm:gap-2">
-            {navLinks.map(({ href, label, icon: Icon }) => {
+            {navLinks.map(({ href, label, icon: Icon, phoneOnly }) => {
               const isActive =
                 href === "/explore"
                   ? pathname === "/explore" || pathname.startsWith("/explore")
@@ -75,14 +77,16 @@ export function Header() {
                 <Link
                   key={href}
                   href={href}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+                  aria-label={label}
+                  className={`${phoneOnly ? "flex md:hidden" : "flex"} items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-slate-100 dark:bg-slate-800/90 text-cyan-700 dark:text-cyan-300 shadow-sm border border-slate-200 dark:border-slate-700/60 font-semibold"
                       : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900/60"
                   }`}
                 >
                   <Icon className="h-4 w-4" />
-                  <span>{label}</span>
+                  {/* Icon-only below 640 px so the header fits a 360 px phone (PRD_FRONTEND §4) */}
+                  <span className="hidden sm:inline">{label}</span>
                 </Link>
               );
             })}

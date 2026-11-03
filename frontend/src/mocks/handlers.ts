@@ -16,6 +16,20 @@ import {
   mockRegionSummary,
   mockSection,
 } from "./data";
+import type { ChatRequest } from "../lib/api/client";
+import type { PostcardRequest, SegmentRequest } from "../lib/api/client";
+import {
+  MOCK_POSTCARD_SVG,
+  mockChatResponse,
+  mockEvents,
+  mockNearestOcean,
+  mockPostcard,
+  mockSegment,
+  mockTranscribe,
+  withMockFeatures,
+} from "./guide";
+
+const mockFeaturesOn = process.env.NEXT_PUBLIC_MOCK_META_FEATURES === "true";
 
 export const handlers = [
   // Health
@@ -25,7 +39,7 @@ export const handlers = [
 
   // Meta
   http.get("*/api/v1/meta", () => {
-    return HttpResponse.json(mockMeta);
+    return HttpResponse.json(mockFeaturesOn ? withMockFeatures(mockMeta) : mockMeta);
   }),
 
   // Map
@@ -177,5 +191,49 @@ export const handlers = [
   // Headline
   http.get("*/api/v1/headline", () => {
     return HttpResponse.json(mockHeadline);
+  }),
+
+  // Meta features (PRD_BACKEND §4.12–4.14), offline
+  http.post("*/api/v1/chat", async ({ request }) => {
+    const body = (await request.json()) as ChatRequest;
+    await new Promise((r) => setTimeout(r, 600));
+    return HttpResponse.json(mockChatResponse(body));
+  }),
+
+  http.get("*/api/v1/events", () => {
+    return HttpResponse.json(mockEvents);
+  }),
+
+  http.post("*/api/v1/transcribe", async () => {
+    await new Promise((r) => setTimeout(r, 400));
+    return HttpResponse.json(mockTranscribe);
+  }),
+
+  http.post("*/api/v1/postcard", async ({ request }) => {
+    const body = (await request.json()) as PostcardRequest;
+    await new Promise((r) => setTimeout(r, 1500));
+    return HttpResponse.json(mockPostcard(body));
+  }),
+
+  http.get("*/api/v1/postcard/:name", () => {
+    return new HttpResponse(MOCK_POSTCARD_SVG, { headers: { "Content-Type": "image/svg+xml" } });
+  }),
+
+  http.post("*/api/v1/segment", async ({ request }) => {
+    const body = (await request.json()) as SegmentRequest;
+    await new Promise((r) => setTimeout(r, 500));
+    return HttpResponse.json(mockSegment(body));
+  }),
+
+  http.get("*/api/v1/nearest-ocean", ({ request }) => {
+    const url = new URL(request.url);
+    const bearing = url.searchParams.get("bearing_deg");
+    return HttpResponse.json(
+      mockNearestOcean(
+        parseFloat(url.searchParams.get("lat") ?? "13"),
+        parseFloat(url.searchParams.get("lon") ?? "80.3"),
+        bearing === null ? null : parseFloat(bearing)
+      )
+    );
   }),
 ];
