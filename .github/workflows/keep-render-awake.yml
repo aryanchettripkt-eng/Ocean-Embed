@@ -1,0 +1,33 @@
+name: Keep Render awake
+
+# Pings the Render free-tier backend so it does not spin down after
+# ~15 minutes of inactivity. GitHub cron runs can be delayed by a few
+# minutes, and this only runs while the workflow exists on the default branch.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    name: Ping /api/v1/health
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: GET health endpoint
+        env:
+          # Set repository variable RENDER_URL to override the default below.
+          TARGET: ${{ vars.RENDER_URL || 'https://oceanscope-backend.onrender.com/api/v1/health' }}
+        run: |
+          # One request, short timeout. Any HTTP response means the service is awake,
+          # so only a connection failure or timeout fails the job.
+          status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 "$TARGET" || echo "000")
+          echo "Render ping ${TARGET} -> HTTP ${status} at $(date -u +%FT%TZ)"
+          if [ "$status" = "000" ]; then
+            echo "No response from Render (connection error or timeout)"
+            exit 1
+          fi
