@@ -253,9 +253,34 @@
         "title": "AvailableDates",
         "type": "object"
       },
+      "Body_post_transcribe_api_v1_transcribe_post": {
+        "properties": {
+          "audio": {
+            "contentMediaType": "application/octet-stream",
+            "description": "Clip of 30 s or less, 1 MB or less",
+            "title": "Audio",
+            "type": "string"
+          },
+          "lang": {
+            "default": "en",
+            "description": "BCP-47 language tag",
+            "title": "Lang",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio"
+        ],
+        "title": "Body_post_transcribe_api_v1_transcribe_post",
+        "type": "object"
+      },
       "Caveats": {
         "description": "Fixed scientific and data caveats returned to the UI.",
         "properties": {
+          "ai": {
+            "title": "Ai",
+            "type": "string"
+          },
           "argo": {
             "title": "Argo",
             "type": "string"
@@ -268,6 +293,14 @@
             "title": "Live",
             "type": "string"
           },
+          "postcard": {
+            "title": "Postcard",
+            "type": "string"
+          },
+          "segment": {
+            "title": "Segment",
+            "type": "string"
+          },
           "synthetic": {
             "title": "Synthetic",
             "type": "string"
@@ -277,7 +310,10 @@
           "glorys",
           "argo",
           "synthetic",
-          "live"
+          "live",
+          "ai",
+          "postcard",
+          "segment"
         ],
         "title": "Caveats",
         "type": "object"
@@ -400,6 +436,7 @@
               "$ref": "#/components/schemas/ChatMessage"
             },
             "maxItems": 10,
+            "minItems": 1,
             "title": "Messages",
             "type": "array"
           }
@@ -416,6 +453,11 @@
           "answer": {
             "title": "Answer",
             "type": "string"
+          },
+          "grounded": {
+            "default": true,
+            "title": "Grounded",
+            "type": "boolean"
           },
           "provider_label": {
             "title": "Provider Label",
@@ -434,6 +476,14 @@
               "$ref": "#/components/schemas/ToolCallRecord"
             },
             "title": "Tool Calls",
+            "type": "array"
+          },
+          "ui_actions": {
+            "items": {
+              "$ref": "#/components/schemas/UIAction"
+            },
+            "maxItems": 3,
+            "title": "Ui Actions",
             "type": "array"
           }
         },
@@ -488,6 +538,187 @@
           "vmax"
         ],
         "title": "ErrorRange",
+        "type": "object"
+      },
+      "EventBBox": {
+        "description": "Bounding box of an event, inside the modelled region (PRD_BACKEND \u00a74.14).",
+        "properties": {
+          "lat_max": {
+            "title": "Lat Max",
+            "type": "number"
+          },
+          "lat_min": {
+            "title": "Lat Min",
+            "type": "number"
+          },
+          "lon_max": {
+            "title": "Lon Max",
+            "type": "number"
+          },
+          "lon_min": {
+            "title": "Lon Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat_min",
+          "lat_max",
+          "lon_min",
+          "lon_max"
+        ],
+        "title": "EventBBox",
+        "type": "object"
+      },
+      "EventItem": {
+        "description": "One curated ocean event for the time machine (PRD_BACKEND \u00a74.14).",
+        "properties": {
+          "after": {
+            "title": "After",
+            "type": "string"
+          },
+          "bbox": {
+            "$ref": "#/components/schemas/EventBBox"
+          },
+          "before": {
+            "title": "Before",
+            "type": "string"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "source_name": {
+            "title": "Source Name",
+            "type": "string"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "suggested_depths_m": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Suggested Depths M",
+            "type": "array"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "start",
+          "end",
+          "before",
+          "after",
+          "bbox",
+          "suggested_depths_m",
+          "summary",
+          "source_url",
+          "source_name"
+        ],
+        "title": "EventItem",
+        "type": "object"
+      },
+      "EventsResponse": {
+        "description": "Response model for GET /events.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventItem"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "EventsResponse",
+        "type": "object"
+      },
+      "Features": {
+        "description": "Per-feature availability of the Meta features (PRD_BACKEND \u00a74.12).",
+        "properties": {
+          "beach": {
+            "title": "Beach",
+            "type": "boolean"
+          },
+          "chat": {
+            "title": "Chat",
+            "type": "boolean"
+          },
+          "postcards": {
+            "title": "Postcards",
+            "type": "boolean"
+          },
+          "provider_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Label"
+          },
+          "segment": {
+            "title": "Segment",
+            "type": "boolean"
+          },
+          "segment_method": {
+            "enum": [
+              "sam",
+              "threshold"
+            ],
+            "title": "Segment Method",
+            "type": "string"
+          },
+          "voice": {
+            "title": "Voice",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chat",
+          "voice",
+          "postcards",
+          "segment",
+          "segment_method",
+          "beach"
+        ],
+        "title": "Features",
         "type": "object"
       },
       "GridShape": {
@@ -885,6 +1116,9 @@
           "error_range": {
             "$ref": "#/components/schemas/ErrorRange"
           },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          },
           "grid_resolution_deg": {
             "title": "Grid Resolution Deg",
             "type": "number"
@@ -941,7 +1175,8 @@
           "color_ranges",
           "error_range",
           "caveats",
-          "chat"
+          "chat",
+          "features"
         ],
         "title": "MetaResponse",
         "type": "object"
@@ -1057,6 +1292,172 @@
           "rows"
         ],
         "title": "MetricsResponse",
+        "type": "object"
+      },
+      "NearestOceanResponse": {
+        "description": "Response model for GET /nearest-ocean (beach mode, \u00a74.17). Snapped cell centre.",
+        "properties": {
+          "bearing_deg": {
+            "title": "Bearing Deg",
+            "type": "number"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "distance_km": {
+            "title": "Distance Km",
+            "type": "number"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "distance_km",
+          "bearing_deg",
+          "date",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "NearestOceanResponse",
+        "type": "object"
+      },
+      "PostcardCaption": {
+        "description": "Numbers for the HTML caption the frontend overlays; never drawn into the image.",
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "mean_c": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean C"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "depth_m",
+          "source"
+        ],
+        "title": "PostcardCaption",
+        "type": "object"
+      },
+      "PostcardRequest": {
+        "additionalProperties": false,
+        "description": "POST /postcard. No free text: every field is checked against the data (\u00a74.15).",
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "field": {
+            "const": "pred",
+            "default": "pred",
+            "title": "Field",
+            "type": "string"
+          },
+          "style": {
+            "const": "woodblock",
+            "default": "woodblock",
+            "title": "Style",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "depth_m"
+        ],
+        "title": "PostcardRequest",
+        "type": "object"
+      },
+      "PostcardResponse": {
+        "description": "Response model for POST /postcard.",
+        "properties": {
+          "caption": {
+            "$ref": "#/components/schemas/PostcardCaption"
+          },
+          "image_url": {
+            "title": "Image Url",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "provider_label": {
+            "title": "Provider Label",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "image_url",
+          "caption",
+          "label",
+          "prompt_version",
+          "provider_label",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "PostcardResponse",
         "type": "object"
       },
       "ProfileResponse": {
@@ -1399,6 +1800,219 @@
         "title": "SectionResponse",
         "type": "object"
       },
+      "SegmentMask": {
+        "description": "Selected cells as run-length rows: [lat_index, first_lon, last_lon], both inclusive.",
+        "properties": {
+          "lat_index_ranges": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Lat Index Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "lat_index_ranges"
+        ],
+        "title": "SegmentMask",
+        "type": "object"
+      },
+      "SegmentRequest": {
+        "additionalProperties": false,
+        "description": "POST /segment: the tapped point on our own rendered grid (\u00a74.16).",
+        "properties": {
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "field": {
+            "default": "pred",
+            "enum": [
+              "pred",
+              "glorys"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "depth_m",
+          "lat",
+          "lon"
+        ],
+        "title": "SegmentRequest",
+        "type": "object"
+      },
+      "SegmentResponse": {
+        "description": "Response model for POST /segment.",
+        "properties": {
+          "capped": {
+            "default": false,
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "caveat": {
+            "title": "Caveat",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_m": {
+            "title": "Depth M",
+            "type": "number"
+          },
+          "field": {
+            "enum": [
+              "pred",
+              "glorys"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "mask": {
+            "$ref": "#/components/schemas/SegmentMask"
+          },
+          "method": {
+            "enum": [
+              "sam",
+              "threshold"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "outline": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Outline",
+            "type": "array"
+          },
+          "provider_label": {
+            "title": "Provider Label",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "stats": {
+            "$ref": "#/components/schemas/SegmentStats"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "method",
+          "date",
+          "depth_m",
+          "field",
+          "lat",
+          "lon",
+          "mask",
+          "stats",
+          "outline",
+          "caveat",
+          "provider_label",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "SegmentResponse",
+        "type": "object"
+      },
+      "SegmentStats": {
+        "description": "Area-weighted stats over the selected cells, same code as /region-summary.",
+        "properties": {
+          "area_km2": {
+            "title": "Area Km2",
+            "type": "number"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "n_valid": {
+            "title": "N Valid",
+            "type": "integer"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std"
+          }
+        },
+        "required": [
+          "n_valid",
+          "area_km2"
+        ],
+        "title": "SegmentStats",
+        "type": "object"
+      },
       "Splits": {
         "description": "Start and end dates for train, validation, and test splits.",
         "properties": {
@@ -1549,6 +2163,72 @@
           "result"
         ],
         "title": "ToolCallRecord",
+        "type": "object"
+      },
+      "TranscribeResponse": {
+        "description": "Response model for POST /transcribe (PRD_BACKEND \u00a74.13). The audio is never returned.",
+        "properties": {
+          "duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration S"
+          },
+          "provider_label": {
+            "title": "Provider Label",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "provider_label",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "TranscribeResponse",
+        "type": "object"
+      },
+      "UIAction": {
+        "description": "A backend-validated UI tool call for the browser to apply (PRD_BACKEND \u00a76.2).",
+        "properties": {
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "set_view",
+              "select_point",
+              "slice_at",
+              "open_event"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "args"
+        ],
+        "title": "UIAction",
         "type": "object"
       },
       "ValidationError": {
@@ -1748,7 +2428,7 @@
     },
     "/api/v1/chat": {
       "post": {
-        "description": "Conversational assistant grounded in OutputStore queries with tool calling and number-grounding guards.",
+        "description": "Answers questions with data tools over the OutputStore and moves the explorer with backend-validated UI actions. Every number in the answer is checked against tool results; if one is not, the answer is replaced by the raw results (grounded=false).",
         "operationId": "post_chat_api_v1_chat_post",
         "requestBody": {
           "content": {
@@ -1782,9 +2462,31 @@
             "description": "Validation Error"
           }
         },
-        "summary": "LLM oceanographic data assistant",
+        "summary": "Ocean guide (Muse Spark via the Meta Model API)",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "description": "Returns the committed, human-approved event list. Events with a date in the sealed test period are hidden until the owner runs the final test. Suggested depths are snapped to model depths. Contains no model numbers.",
+        "operationId": "get_events_api_v1_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Curated ocean events for the time machine",
+        "tags": [
+          "events"
         ]
       }
     },
@@ -2016,6 +2718,181 @@
         "summary": "Model and baseline validation metrics",
         "tags": [
           "validation"
+        ]
+      }
+    },
+    "/api/v1/nearest-ocean": {
+      "get": {
+        "description": "With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.",
+        "operationId": "get_nearest_ocean_api_v1_nearest_ocean_get",
+        "parameters": [
+          {
+            "description": "User latitude",
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "description": "User latitude",
+              "maximum": 90,
+              "minimum": -90,
+              "title": "Lat",
+              "type": "number"
+            }
+          },
+          {
+            "description": "User longitude",
+            "in": "query",
+            "name": "lon",
+            "required": true,
+            "schema": {
+              "description": "User longitude",
+              "maximum": 180,
+              "minimum": -180,
+              "title": "Lon",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Compass bearing, 0 = north, clockwise",
+            "in": "query",
+            "name": "bearing_deg",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMaximum": 360,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Compass bearing, 0 = north, clockwise",
+              "title": "Bearing Deg"
+            }
+          },
+          {
+            "description": "How far to look",
+            "in": "query",
+            "name": "max_km",
+            "required": false,
+            "schema": {
+              "default": 300.0,
+              "description": "How far to look",
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "title": "Max Km",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NearestOceanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "First ocean cell in view from the user's location (beach mode)",
+        "tags": [
+          "beach"
+        ]
+      }
+    },
+    "/api/v1/postcard": {
+      "post": {
+        "description": "Makes an artistic postcard of the current view. The image prompt comes only from a fixed template filled with region names, wording computed from the model grid and the curated event title; no user text. Identical requests are served from a cache. The caption numbers come from the model outputs and are never drawn into the image.",
+        "operationId": "post_postcard_api_v1_postcard_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostcardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostcardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ocean postcard (Muse Image)",
+        "tags": [
+          "postcard"
+        ]
+      }
+    },
+    "/api/v1/postcard/{name}": {
+      "get": {
+        "description": "Serves a postcard made by POST /postcard. Names are content hashes.",
+        "operationId": "get_postcard_image_api_v1_postcard__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A cached postcard image",
+        "tags": [
+          "postcard"
         ]
       }
     },
@@ -2377,6 +3254,48 @@
         ]
       }
     },
+    "/api/v1/segment": {
+      "post": {
+        "description": "Selects the area around a tapped point on our own rendered grid. Statistics are area-weighted over the selected ocean cells, with the same code as /region-summary. `method` says whether SAM or the similar-temperature fallback made the selection.",
+        "operationId": "post_segment_api_v1_segment_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SegmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lasso a region from a tapped point (SAM 3.1, threshold fallback)",
+        "tags": [
+          "segment"
+        ]
+      }
+    },
     "/api/v1/timeseries": {
       "get": {
         "description": "Returns daily time series for up to 366 days at a specific grid cell and depth.",
@@ -2488,6 +3407,48 @@
         "summary": "Time series of temperature at a point and depth",
         "tags": [
           "data"
+        ]
+      }
+    },
+    "/api/v1/transcribe": {
+      "post": {
+        "description": "Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.",
+        "operationId": "post_transcribe_api_v1_transcribe_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_post_transcribe_api_v1_transcribe_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscribeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voice input (Muse Voice Transcribe)",
+        "tags": [
+          "voice"
         ]
       }
     }

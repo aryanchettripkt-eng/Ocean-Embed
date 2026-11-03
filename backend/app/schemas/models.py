@@ -99,12 +99,27 @@ class Caveats(BaseModel):
     argo: str
     synthetic: str
     live: str
+    ai: str
+    postcard: str
+    segment: str
 
 
 class ChatInfo(BaseModel):
     """Status of the LLM chat assistant."""
 
     enabled: bool
+    provider_label: str | None = None
+
+
+class Features(BaseModel):
+    """Per-feature availability of the Meta features (PRD_BACKEND §4.12)."""
+
+    chat: bool
+    voice: bool
+    postcards: bool
+    segment: bool
+    segment_method: Literal["sam", "threshold"]
+    beach: bool
     provider_label: str | None = None
 
 
@@ -127,6 +142,7 @@ class MetaResponse(BaseModel):
     error_range: ErrorRange
     caveats: Caveats
     chat: ChatInfo
+    features: Features
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +409,7 @@ class ChatContext(BaseModel):
 class ChatRequest(BaseModel):
     """Request body for POST /chat."""
 
-    messages: list[ChatMessage] = Field(..., max_length=10)
+    messages: list[ChatMessage] = Field(..., min_length=1, max_length=10)
     context: ChatContext | None = None
 
 
@@ -405,11 +421,162 @@ class ToolCallRecord(BaseModel):
     result: dict[str, Any]
 
 
+class UIAction(BaseModel):
+    """A backend-validated UI tool call for the browser to apply (PRD_BACKEND §6.2)."""
+
+    type: Literal["set_view", "select_point", "slice_at", "open_event"]
+    args: dict[str, Any]
+
+
 class ChatResponse(BaseModel):
     """Response model for POST /chat."""
 
     answer: str
     tool_calls: list[ToolCallRecord]
+    ui_actions: list[UIAction] = Field(default_factory=list, max_length=3)
+    grounded: bool = True
     provider_label: str
+    run_id: str
+    synthetic: bool
+
+
+class TranscribeResponse(BaseModel):
+    """Response model for POST /transcribe (PRD_BACKEND §4.13). The audio is never returned."""
+
+    text: str
+    duration_s: float | None = None
+    provider_label: str
+    run_id: str
+    synthetic: bool
+
+
+class EventBBox(BaseModel):
+    """Bounding box of an event, inside the modelled region (PRD_BACKEND §4.14)."""
+
+    lat_min: float
+    lat_max: float
+    lon_min: float
+    lon_max: float
+
+
+class EventItem(BaseModel):
+    """One curated ocean event for the time machine (PRD_BACKEND §4.14)."""
+
+    id: str
+    title: str
+    kind: str
+    start: str
+    end: str
+    before: str
+    after: str
+    bbox: EventBBox
+    suggested_depths_m: list[float]
+    summary: str
+    source_url: str
+    source_name: str
+
+
+class EventsResponse(BaseModel):
+    """Response model for GET /events."""
+
+    events: list[EventItem]
+    run_id: str
+    synthetic: bool
+
+
+# ---------------------------------------------------------------------------
+# Postcards, lasso and beach mode (PRD_BACKEND §4.15-4.17)
+# ---------------------------------------------------------------------------
+
+
+class PostcardRequest(BaseModel):
+    """POST /postcard. No free text: every field is checked against the data (§4.15)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str
+    depth_m: float
+    field: Literal["pred"] = "pred"
+    event_id: str | None = Field(default=None, max_length=80)
+    style: Literal["woodblock"] = "woodblock"
+
+
+class PostcardCaption(BaseModel):
+    """Numbers for the HTML caption the frontend overlays; never drawn into the image."""
+
+    date: str
+    depth_m: float
+    mean_c: float | None = None
+    source: str
+
+
+class PostcardResponse(BaseModel):
+    """Response model for POST /postcard."""
+
+    image_url: str
+    caption: PostcardCaption
+    label: str
+    prompt_version: str
+    provider_label: str
+    run_id: str
+    synthetic: bool
+
+
+class SegmentRequest(BaseModel):
+    """POST /segment: the tapped point on our own rendered grid (§4.16)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str
+    depth_m: float
+    field: Literal["pred", "glorys"] = "pred"
+    lat: float
+    lon: float
+
+
+class SegmentMask(BaseModel):
+    """Selected cells as run-length rows: [lat_index, first_lon, last_lon], both inclusive."""
+
+    lat_index_ranges: list[list[int]]
+
+
+class SegmentStats(BaseModel):
+    """Area-weighted stats over the selected cells, same code as /region-summary."""
+
+    mean: float | None = None
+    min: float | None = None
+    max: float | None = None
+    std: float | None = None
+    n_valid: int
+    area_km2: float
+
+
+class SegmentResponse(BaseModel):
+    """Response model for POST /segment."""
+
+    method: Literal["sam", "threshold"]
+    date: str
+    depth_m: float
+    field: Literal["pred", "glorys"]
+    lat: float
+    lon: float
+    mask: SegmentMask
+    stats: SegmentStats
+    outline: list[list[float]]
+    capped: bool = False
+    caveat: str
+    provider_label: str
+    run_id: str
+    synthetic: bool
+
+
+class NearestOceanResponse(BaseModel):
+    """Response model for GET /nearest-ocean (beach mode, §4.17). Snapped cell centre."""
+
+    lat: float
+    lon: float
+    distance_km: float
+    bearing_deg: float
+    date: str
     run_id: str
     synthetic: bool

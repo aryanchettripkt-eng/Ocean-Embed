@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date as dt_date
 from typing import Any, Literal
 
@@ -28,11 +29,23 @@ from app.errors import (
     ReferenceUnavailableError,
     TestNotEvaluatedError,
 )
+from app.meta.config import (
+    beach_available,
+    chat_available,
+    postcard_available,
+    provider_label,
+    segment_available,
+    segment_method,
+    voice_available,
+)
 from app.schemas.caveats import (
+    AI_CAVEAT,
     ARGO_CAVEAT,
     GLORYS_CAVEAT,
     HEADLINE_CRITERION,
     LIVE_CAVEAT,
+    POSTCARD_CAVEAT,
+    SEGMENT_CAVEAT,
     SYNTHETIC_CAVEAT,
 )
 from app.schemas.models import (
@@ -45,6 +58,7 @@ from app.schemas.models import (
     ChatInfo,
     ColorRange,
     ErrorRange,
+    Features,
     GridShape,
     HeadlineResponse,
     HeadlineRow,
@@ -60,7 +74,6 @@ from app.schemas.models import (
     Splits,
     TimeseriesResponse,
 )
-from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +89,61 @@ def validate_date(date_str: str) -> dt_date:
         return dt_date.fromisoformat(date_str)
     except ValueError:
         raise InvalidDateFormatError(f"Invalid date '{date_str}'. Expected valid calendar date.")
+
+
+@dataclass(frozen=True)
+class FieldGrid:
+    """One field (pred, glorys or error) on the full grid at one date and depth."""
+
+    date: str
+    depth_index: int
+    depth_m: float
+    field: Literal["pred", "glorys", "error"]
+    split: str | None
+    lats: np.ndarray
+    lons: np.ndarray
+    values: np.ndarray  # (lat, lon) float32, NaN where there is no value
+    coverage: np.ndarray  # (lat, lon) int
+
+
+@dataclass(frozen=True)
+class WeightedStats:
+    """Area-weighted statistics, rounded to 2 dp as served by /region-summary."""
+
+    mean: float | None
+    min: float | None
+    max: float | None
+    std: float | None
+    n_valid: int
+
+
+def area_weighted_stats(values: np.ndarray, cells: np.ndarray, lats: np.ndarray) -> WeightedStats:
+    """cos(lat)-weighted mean/std plus min/max over `cells` that have a value (PRD_BACKEND §4.6).
+
+    `cells` is a (lat, lon) bool mask; NaN values inside it are skipped. /region-summary and
+    /segment both use this, so a lasso over the same cells reports the same numbers.
+    """
+    valid_cells = cells & ~np.isnan(values)
+    n_valid = int(np.count_nonzero(valid_cells))
+    if n_valid == 0:
+        return WeightedStats(mean=None, min=None, max=None, std=None, n_valid=0)
+
+    weights_2d = compute_area_weights(lats, values.shape[1])
+    w = weights_2d[valid_cells]
+    x = values[valid_cells]
+    sum_w = float(np.sum(w))
+
+    mean_val = float(np.sum(w * x) / sum_w)
+    var_val = float(np.sum(w * (x - mean_val) ** 2) / sum_w)
+    std_val = float(np.sqrt(max(0.0, var_val)))
+
+    return WeightedStats(
+        mean=round(mean_val, 2),
+        min=round(float(np.min(x)), 2),
+        max=round(float(np.max(x)), 2),
+        std=round(std_val, 2),
+        n_valid=n_valid,
+    )
 
 
 class OutputStore:
@@ -307,9 +375,17 @@ class OutputStore:
         color_ranges = self._compute_color_ranges(ds, depths)
         latest_live_date = self._get_latest_live_date(ds)
 
-        chat_info = ChatInfo(
-            enabled=settings.CHAT_ENABLED,
-            provider_label=settings.LLM_PROVIDER_LABEL if settings.CHAT_ENABLED else None,
+        chat_on = chat_available()
+        label = provider_label() if chat_on else None
+        chat_info = ChatInfo(enabled=chat_on, provider_label=label)
+        features = Features(
+            chat=chat_on,
+            voice=voice_available(),
+            postcards=postcard_available(),
+            segment=segment_available(),
+            segment_method=segment_method(),
+            beach=beach_available(),
+            provider_label=label,
         )
 
         caveats = Caveats(
@@ -317,6 +393,9 @@ class OutputStore:
             argo=ARGO_CAVEAT,
             synthetic=SYNTHETIC_CAVEAT,
             live=LIVE_CAVEAT,
+            ai=AI_CAVEAT,
+            postcard=POSTCARD_CAVEAT,
+            segment=SEGMENT_CAVEAT,
         )
 
         return MetaResponse(
@@ -336,6 +415,7 @@ class OutputStore:
             error_range=ErrorRange(vmin=-2.0, vmax=2.0),
             caveats=caveats,
             chat=chat_info,
+            features=features,
         )
 
     def get_map(
@@ -619,19 +699,28 @@ class OutputStore:
             split=splits_list,
         )
 
-    def get_region_summary(
+    def ensure_not_sealed(self, date_str: str) -> None:
+        """404 test_not_evaluated for a sealed test date (Meta features follow the guide's rule)."""
+        self._ensure_loaded()
+        manifest = self.loader.manifest
+        assert manifest is not None
+        if manifest.get("test_evaluated", False):
+            return
+        test_range = manifest.get("splits", {}).get("test") or []
+        if len(test_range) == 2 and test_range[0] <= date_str <= test_range[1]:
+            raise TestNotEvaluatedError("Dates in the sealed test period are not available yet")
+
+    def get_field_grid(
         self,
         date: str,
         depth_m: float | None = None,
         depth_index: int | None = None,
-        lat_min: float | None = None,
-        lat_max: float | None = None,
-        lon_min: float | None = None,
-        lon_max: float | None = None,
-        region: Literal["arabian_sea", "bay_of_bengal", "equatorial"] | None = None,
         field: Literal["pred", "glorys", "error"] = "pred",
-    ) -> RegionSummaryResponse:
-        """Compute area-weighted aggregate summary over a sub-region (PRD_BACKEND §4.6)."""
+    ) -> FieldGrid:
+        """One field at one date and depth on the full grid, with the same checks as /map.
+
+        Shared by /region-summary, /segment and /postcard so their numbers come from one place.
+        """
         d_idx, target_depth = self.resolve_depth(depth_m, depth_index)
         split = self.get_date_split(date)
 
@@ -639,19 +728,6 @@ class OutputStore:
             raise ReferenceUnavailableError()
 
         ds = self.get_predictions_dataset()
-        lats = ds.coords["lat"].values
-        lons = ds.coords["lon"].values
-
-        mask_2d = get_region_mask(
-            lats=lats,
-            lons=lons,
-            region=region,
-            lat_min=lat_min,
-            lat_max=lat_max,
-            lon_min=lon_min,
-            lon_max=lon_max,
-        )
-
         try:
             ds_date = ds.sel(time=date)
         except KeyError:
@@ -670,48 +746,60 @@ class OutputStore:
         else:
             raise APIError(422, "invalid_field", f"Field '{field}' must be pred, glorys, or error")
 
+        return FieldGrid(
+            date=date,
+            depth_index=d_idx,
+            depth_m=target_depth,
+            field=field,
+            split=split,
+            lats=np.asarray(ds.coords["lat"].values, dtype=float),
+            lons=np.asarray(ds.coords["lon"].values, dtype=float),
+            values=vals_2d,
+            coverage=cov_2d,
+        )
+
+    def get_region_summary(
+        self,
+        date: str,
+        depth_m: float | None = None,
+        depth_index: int | None = None,
+        lat_min: float | None = None,
+        lat_max: float | None = None,
+        lon_min: float | None = None,
+        lon_max: float | None = None,
+        region: Literal["arabian_sea", "bay_of_bengal", "equatorial"] | None = None,
+        field: Literal["pred", "glorys", "error"] = "pred",
+    ) -> RegionSummaryResponse:
+        """Compute area-weighted aggregate summary over a sub-region (PRD_BACKEND §4.6)."""
+        grid = self.get_field_grid(date, depth_m, depth_index, field)
+
+        mask_2d = get_region_mask(
+            lats=grid.lats,
+            lons=grid.lons,
+            region=region,
+            lat_min=lat_min,
+            lat_max=lat_max,
+            lon_min=lon_min,
+            lon_max=lon_max,
+        )
+
         # Cells in region with coverage 1
-        ocean_cells = (cov_2d == 1) & mask_2d
+        ocean_cells = (grid.coverage == 1) & mask_2d
         n_total = int(np.count_nonzero(ocean_cells))
-
-        valid_cells = ocean_cells & ~np.isnan(vals_2d)
-        n_valid = int(np.count_nonzero(valid_cells))
-
-        if n_valid > 0:
-            weights_2d = compute_area_weights(lats, len(lons))
-            w = weights_2d[valid_cells]
-            x = vals_2d[valid_cells]
-            sum_w = float(np.sum(w))
-
-            mean_val = float(np.sum(w * x) / sum_w)
-            var_val = float(np.sum(w * (x - mean_val) ** 2) / sum_w)
-            std_val = float(np.sqrt(max(0.0, var_val)))
-
-            min_val = float(np.min(x))
-            max_val = float(np.max(x))
-
-            out_mean = round(mean_val, 2)
-            out_std = round(std_val, 2)
-            out_min = round(min_val, 2)
-            out_max = round(max_val, 2)
-        else:
-            out_mean = None
-            out_std = None
-            out_min = None
-            out_max = None
+        stats = area_weighted_stats(grid.values, ocean_cells, grid.lats)
 
         assert self.loader.manifest is not None
         return RegionSummaryResponse(
             run_id=self.loader.manifest["active_run_id"],
             synthetic=self.loader.manifest["synthetic"],
-            date=date,
-            depth_m=target_depth,
+            date=grid.date,
+            depth_m=grid.depth_m,
             field=field,
-            mean=out_mean,
-            min=out_min,
-            max=out_max,
-            std=out_std,
-            n_valid=n_valid,
+            mean=stats.mean,
+            min=stats.min,
+            max=stats.max,
+            std=stats.std,
+            n_valid=stats.n_valid,
             n_total=n_total,
         )
 

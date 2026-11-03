@@ -98,8 +98,20 @@ const mockMeta: MetaResponse = {
     live: "Live caveat message",
     argo: "ARGO caveat message",
     glorys: "GLORYS caveat message",
+    ai: "AI caveat message",
+    postcard: "Postcard caveat message",
+    segment: "Segment caveat message",
   },
   chat: { enabled: false, provider_label: "test" },
+  features: {
+    chat: false,
+    voice: false,
+    postcards: false,
+    segment: false,
+    segment_method: "sam",
+    beach: false,
+    provider_label: null,
+  },
 };
 
 describe("Landing Page Component Suite (§10)", () => {

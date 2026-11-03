@@ -10,6 +10,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1 import api_v1_router, root_router
+from app.data.events import EventsFileError, check_events_file
 from app.data.loader import loader
 from app.errors import (
     APIError,
@@ -20,6 +21,25 @@ from app.errors import (
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Paths whose query string carries a user's location (PRD_BACKEND §4.17). The access log must
+# not record it at better than 1°, so the query is dropped from those lines.
+_LOCATION_PATHS = ("/nearest-ocean",)
+
+
+class RedactLocationFilter(logging.Filter):
+    """Removes the query string from uvicorn access-log lines for location endpoints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path, sep, _ = args[2].partition("?")
+            if sep and path.endswith(_LOCATION_PATHS):
+                record.args = (*args[:2], f"{path}?<redacted>", *args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(RedactLocationFilter())
 
 
 @asynccontextmanager
@@ -36,6 +56,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await asyncio.to_thread(loader.load)
         except Exception as e:
             logger.error("Initial data load failed: %s", e)
+        else:
+            # Check the curated events file against the manifest (PRD_BACKEND §4.14). The load
+            # now runs after the port is bound, so a bad file cannot stop startup any more; it
+            # is logged here and /events answers 503 events_unavailable until it is fixed.
+            if loader.manifest is not None:
+                try:
+                    check_events_file(loader.manifest)
+                except EventsFileError as e:
+                    logger.error("events.json is invalid: %s", e)
         if settings.RELOAD_INTERVAL_MIN <= 0:
             return
         while True:

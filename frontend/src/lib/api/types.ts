@@ -21,10 +21,17 @@ export interface paths {
   };
   "/api/v1/chat": {
     /**
-     * LLM oceanographic data assistant
-     * @description Conversational assistant grounded in OutputStore queries with tool calling and number-grounding guards.
+     * Ocean guide (Muse Spark via the Meta Model API)
+     * @description Answers questions with data tools over the OutputStore and moves the explorer with backend-validated UI actions. Every number in the answer is checked against tool results; if one is not, the answer is replaced by the raw results (grounded=false).
      */
     post: operations["post_chat_api_v1_chat_post"];
+  };
+  "/api/v1/events": {
+    /**
+     * Curated ocean events for the time machine
+     * @description Returns the committed, human-approved event list. Events with a date in the sealed test period are hidden until the owner runs the final test. Suggested depths are snapped to model depths. Contains no model numbers.
+     */
+    get: operations["get_events_api_v1_events_get"];
   };
   "/api/v1/headline": {
     /**
@@ -61,6 +68,27 @@ export interface paths {
      */
     get: operations["get_metrics_api_v1_metrics_get"];
   };
+  "/api/v1/nearest-ocean": {
+    /**
+     * First ocean cell in view from the user's location (beach mode)
+     * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.
+     */
+    get: operations["get_nearest_ocean_api_v1_nearest_ocean_get"];
+  };
+  "/api/v1/postcard": {
+    /**
+     * Ocean postcard (Muse Image)
+     * @description Makes an artistic postcard of the current view. The image prompt comes only from a fixed template filled with region names, wording computed from the model grid and the curated event title; no user text. Identical requests are served from a cache. The caption numbers come from the model outputs and are never drawn into the image.
+     */
+    post: operations["post_postcard_api_v1_postcard_post"];
+  };
+  "/api/v1/postcard/{name}": {
+    /**
+     * A cached postcard image
+     * @description Serves a postcard made by POST /postcard. Names are content hashes.
+     */
+    get: operations["get_postcard_image_api_v1_postcard__name__get"];
+  };
   "/api/v1/profile": {
     /**
      * Vertical temperature profile at a point
@@ -82,12 +110,26 @@ export interface paths {
      */
     get: operations["get_section_api_v1_section_get"];
   };
+  "/api/v1/segment": {
+    /**
+     * Lasso a region from a tapped point (SAM 3.1, threshold fallback)
+     * @description Selects the area around a tapped point on our own rendered grid. Statistics are area-weighted over the selected ocean cells, with the same code as /region-summary. `method` says whether SAM or the similar-temperature fallback made the selection.
+     */
+    post: operations["post_segment_api_v1_segment_post"];
+  };
   "/api/v1/timeseries": {
     /**
      * Time series of temperature at a point and depth
      * @description Returns daily time series for up to 366 days at a specific grid cell and depth.
      */
     get: operations["get_timeseries_api_v1_timeseries_get"];
+  };
+  "/api/v1/transcribe": {
+    /**
+     * Voice input (Muse Voice Transcribe)
+     * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+     */
+    post: operations["post_transcribe_api_v1_transcribe_post"];
   };
 }
 
@@ -189,17 +231,37 @@ export interface components {
        */
       start: string;
     };
+    /** Body_post_transcribe_api_v1_transcribe_post */
+    Body_post_transcribe_api_v1_transcribe_post: {
+      /**
+       * Audio
+       * @description Clip of 30 s or less, 1 MB or less
+       */
+      audio: string;
+      /**
+       * Lang
+       * @description BCP-47 language tag
+       * @default en
+       */
+      lang?: string;
+    };
     /**
      * Caveats
      * @description Fixed scientific and data caveats returned to the UI.
      */
     Caveats: {
+      /** Ai */
+      ai: string;
       /** Argo */
       argo: string;
       /** Glorys */
       glorys: string;
       /** Live */
       live: string;
+      /** Postcard */
+      postcard: string;
+      /** Segment */
+      segment: string;
       /** Synthetic */
       synthetic: string;
     };
@@ -256,6 +318,11 @@ export interface components {
     ChatResponse: {
       /** Answer */
       answer: string;
+      /**
+       * Grounded
+       * @default true
+       */
+      grounded?: boolean;
       /** Provider Label */
       provider_label: string;
       /** Run Id */
@@ -264,6 +331,8 @@ export interface components {
       synthetic: boolean;
       /** Tool Calls */
       tool_calls: components["schemas"]["ToolCallRecord"][];
+      /** Ui Actions */
+      ui_actions?: components["schemas"]["UIAction"][];
     };
     /**
      * ColorRange
@@ -286,6 +355,84 @@ export interface components {
       vmax: number;
       /** Vmin */
       vmin: number;
+    };
+    /**
+     * EventBBox
+     * @description Bounding box of an event, inside the modelled region (PRD_BACKEND §4.14).
+     */
+    EventBBox: {
+      /** Lat Max */
+      lat_max: number;
+      /** Lat Min */
+      lat_min: number;
+      /** Lon Max */
+      lon_max: number;
+      /** Lon Min */
+      lon_min: number;
+    };
+    /**
+     * EventItem
+     * @description One curated ocean event for the time machine (PRD_BACKEND §4.14).
+     */
+    EventItem: {
+      /** After */
+      after: string;
+      bbox: components["schemas"]["EventBBox"];
+      /** Before */
+      before: string;
+      /** End */
+      end: string;
+      /** Id */
+      id: string;
+      /** Kind */
+      kind: string;
+      /** Source Name */
+      source_name: string;
+      /** Source Url */
+      source_url: string;
+      /** Start */
+      start: string;
+      /** Suggested Depths M */
+      suggested_depths_m: number[];
+      /** Summary */
+      summary: string;
+      /** Title */
+      title: string;
+    };
+    /**
+     * EventsResponse
+     * @description Response model for GET /events.
+     */
+    EventsResponse: {
+      /** Events */
+      events: components["schemas"]["EventItem"][];
+      /** Run Id */
+      run_id: string;
+      /** Synthetic */
+      synthetic: boolean;
+    };
+    /**
+     * Features
+     * @description Per-feature availability of the Meta features (PRD_BACKEND §4.12).
+     */
+    Features: {
+      /** Beach */
+      beach: boolean;
+      /** Chat */
+      chat: boolean;
+      /** Postcards */
+      postcards: boolean;
+      /** Provider Label */
+      provider_label?: string | null;
+      /** Segment */
+      segment: boolean;
+      /**
+       * Segment Method
+       * @enum {string}
+       */
+      segment_method: "sam" | "threshold";
+      /** Voice */
+      voice: boolean;
     };
     /**
      * GridShape
@@ -426,6 +573,7 @@ export interface components {
       /** Depths M */
       depths_m: number[];
       error_range: components["schemas"]["ErrorRange"];
+      features: components["schemas"]["Features"];
       /** Grid Resolution Deg */
       grid_resolution_deg: number;
       grid_shape: components["schemas"]["GridShape"];
@@ -485,6 +633,83 @@ export interface components {
        * @enum {string}
        */
       split: "val" | "test";
+      /** Synthetic */
+      synthetic: boolean;
+    };
+    /**
+     * NearestOceanResponse
+     * @description Response model for GET /nearest-ocean (beach mode, §4.17). Snapped cell centre.
+     */
+    NearestOceanResponse: {
+      /** Bearing Deg */
+      bearing_deg: number;
+      /** Date */
+      date: string;
+      /** Distance Km */
+      distance_km: number;
+      /** Lat */
+      lat: number;
+      /** Lon */
+      lon: number;
+      /** Run Id */
+      run_id: string;
+      /** Synthetic */
+      synthetic: boolean;
+    };
+    /**
+     * PostcardCaption
+     * @description Numbers for the HTML caption the frontend overlays; never drawn into the image.
+     */
+    PostcardCaption: {
+      /** Date */
+      date: string;
+      /** Depth M */
+      depth_m: number;
+      /** Mean C */
+      mean_c?: number | null;
+      /** Source */
+      source: string;
+    };
+    /**
+     * PostcardRequest
+     * @description POST /postcard. No free text: every field is checked against the data (§4.15).
+     */
+    PostcardRequest: {
+      /** Date */
+      date: string;
+      /** Depth M */
+      depth_m: number;
+      /** Event Id */
+      event_id?: string | null;
+      /**
+       * Field
+       * @default pred
+       * @constant
+       */
+      field?: "pred";
+      /**
+       * Style
+       * @default woodblock
+       * @constant
+       */
+      style?: "woodblock";
+    };
+    /**
+     * PostcardResponse
+     * @description Response model for POST /postcard.
+     */
+    PostcardResponse: {
+      caption: components["schemas"]["PostcardCaption"];
+      /** Image Url */
+      image_url: string;
+      /** Label */
+      label: string;
+      /** Prompt Version */
+      prompt_version: string;
+      /** Provider Label */
+      provider_label: string;
+      /** Run Id */
+      run_id: string;
       /** Synthetic */
       synthetic: boolean;
     };
@@ -619,6 +844,93 @@ export interface components {
       values: ((number | null)[])[];
     };
     /**
+     * SegmentMask
+     * @description Selected cells as run-length rows: [lat_index, first_lon, last_lon], both inclusive.
+     */
+    SegmentMask: {
+      /** Lat Index Ranges */
+      lat_index_ranges: number[][];
+    };
+    /**
+     * SegmentRequest
+     * @description POST /segment: the tapped point on our own rendered grid (§4.16).
+     */
+    SegmentRequest: {
+      /** Date */
+      date: string;
+      /** Depth M */
+      depth_m: number;
+      /**
+       * Field
+       * @default pred
+       * @enum {string}
+       */
+      field?: "pred" | "glorys";
+      /** Lat */
+      lat: number;
+      /** Lon */
+      lon: number;
+    };
+    /**
+     * SegmentResponse
+     * @description Response model for POST /segment.
+     */
+    SegmentResponse: {
+      /**
+       * Capped
+       * @default false
+       */
+      capped?: boolean;
+      /** Caveat */
+      caveat: string;
+      /** Date */
+      date: string;
+      /** Depth M */
+      depth_m: number;
+      /**
+       * Field
+       * @enum {string}
+       */
+      field: "pred" | "glorys";
+      /** Lat */
+      lat: number;
+      /** Lon */
+      lon: number;
+      mask: components["schemas"]["SegmentMask"];
+      /**
+       * Method
+       * @enum {string}
+       */
+      method: "sam" | "threshold";
+      /** Outline */
+      outline: number[][];
+      /** Provider Label */
+      provider_label: string;
+      /** Run Id */
+      run_id: string;
+      stats: components["schemas"]["SegmentStats"];
+      /** Synthetic */
+      synthetic: boolean;
+    };
+    /**
+     * SegmentStats
+     * @description Area-weighted stats over the selected cells, same code as /region-summary.
+     */
+    SegmentStats: {
+      /** Area Km2 */
+      area_km2: number;
+      /** Max */
+      max?: number | null;
+      /** Mean */
+      mean?: number | null;
+      /** Min */
+      min?: number | null;
+      /** N Valid */
+      n_valid: number;
+      /** Std */
+      std?: number | null;
+    };
+    /**
      * Splits
      * @description Start and end dates for train, validation, and test splits.
      */
@@ -669,6 +981,37 @@ export interface components {
       result: {
         [key: string]: unknown;
       };
+    };
+    /**
+     * TranscribeResponse
+     * @description Response model for POST /transcribe (PRD_BACKEND §4.13). The audio is never returned.
+     */
+    TranscribeResponse: {
+      /** Duration S */
+      duration_s?: number | null;
+      /** Provider Label */
+      provider_label: string;
+      /** Run Id */
+      run_id: string;
+      /** Synthetic */
+      synthetic: boolean;
+      /** Text */
+      text: string;
+    };
+    /**
+     * UIAction
+     * @description A backend-validated UI tool call for the browser to apply (PRD_BACKEND §6.2).
+     */
+    UIAction: {
+      /** Args */
+      args: {
+        [key: string]: unknown;
+      };
+      /**
+       * Type
+       * @enum {string}
+       */
+      type: "set_view" | "select_point" | "slice_at" | "open_event";
     };
     /** ValidationError */
     ValidationError: {
@@ -746,8 +1089,8 @@ export interface operations {
     };
   };
   /**
-   * LLM oceanographic data assistant
-   * @description Conversational assistant grounded in OutputStore queries with tool calling and number-grounding guards.
+   * Ocean guide (Muse Spark via the Meta Model API)
+   * @description Answers questions with data tools over the OutputStore and moves the explorer with backend-validated UI actions. Every number in the answer is checked against tool results; if one is not, the answer is replaced by the raw results (grounded=false).
    */
   post_chat_api_v1_chat_post: {
     requestBody: {
@@ -766,6 +1109,20 @@ export interface operations {
       422: {
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Curated ocean events for the time machine
+   * @description Returns the committed, human-approved event list. Events with a date in the sealed test period are hidden until the owner runs the final test. Suggested depths are snapped to model depths. Contains no model numbers.
+   */
+  get_events_api_v1_events_get: {
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["EventsResponse"];
         };
       };
     };
@@ -862,6 +1219,88 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["MetricsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * First ocean cell in view from the user's location (beach mode)
+   * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.
+   */
+  get_nearest_ocean_api_v1_nearest_ocean_get: {
+    parameters: {
+      query: {
+        /** @description User latitude */
+        lat: number;
+        /** @description User longitude */
+        lon: number;
+        /** @description Compass bearing, 0 = north, clockwise */
+        bearing_deg?: number | null;
+        /** @description How far to look */
+        max_km?: number;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["NearestOceanResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Ocean postcard (Muse Image)
+   * @description Makes an artistic postcard of the current view. The image prompt comes only from a fixed template filled with region names, wording computed from the model grid and the curated event title; no user text. Identical requests are served from a cache. The caption numbers come from the model outputs and are never drawn into the image.
+   */
+  post_postcard_api_v1_postcard_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PostcardRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["PostcardResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * A cached postcard image
+   * @description Serves a postcard made by POST /postcard. Names are content hashes.
+   */
+  get_postcard_image_api_v1_postcard__name__get: {
+    parameters: {
+      path: {
+        name: string;
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "image/webp": unknown;
         };
       };
       /** @description Validation Error */
@@ -977,6 +1416,31 @@ export interface operations {
     };
   };
   /**
+   * Lasso a region from a tapped point (SAM 3.1, threshold fallback)
+   * @description Selects the area around a tapped point on our own rendered grid. Statistics are area-weighted over the selected ocean cells, with the same code as /region-summary. `method` says whether SAM or the similar-temperature fallback made the selection.
+   */
+  post_segment_api_v1_segment_post: {
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SegmentRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["SegmentResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
    * Time series of temperature at a point and depth
    * @description Returns daily time series for up to 366 days at a specific grid cell and depth.
    */
@@ -1002,6 +1466,31 @@ export interface operations {
       200: {
         content: {
           "application/json": components["schemas"]["TimeseriesResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
+   * Voice input (Muse Voice Transcribe)
+   * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+   */
+  post_transcribe_api_v1_transcribe_post: {
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["Body_post_transcribe_api_v1_transcribe_post"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["TranscribeResponse"];
         };
       };
       /** @description Validation Error */
