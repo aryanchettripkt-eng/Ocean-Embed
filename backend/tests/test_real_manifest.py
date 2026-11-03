@@ -56,6 +56,8 @@ def test_real_manifest_is_served_as_not_synthetic(real_client: TestClient) -> No
     meta: dict[str, Any] = real_client.get("/api/v1/meta").json()
     assert meta["synthetic"] is False
     assert meta["model_name"] == "oceanscope-unet-test-shape"
+    # The synthetic-demo caveat must not be shown on real data (DECISIONS 2026-11-03).
+    assert meta["caveats"]["synthetic"] is None
     assert real_client.get("/api/v1/health").json()["data_loaded"] is True
 
 

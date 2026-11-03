@@ -62,10 +62,10 @@ A small, fast, public, read-only HTTP API that lets the Next.js frontend (and th
 | `CORS_ORIGINS` | yes (prod) | `http://localhost:3000` | Comma-separated; must include the Vercel domain(s) |
 | `META_API_BASE_URL` | if any Meta feature | – | Meta Model API base URL |
 | `META_API_KEY` | if any Meta feature | – | Render secret; never logged or returned |
-| `META_CHAT_MODEL` | if chat | – | Muse Spark 1.3 model id **[CONFIRM]** |
+| `META_CHAT_MODEL` | if chat | – | Muse Spark 1.3 model id `muse-spark-1.3` (confirmed 2026-11-03) |
 | `META_CHAT_FALLBACK_MODEL` | no | – | e.g. Muse Glimmer id, used on Spark 429/5xx |
-| `META_TRANSCRIBE_MODEL` | if voice | – | Muse Voice Transcribe id **[CONFIRM]** |
-| `META_IMAGE_MODEL` | if postcards | – | Muse Image id **[CONFIRM]** |
+| `META_TRANSCRIBE_MODEL` | if voice | – | Muse Voice Transcribe id `muse-voice-transcribe-1.0` (confirmed 2026-11-03) |
+| `META_IMAGE_MODEL` | if postcards | – | Muse Image id `muse-image-1.0` (confirmed 2026-11-03) |
 | `META_SEGMENT_MODEL` | if segment=sam | – | SAM 3.1 id **[CONFIRM]** |
 | `PROVIDER_LABEL` | no | `Muse Spark via Meta Model API` | Display name returned to the UI |
 | `CHAT_ENABLED` / `VOICE_ENABLED` / `POSTCARD_ENABLED` / `SEGMENT_ENABLED` / `BEACH_ENABLED` | no | `false` | Feature flags (§4.12) |
@@ -260,7 +260,7 @@ Routers contain no data logic; they call `OutputStore`. Chat tools call the **sa
 Meta's models are the interaction layer: they let people move through and ask about the data. They never produce numbers, never run the scientific model, and never see secrets. All of it is server-side in `app/meta/`; the browser only talks to our API.
 
 ### 6.1 Provider
-- One `MetaModelClient` (`app/meta/client.py`) over `httpx` against `META_API_BASE_URL` with `META_API_KEY`, one method per capability: `chat()` (Muse Spark 1.3, tool calling), `transcribe()` (Muse Voice Transcribe), `image()` (Muse Image), `segment()` (SAM 3.1). Model ids come from env vars (`META_CHAT_MODEL`, …) and are **[CONFIRM]** against the Meta Model API docs before implementation; do not guess ids in code.
+- One `MetaModelClient` (`app/meta/client.py`) over `httpx` against `META_API_BASE_URL` with `META_API_KEY`, one method per capability: `chat()` (Muse Spark 1.3, tool calling), `transcribe()` (Muse Voice Transcribe), `image()` (Muse Image), `segment()` (SAM 3.1). Model ids come from env vars (`META_CHAT_MODEL`, …) and were confirmed by the owner on 2026-11-03 (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-image-1.0`). They still come only from env vars, never from code.
 - If the Meta API exposes an OpenAI-compatible Chat Completions surface, use it; otherwise follow Meta's documented REST shape. No provider SDK unless Meta requires one (then state why in the commit, AGENTS rule 7).
 - Fallback for chat only: if `META_CHAT_FALLBACK_MODEL` is set (e.g. Muse Glimmer on the same API), use it when Spark returns 429/5xx. Never fall back to a non-Meta provider without a DECISIONS entry.
 - If tool calling is not supported by the configured model, chat stays disabled (do not attempt prompt-only number answering).

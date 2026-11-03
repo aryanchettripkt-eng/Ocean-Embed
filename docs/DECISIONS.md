@@ -131,3 +131,11 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - The download is limited to the files the remote `manifest.json` names (`allow_patterns`), so only the active run's prediction store is fetched. If the remote manifest cannot be read, everything is downloaded as before.
 - The module-level `loader` no longer loads at import (`DataLoader(autoload=False)`); `DataLoader(data_dir=...)` still loads at construction, as the tests expect.
 - Proposed by Claude, 2026-11-02.
+
+## 2026-11-03 — Synthetic caveat hidden on real data; Meta model ids and limits
+- `/meta.caveats.synthetic` is `null` when the manifest has `synthetic: false`, and `SYNTHETIC_CAVEAT` otherwise. Reason: PRD_BACKEND §7 says the frontend shows caveats verbatim, so the synthetic-demo text must not reach real data. This changes a frozen contract field (`string` becomes `string | null`), so `openapi.json` and the frontend types are regenerated in the same change.
+- Model ids, env vars only: guide `muse-spark-1.3`; voice `muse-voice-transcribe-1.0`; postcards `muse-image-1.0`. The contributor id `muse-spark-1.3-contributor` is not used, because Meta trains on inputs sent to it.
+- Limits, per team and per model: muse-spark-1.3 3,000 requests/min and 4,000,000 tokens/min; muse-image-1.0 150 requests/min; muse-voice-transcribe-1.0 no request or token limit, but 256 concurrent streams and 16,000 streams/hour. A 429 from Meta is not waited on for interactive requests: chat falls back to `META_CHAT_FALLBACK_MODEL` if set, otherwise the caller gets 502 at once.
+- The API key stays in Render secrets: not committed, not in fixtures, not logged. The real client stays behind the existing flags (`META_CLIENT=http`, `CHAT_ENABLED`, `VOICE_ENABLED`), off until the owner confirms the key is in Render and approves a first live call.
+- Approved by Aryan, 2026-11-03.
+

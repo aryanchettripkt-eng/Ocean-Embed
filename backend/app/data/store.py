@@ -391,7 +391,7 @@ class OutputStore:
         caveats = Caveats(
             glorys=GLORYS_CAVEAT,
             argo=ARGO_CAVEAT,
-            synthetic=SYNTHETIC_CAVEAT,
+            synthetic=SYNTHETIC_CAVEAT if manifest["synthetic"] else None,
             live=LIVE_CAVEAT,
             ai=AI_CAVEAT,
             postcard=POSTCARD_CAVEAT,
