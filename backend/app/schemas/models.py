@@ -97,7 +97,8 @@ class Caveats(BaseModel):
 
     glorys: str
     argo: str
-    synthetic: str
+    # Null when the served data is real (PRD_BACKEND §7; DECISIONS 2026-11-03).
+    synthetic: str | None
     live: str
     ai: str
     postcard: str

@@ -263,7 +263,7 @@ export interface components {
       /** Segment */
       segment: string;
       /** Synthetic */
-      synthetic: string;
+      synthetic: string | null;
     };
     /**
      * ChatContext
