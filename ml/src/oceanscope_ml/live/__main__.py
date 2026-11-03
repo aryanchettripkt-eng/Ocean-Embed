@@ -4,7 +4,8 @@ Usage (from ml/):
 
     # Once per published run: pack the kit, and upload it to live.kit_repo (needs HF_TOKEN)
     python -m oceanscope_ml.live kit --checkpoint checkpoints/<run_id>/best.pt \
-        --stats <stats.zarr> --static-store <part.zarr> --out kit/ [--upload]
+        --stats <stats.zarr> --static-store <part.zarr> --out kit/ [--run-id <published name>] \
+        [--upload]
 
     # Every day (the scheduled workflow): one new day, or nothing if it is already published
     python -m oceanscope_ml.live run [--kit-dir kit/] [--dry-run] [--log outputs/live/log.json]
@@ -52,6 +53,11 @@ def build_cli() -> argparse.ArgumentParser:
     kit.add_argument("--stats", required=True, help="Stats store (clim + norm_stats)")
     kit.add_argument("--static-store", required=True, help="Any part store with static fields")
     kit.add_argument("--out", required=True)
+    kit.add_argument(
+        "--run-id",
+        default=None,
+        help="Published name (manifest active_run_id), if not the one in the checkpoint",
+    )
     kit.add_argument("--upload", action="store_true", help="Upload to live.kit_repo")
 
     run = sub.add_parser("run", help="Publish the newest complete NRT day")
@@ -72,7 +78,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "kit":
         kit = build_kit(
-            config, Path(args.checkpoint), Path(args.stats), Path(args.static_store), Path(args.out)
+            config,
+            Path(args.checkpoint),
+            Path(args.stats),
+            Path(args.static_store),
+            Path(args.out),
+            run_id=args.run_id,
         )
         if args.upload:
             repo = LiveSettings.from_dict(load_live_config(args.live_config)).kit_repo

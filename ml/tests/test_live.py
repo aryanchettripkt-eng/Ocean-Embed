@@ -298,3 +298,25 @@ def test_live_settings_live_outside_the_hashed_experiment_config() -> None:
     s = LiveSettings.from_dict(LIVE_CFG)
     assert set(s.sources) == set(live_inputs.PRODUCT_VARS)
     assert set(LIVE_CFG["live_check"]["reprocessed"]) == set(live_inputs.PRODUCT_VARS)
+
+
+def test_kit_for_a_run_published_under_another_name(
+    tmp_path: Path, live_config: ExperimentConfig, store: Path, monkeypatch: Any
+) -> None:
+    # A fine-tuned run: best_ft.pt holds "main2_ft_l0.3" but it is published as "main2_ft".
+    train_run(live_config, store, "main2_ft_l0.3", device_choice="cpu", epochs=1)
+    ckpt = Path(live_config.paths.checkpoints) / "main2_ft_l0.3" / "best.pt"
+    pred = predict_store(live_config, store, ckpt, device_choice="cpu", run_id="main2_ft")
+    write_manifest(live_config, pred, evaluate_predictions(live_config, pred, store))
+    root = Path(live_config.paths.outputs)
+    fake_inputs(monkeypatch)
+
+    wrong = open_kit(build_kit(live_config, ckpt, store, store, tmp_path / "k1").root, live_config)
+    with pytest.raises(LiveRunError, match="live kit is for main2_ft_l0.3"):
+        _run(live_config, RecordingRepo(root), wrong, tmp_path / "a", "2001-03-15")
+
+    built = build_kit(live_config, ckpt, store, store, tmp_path / "k2", run_id="main2_ft")
+    kit = open_kit(built.root, live_config)
+    assert (kit.run_id, kit.checkpoint_run_id) == ("main2_ft", "main2_ft_l0.3")
+    log = _run(live_config, RecordingRepo(root), kit, tmp_path / "b", "2001-03-15")
+    assert log.status == "published" and log.run_id == "main2_ft"
