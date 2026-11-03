@@ -20,8 +20,9 @@ import torch
 import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
+from oceanscope_ml.data.argo_inputs import ArgoInputs
 from oceanscope_ml.data.cache import build_cache, open_cache
-from oceanscope_ml.data.channels import ChannelSpec, channel_list
+from oceanscope_ml.data.channels import ARGO_EXTRA_NAMES, ChannelSpec, channel_list
 from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.transform import TestLeakageError, check_no_test_leakage
 
@@ -76,6 +77,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     - ``mask``: bool [D, H, W]; target valid.
     - ``grep_y``, ``grep_mask``: as ``y`` and ``mask`` for GREP, zeros when GREP is missing.
     - ``has_grep``: bool scalar; True when GREP exists for this date.
+    - ``argo_y``, ``argo_mask``: same-day ARGO targets hidden from the inputs, only when ARGO
+      input channels are on (``set_argo``, oceanscope_ml.data.argo_inputs).
     """
 
     def __init__(
@@ -122,6 +125,10 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         # With a cache dir, samples come from the fast local cache (oceanscope_ml.data.cache).
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self._arrays: dict[str, np.ndarray] | None = None
+        # ARGO input channels (P4-6) come from profiles, not from the store: see set_argo.
+        self._has_argo_channels = any(c.kind == "argo" for c in self.channels)
+        self.argo: ArgoInputs | None = None
+        self.argo_mode = "predict"
 
         with self._open_store() as ds:
             _check_store_matches_config(ds, config)
@@ -269,6 +276,13 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             positions.append(t)
         return np.asarray(positions, dtype=np.int64)
 
+    def set_argo(self, argo: ArgoInputs, mode: str) -> None:
+        """Attach the ARGO profiles that feed the ARGO channels, and the hide/target mode."""
+        if not self._has_argo_channels:
+            raise ValueError("ARGO input channels are off in this config (inputs.argo_input)")
+        self.argo = argo
+        self.argo_mode = mode
+
     # ------------------------------------------------------------- dataset API
 
     def __len__(self) -> int:
@@ -311,7 +325,19 @@ class OceanScopeDataset(torch.utils.data.Dataset):
                 for var in self._window_vars()
             }
 
-        planes = [self._input_plane(c, ds, window, t, day, doy) for c in self.channels]
+        argo_sample = None
+        if self._has_argo_channels:
+            if self.argo is None:
+                raise ValueError("ARGO input channels are on but no profiles are set (set_argo)")
+            argo_sample = self.argo.sample(day, self.argo_mode, index)
+        planes = []
+        for c in self.channels:
+            if c.kind == "argo":
+                assert argo_sample is not None
+                k = c.depth_index if c.depth_index is not None else self._argo_extra(c.name)
+                planes.append(argo_sample.planes[k])
+            else:
+                planes.append(self._input_plane(c, ds, window, t, day, doy))
         x = np.stack(planes).astype(np.float32)
         x = np.nan_to_num(x, nan=0.0)
 
@@ -321,7 +347,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         pad_w = self.padded_hw[1] - self._n_lon
         x = np.pad(x, ((0, 0), (0, pad_h), (0, pad_w)))
 
-        return {
+        sample = {
             "x": torch.from_numpy(x),
             "y": torch.from_numpy(y),
             "mask": torch.from_numpy(mask),
@@ -329,6 +355,13 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             "grep_mask": torch.from_numpy(grep_mask),
             "has_grep": torch.tensor(has_grep, dtype=torch.bool),
         }
+        if argo_sample is not None:
+            sample["argo_y"] = torch.from_numpy(argo_sample.target)
+            sample["argo_mask"] = torch.from_numpy(argo_sample.target_mask)
+        return sample
+
+    def _argo_extra(self, name: str) -> int:
+        return len(self.config.depths_m) + ARGO_EXTRA_NAMES.index(name)
 
     def _window_vars(self) -> list[str]:
         return sorted({c.source for c in self.channels if c.kind in ("dynamic", "long_history")})

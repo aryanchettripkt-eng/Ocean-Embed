@@ -33,6 +33,7 @@ import zarr
 from torch.utils.data import DataLoader, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
+from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -56,6 +57,8 @@ def load_checkpoint(
 ) -> tuple[torch.nn.Module, str]:
     """Model from a ``best.pt``/``last.pt`` checkpoint, after checking its channel order."""
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
+    if any(str(n).startswith("argo_") for n in ckpt["channel_names"]):
+        enable_argo_input(config)  # a run fine-tuned with ARGO input channels (P4-6)
     channels = channel_names(config)
     if ckpt["channel_names"] != channels:
         raise ValueError(
@@ -117,6 +120,8 @@ def predict_store(
     split: str | None = None,
     allow_test: bool = False,
     day_stride: int | None = None,
+    argo_paths: list[Path] | None = None,
+    holdout: set[str] | None = None,
 ) -> Path:
     """Run the model on every validation day (or on ``split``) and write the prediction store.
 
@@ -145,6 +150,24 @@ def predict_store(
         allow_test=allow_test,
     )
     ds = open_parts(store_path if isinstance(store_path, list) else [store_path], stats_path)
+    if dataset._has_argo_channels:
+        if not argo_paths or not holdout:
+            raise ValueError("This checkpoint uses ARGO input channels: pass --argo and --holdout")
+        if split == "test":
+            raise ValueError("ARGO input channels are not built for the sealed test year")
+        start, end = (pd.Timestamp(d) for d in getattr(config.splits, split))
+        window = int(config.inputs["argo_input"].get("window_days", 10))
+        argo = argo_inputs_for(
+            config,
+            argo_paths,
+            holdout,
+            ds,
+            dataset.sigma_d,
+            list(config.depths_m),
+            start=start - pd.Timedelta(days=window),
+            end=end,
+        )
+        dataset.set_argo(argo, "predict")  # every non-held-out profile is an input
     times = pd.to_datetime(ds["time"].values)
     sample_idx = np.arange(0, len(dataset._positions), stride)  # dataset index of each day
     positions = np.asarray(dataset._positions)[sample_idx]
@@ -267,6 +290,8 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None, help="Default: the checkpoint's run id")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--split", default="val", choices=["val", "train"])
+    parser.add_argument("--argo", nargs="+", default=None, help="ARGO files (ARGO-input runs)")
+    parser.add_argument("--holdout", default=None, help="argo_eval_floats.json (ARGO-input runs)")
     parser.add_argument(
         "--day-stride", type=int, default=None,
         help=f"Write every N-th day (default 1 for val, {TRAIN_SAMPLE_STRIDE_DAYS} for train)",
@@ -289,7 +314,16 @@ def main() -> None:
         run_id=args.run_id,
         split=args.split,
         day_stride=args.day_stride,
+        argo_paths=[Path(p) for p in args.argo] if args.argo else None,
+        holdout=_load_holdout(Path(args.holdout)) if args.holdout else None,
     )
+
+
+def _load_holdout(path: Path) -> set[str]:
+    floats = json.loads(Path(path).read_text(encoding="utf-8")).get("held_out_floats") or []
+    if not floats:
+        raise ValueError(f"{path} lists no held-out floats (PRD_AI_ML §7)")
+    return {str(f).strip() for f in floats}
 
 
 if __name__ == "__main__":

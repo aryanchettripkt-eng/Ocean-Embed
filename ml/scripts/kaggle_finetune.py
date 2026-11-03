@@ -6,6 +6,8 @@ Internet on. Run as: %run /kaggle/working/ocean-embed/ml/scripts/kaggle_finetune
 
 Settings (env): OCEANSCOPE_RUN (base run, default main2), OCEANSCOPE_FT_LAMBDAS (default
 "0.03,0.1,0.3"), OCEANSCOPE_FT_EPOCHS (default 6), OCEANSCOPE_PUBLISH=1 to upload at the end.
+OCEANSCOPE_FT_ARGO_INPUT=1 also turns the ARGO input channels on (P4-6); the run is then
+<run>_ai instead of <run>_ft.
 
 Steps: ARGO 2004-2020 from the Argo ERDDAP (never 2021) -> held-out floats (the committed list,
 checked against a rebuild) -> one fine-tune per lambda -> the lambda with the lowest validation
@@ -23,7 +25,8 @@ from pathlib import Path
 REPO = "/kaggle/working/ocean-embed"
 ML = f"{REPO}/ml"
 BASE = os.environ.get("OCEANSCOPE_RUN", "main2")
-RUN = f"{BASE}_ft"
+ARGO_INPUT = os.environ.get("OCEANSCOPE_FT_ARGO_INPUT", "0") == "1"
+RUN = f"{BASE}_ai" if ARGO_INPUT else f"{BASE}_ft"
 LAMBDAS = [float(x) for x in os.environ.get("OCEANSCOPE_FT_LAMBDAS", "0.03,0.1,0.3").split(",")]
 EPOCHS = int(os.environ.get("OCEANSCOPE_FT_EPOCHS", "6"))
 PUBLISH = os.environ.get("OCEANSCOPE_PUBLISH", "0") == "1"
@@ -130,6 +133,7 @@ for lam in LAMBDAS:
         f"python -m oceanscope_ml.finetune --config {CFG} --store {S} --stats {stats} "
         f"--cache-dir {CACHE} --base {base_ckpt} --argo {FILES} --holdout {holdout_path} "
         f"--lambda {lam:g} --run-id {rid} --epochs {EPOCHS} --patience 2 --device cuda"
+        + (" --argo-input" if ARGO_INPUT else "")
     )
     hist = pd.read_csv(Path(ML) / config.paths.outputs / "metrics" / f"finetune_{rid}.csv")
     print(hist.to_string(index=False))
@@ -154,6 +158,7 @@ PRED = OUT / "predictions" / f"predictions_{RUN}.zarr"
 run(
     f"python -m oceanscope_ml.inference.predict --config {CFG} --store {S} --stats {stats} "
     f"--cache-dir {CACHE} --checkpoint {ckpt} --run-id {RUN} --out-dir {OUT}"
+    + (f" --argo {FILES} --holdout {holdout_path}" if ARGO_INPUT else "")
 )
 run(
     f"python -m oceanscope_ml.evaluation.argo_validation --config {CFG} --predictions {PRED} "
