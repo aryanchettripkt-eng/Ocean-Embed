@@ -4,6 +4,10 @@ services:
     runtime: docker
     dockerfilePath: backend/Dockerfile
     dockerContext: backend
+    buildFilter:
+      paths:
+        - backend/**
+        - render.yaml
     plan: free
     region: oregon
     envVars:
