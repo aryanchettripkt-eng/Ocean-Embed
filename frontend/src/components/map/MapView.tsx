@@ -515,6 +515,17 @@ export function MapView({
   const introCleanupRef = useRef<(() => void) | null>(null);
   const hasSlice = !!mapData?.values?.length;
 
+  // Stage 1 (as soon as the map exists, in parallel with the slice fetch): frame the pulled-back
+  // view so its tiles load under the overlay. Zooming *in* later can always fall back to these
+  // lower-zoom tiles, so only the pulled-back view needs preloading.
+  const introPlanRef = useRef<{
+    home: { center: maplibregl.LngLat; zoom: number };
+    outZoom: number;
+    target: maplibregl.LngLat;
+    targetZoom: number;
+    outReady: Promise<void>;
+  } | null>(null);
+
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!introAtMountRef.current || introStartedRef.current || !map || !mapLoaded) return;
@@ -524,83 +535,91 @@ export function MapView({
       gridOpacityRef.current = v;
       if (map.getLayer(layerId)) map.setPaintProperty(layerId, "raster-opacity", v ?? normalOpacity());
     };
+    // Label fade-in (300 ms by default) delays every `idle`; off during the intro only.
+    // `_fadeDuration` is MapLibre internal (typed in its .d.ts); restored when the intro ends.
+    const fadeDuration = map._fadeDuration;
+    const restoreFade = () => {
+      map._fadeDuration = fadeDuration;
+    };
 
     // The page gave up on the intro (e.g. the slice failed): just frame the region
     if (!intro) {
       introStartedRef.current = true;
+      restoreFade();
       setGridOpacity(null);
       fitRegion(map, regionRef.current, true);
       return;
     }
-    if (!hasSlice) return;
-    introStartedRef.current = true;
 
-    let timeline: gsap.core.Timeline | null = null;
-    let started = false;
     let cancelled = false;
-    const skip = () => timeline?.progress(1);
-    const waitIdle = () =>
+    const waitIdle = (capMs = 2000) =>
       new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, 2500);
+        const t = setTimeout(resolve, capMs);
         map.once("idle", () => {
           clearTimeout(t);
           resolve();
         });
         map.triggerRepaint();
       });
-    const finish = () => {
-      setGridOpacity(null);
-      introCallbacksRef.current.onIntroDone?.();
-    };
 
-    const start = async () => {
-      if (started) return;
-      started = true;
-      clearTimeout(fallback);
-
+    if (!introPlanRef.current) {
+      map._fadeDuration = 0;
       const framed = map.cameraForBounds(regionBounds(regionRef.current), { padding: regionPadding(map) });
       const targetZoom = framed?.zoom ?? 4;
       const target = framed?.center ? maplibregl.LngLat.convert(framed.center) : map.getCenter();
       const outZoom = Math.max(map.getMinZoom(), targetZoom - INTRO_ZOOM_OUT);
-
-      // Still under the overlay: visit the pulled-back and final views so their tiles are cached,
-      // then return. Otherwise the zoom-out reveals empty background while tiles stream in.
+      const home = { center: map.getCenter(), zoom: map.getZoom() };
+      let outReady: Promise<void> = Promise.resolve();
       if (!prefersReducedMotion()) {
-        const home = { center: map.getCenter(), zoom: map.getZoom() };
         map.jumpTo({ center: home.center, zoom: outZoom });
-        await waitIdle();
-        if (cancelled) return;
-        map.jumpTo({ center: target, zoom: targetZoom });
-        await waitIdle();
-        if (cancelled) return;
-        map.jumpTo(home);
-        await waitIdle();
-        if (cancelled) return;
+        outReady = waitIdle();
       }
+      introPlanRef.current = { home, outZoom, target, targetZoom, outReady };
+    }
 
-      introCallbacksRef.current.onIntroReady?.();
+    // Stage 2 (slice ready): back to open water, wait for that one frame, reveal, fly
+    if (!hasSlice) return;
+    introStartedRef.current = true;
+    const plan = introPlanRef.current;
+
+    let timeline: gsap.core.Timeline | null = null;
+    const skip = () => timeline?.progress(1);
+    const finish = () => {
+      restoreFade();
+      setGridOpacity(null);
+      introCallbacksRef.current.onIntroDone?.();
+    };
+
+    void (async () => {
+      await plan.outReady;
+      if (cancelled) return;
 
       if (prefersReducedMotion()) {
-        map.jumpTo({ center: target, zoom: targetZoom });
+        map.jumpTo({ center: plan.target, zoom: plan.targetZoom });
+        introCallbacksRef.current.onIntroReady?.();
         introCallbacksRef.current.onIntroFlyIn?.();
         finish();
         return;
       }
 
-      const from = map.getCenter();
-      const cam = { lng: from.lng, lat: from.lat, zoom: map.getZoom() };
+      map.jumpTo(plan.home);
+      await waitIdle();
+      if (cancelled) return;
+      introCallbacksRef.current.onIntroReady?.();
+
+      const cam = { lng: plan.home.center.lng, lat: plan.home.center.lat, zoom: plan.home.zoom };
       const grid = { v: 0 };
       timeline = gsap.timeline({
-        delay: 0.3, // the overlay starts fading first
+        delay: 0.2, // the overlay starts fading first
         onUpdate: () => map.jumpTo({ center: [cam.lng, cam.lat], zoom: cam.zoom }),
         onComplete: finish,
       });
       timeline
         // Pull back from open water until the basin and its coasts are in view…
-        .to(cam, { zoom: outZoom, duration: 1.15, ease: "power2.inOut" })
+        .to(cam, { zoom: plan.outZoom, duration: 1.15, ease: "power2.inOut" })
         .call(() => introCallbacksRef.current.onIntroFlyIn?.())
         // …then dive back in onto the model region
-        .to(cam, { lng: target.lng, lat: target.lat, zoom: targetZoom, duration: 1.35, ease: "power3.inOut" }, ">-0.15")
+        .to(cam, { lng: plan.target.lng, lat: plan.target.lat, zoom: plan.targetZoom, duration: 1.35, ease: "power3.inOut" }, ">-0.15")
         .to(
           grid,
           { v: normalOpacity(), duration: 0.7, ease: "power1.out", onUpdate: () => setGridOpacity(grid.v) },
@@ -610,23 +629,15 @@ export function MapView({
       map.on("mousedown", skip);
       map.on("wheel", skip);
       map.on("touchstart", skip);
-    };
-
-    // Ready = the basemap and the (hidden) grid have rendered; repaint so `idle` fires even if the
-    // map is already idle. Fall back after 6 s if tiles never settle.
-    const fallback = setTimeout(() => void start(), 6000);
-    const onIdle = () => void start();
-    map.once("idle", onIdle);
-    map.triggerRepaint();
+    })();
 
     introCleanupRef.current = () => {
       cancelled = true;
-      clearTimeout(fallback);
-      map.off("idle", onIdle);
       map.off("mousedown", skip);
       map.off("wheel", skip);
       map.off("touchstart", skip);
       timeline?.kill();
+      restoreFade();
     };
   }, [intro, mapLoaded, hasSlice]);
 
