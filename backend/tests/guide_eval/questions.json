@@ -66,8 +66,10 @@
       "question": "Which dates and depths does this dataset cover?",
       "context": null,
       "quality": {
-        "tools_any": [
-          "get_dataset_info"
+        "answer_all": [
+          "2020-01-01",
+          "2020-01-10",
+          "1000"
         ],
         "grounded": true
       }
@@ -174,7 +176,9 @@
           "does not cover",
           "not a real",
           "don't know",
-          "no such"
+          "no such",
+          "don't recognize",
+          "fictional"
         ],
         "ui_count_max": 0
       }

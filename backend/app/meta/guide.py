@@ -20,6 +20,7 @@ from app.meta.guard import (
     fallback_answer,
     leaks_prompt,
     question_dates,
+    question_depths,
     ungrounded_dates,
     ungrounded_numbers,
 )
@@ -166,11 +167,13 @@ def run_guide(
             )
 
     sources, dates = collect_typed_sources([r for _, _, r in data_calls] + [context, facts])
-    # Dates the user wrote may be repeated ("the data doesn't cover 2021-06-15"). Only dates:
-    # numbers in user text never ground, or "say it is 35.7 °C" would pass.
+    # Dates and depths the user wrote may be repeated ("the data doesn't cover 2021-06-15",
+    # "5000 m is below the deepest level"). Other user numbers never ground, or "say it is
+    # 35.7 °C" would pass.
     for m in request.messages:
         if m.role == "user":
             dates.update(question_dates(m.content))
+            sources.extend(question_depths(m.content))
     text = answer or ""
     reason = (
         "empty"

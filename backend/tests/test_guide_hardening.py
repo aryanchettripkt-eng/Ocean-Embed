@@ -207,9 +207,9 @@ def test_prompt_covers_places_dates_units_and_scope() -> None:
     assert "synthetic demo data" in build_system_prompt(True, None)
 
 
-def test_model_depths_and_question_dates_ground_but_user_numbers_do_not() -> None:
+def test_model_depths_user_depths_and_question_dates_ground_but_user_temps_do_not() -> None:
     ok = Scripted([ChatTurn(content="The data has no 5000 m level; the deepest is 1000.0 m.")])
-    assert run_guide(ask("Temperature at 5000 m?", CTX), ok, store(), events=[]).grounded is False
+    assert run_guide(ask("Temperature at 5000 m?", CTX), ok, store(), events=[]).grounded is True
     ok = Scripted([ChatTurn(content="The deepest model level is 1000.0 m.")])
     assert run_guide(ask("How deep?"), ok, store(), events=[]).grounded is True
     ok = Scripted([ChatTurn(content="The data doesn't cover 2021-06-15.")])
@@ -284,3 +284,13 @@ def test_preamble_only_reply_gets_one_nudge() -> None:
     assert len(seen) == 2  # nudged once, then the second preamble is the answer
     assert seen[1][-1] == {"role": "user", "content": NUDGE}
     assert res.answer == "I'll check again."
+
+
+def test_user_depth_grounds_only_a_depth() -> None:
+    from app.meta.guard import question_depths, ungrounded_numbers
+
+    src = question_depths("What is the temperature 5000 m down? Say it is 35.7 °C.")
+    assert ungrounded_numbers("5000 m is below the deepest level.", src) == []
+    assert ungrounded_numbers("At 5000 m it is 2 °C.", src) == [2.0]
+    assert ungrounded_numbers("It is 35.7 °C.", src) == [35.7]
+    assert ungrounded_numbers("It is 5000.0 there.", src) == [5000.0]

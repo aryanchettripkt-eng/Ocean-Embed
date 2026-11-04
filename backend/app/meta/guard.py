@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 FALLBACK_PREFIX = "I couldn't verify that answer against the data; here are the raw results:"
 
-Kind = Literal["temp", "depth", "pct", "coord", "other"]
+Kind = Literal["temp", "depth", "pct", "coord", "other", "user_depth"]
 UnitKind = Literal["temp", "depth", "pct", "coord", "dist", "forbidden", "none"]
 
 _UNIT_KINDS: list[tuple[UnitKind, str]] = [
@@ -137,10 +137,14 @@ def collect_sources(values: Iterable[Any]) -> list[float]:
 
 
 def _matches(f: Found, s: Source) -> bool:
+    if s.kind == "user_depth" and f.unit != "depth":
+        return False
     if abs(round(abs(s.value), f.decimals) - f.value) >= 1e-9:
         return False
     if f.sign and s.value != 0 and (s.value > 0) != (f.sign > 0):
         return False
+    if s.kind == "user_depth":
+        return True  # f.unit is "depth", checked above
     if f.unit in ("none", "dist"):
         return True
     return s.kind == f.unit
@@ -171,6 +175,21 @@ def ungrounded_numbers(answer: str, sources: list[float] | list[Source]) -> list
 
 def ungrounded_dates(answer: str, dates: set[str]) -> list[str]:
     return [d for d in _DATE_RE.findall(answer) if d not in dates]
+
+
+_USER_DEPTH_RE = re.compile(
+    r"(?<![\w.,])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?(?:m|metres?|meters?)\b", re.I
+)
+
+
+def question_depths(text: str) -> list[Source]:
+    """Depths the user wrote ("5000 m down"). They ground only a depth in the answer, so the
+    guide can say "5000 m is below the deepest level" while "35.7 °C" from the user never
+    grounds."""
+    return [
+        Source(float(m.group(1).replace(",", "")), "user_depth")
+        for m in _USER_DEPTH_RE.finditer(text)
+    ]
 
 
 def question_dates(text: str) -> set[str]:
