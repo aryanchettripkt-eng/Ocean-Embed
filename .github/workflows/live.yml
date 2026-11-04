@@ -25,8 +25,8 @@ on:
         description: "Do everything but upload"
         type: boolean
         default: true
-  # schedule:
-  #   - cron: "0 6 * * *"   # daily 06:00 UTC (PRD §12); enable after P9-1 is accepted
+  schedule:
+    - cron: "0 6 * * *"   # daily 06:00 UTC (PRD §12); on since P9-1 was accepted on 4 Nov 2026
 
 permissions:
   contents: read

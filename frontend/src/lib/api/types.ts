@@ -399,6 +399,22 @@ export interface components {
       vmin: number;
     };
     /**
+     * DateRange
+     * @description A run of consecutive days present in the served prediction store.
+     */
+    DateRange: {
+      /**
+       * End
+       * @description Last day YYYY-MM-DD
+       */
+      end: string;
+      /**
+       * Start
+       * @description First day YYYY-MM-DD
+       */
+      start: string;
+    };
+    /**
      * ErrorRange
      * @description Fixed color scale bounds for reconstruction error fields.
      */
@@ -691,6 +707,11 @@ export interface components {
       color_ranges: components["schemas"]["ColorRange"][];
       /** Dataset Version */
       dataset_version: string;
+      /**
+       * Date Ranges
+       * @description Runs of consecutive days the store holds, oldest first. Live mode appends recent days after the historical ones, leaving a gap inside available_dates; dates in a gap return 404 date_unavailable.
+       */
+      date_ranges?: components["schemas"]["DateRange"][] | null;
       /** Depths M */
       depths_m: number[];
       error_range: components["schemas"]["ErrorRange"];

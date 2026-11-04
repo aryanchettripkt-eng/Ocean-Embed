@@ -620,6 +620,27 @@
         "title": "ColorRange",
         "type": "object"
       },
+      "DateRange": {
+        "description": "A run of consecutive days present in the served prediction store.",
+        "properties": {
+          "end": {
+            "description": "Last day YYYY-MM-DD",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "description": "First day YYYY-MM-DD",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "DateRange",
+        "type": "object"
+      },
       "ErrorRange": {
         "description": "Fixed color scale bounds for reconstruction error fields.",
         "properties": {
@@ -1330,6 +1351,21 @@
           "dataset_version": {
             "title": "Dataset Version",
             "type": "string"
+          },
+          "date_ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DateRange"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Runs of consecutive days the store holds, oldest first. Live mode appends recent days after the historical ones, leaving a gap inside available_dates; dates in a gap return 404 date_unavailable.",
+            "title": "Date Ranges"
           },
           "depths_m": {
             "items": {

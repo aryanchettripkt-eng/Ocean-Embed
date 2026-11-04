@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Calendar,
   ChevronLeft,
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { SplitBadge } from "../common/SplitBadge";
 import { formatDate } from "../../lib/format";
+import { ServedDays, type DayRange } from "../../lib/date-ranges";
 
 interface DatePickerProps {
   date: string;
@@ -18,6 +19,8 @@ interface DatePickerProps {
   endDate: string;
   currentSplit?: string | null;
   latestLiveDate?: string | null;
+  /** Runs of served days (/meta date_ranges); the controls skip the gaps between them. */
+  dateRanges?: DayRange[] | null;
   splits?: {
     train?: string[];
     val?: string[];
@@ -26,15 +29,6 @@ interface DatePickerProps {
   onChange: (date: string) => void;
   prefetchAhead?: (date: string) => void;
   className?: string;
-}
-
-function parseDateToDays(dateStr: string): number {
-  return Math.floor(new Date(dateStr + "T00:00:00Z").getTime() / 86400000);
-}
-
-function daysToDateStr(days: number): string {
-  const d = new Date(days * 86400000);
-  return d.toISOString().slice(0, 10);
 }
 
 function getSplitForDate(
@@ -59,6 +53,7 @@ export function DatePicker({
   endDate,
   currentSplit,
   latestLiveDate,
+  dateRanges,
   splits,
   onChange,
   prefetchAhead,
@@ -66,12 +61,14 @@ export function DatePicker({
 }: DatePickerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
 
-  const startDays = parseDateToDays(startDate);
-  const endDays = parseDateToDays(endDate);
-  const currentDays = parseDateToDays(date);
-
-  const totalDays = Math.max(1, endDays - startDays);
-  const currentSliderValue = Math.max(0, Math.min(totalDays, currentDays - startDays));
+  const served = useMemo(
+    () => new ServedDays(startDate, endDate, dateRanges),
+    [startDate, endDate, dateRanges]
+  );
+  const totalDays = Math.max(1, served.count - 1);
+  const currentSliderValue = served.indexOf(date);
+  const nextDate = served.step(date, 1);
+  const prevDate = served.step(date, -1);
 
   // Determine split of current date
   const split = currentSplit ?? getSplitForDate(date, splits);
@@ -81,26 +78,23 @@ export function DatePicker({
     if (!isPlaying) return;
 
     // Prefetch immediately when starting play
-    prefetchAhead?.(daysToDateStr(currentDays));
+    prefetchAhead?.(date);
 
     const interval = setInterval(() => {
-      const nextDays = currentDays + 1;
-      const targetStr = nextDays > endDays ? daysToDateStr(startDays) : daysToDateStr(nextDays);
+      const targetStr = nextDate ?? served.first;
       onChange(targetStr);
       prefetchAhead?.(targetStr);
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentDays, endDays, startDays, onChange, prefetchAhead]);
+  }, [isPlaying, date, nextDate, served, onChange, prefetchAhead]);
 
-  const canStepPrev = currentDays > startDays;
-  const canStepNext = currentDays < endDays;
+  const canStepPrev = prevDate !== null;
+  const canStepNext = nextDate !== null;
 
-  const handleStep = (step: number) => {
-    const target = currentDays + step;
-    if (target >= startDays && target <= endDays) {
-      onChange(daysToDateStr(target));
-    }
+  const handleStep = (step: 1 | -1) => {
+    const target = step === 1 ? nextDate : prevDate;
+    if (target) onChange(target);
   };
 
   return (
@@ -146,7 +140,7 @@ export function DatePicker({
             max={endDate}
             value={date}
             onChange={(e) => {
-              if (e.target.value) onChange(e.target.value);
+              if (e.target.value) onChange(served.snap(e.target.value));
             }}
             className="bg-transparent text-sm font-semibold text-slate-100 text-center border-none focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded px-1.5 cursor-pointer"
           />
@@ -189,7 +183,7 @@ export function DatePicker({
           value={currentSliderValue}
           onChange={(e) => {
             const val = parseInt(e.target.value, 10);
-            onChange(daysToDateStr(startDays + val));
+            onChange(served.at(val));
           }}
           className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:accent-cyan-300 transition-all"
         />
