@@ -4,6 +4,9 @@ The published checkpoint is run twice on the same month: once with the near-real
 live mode will use (``live.sources``) and once with the reprocessed inputs the training store
 used (``live_check.reprocessed``, both in ``configs/live.yaml``). Both are scored against
 GLORYS on the same cells and days.
+An ensemble kit is run as the mean of its members. Members with ARGO input channels get the same
+ARGO profiles in both runs (Argo ERDDAP, held-out floats left out), so the comparison is about
+the gridded inputs only.
 The owner reads the report and decides whether live mode is enabled; this script does not
 set a pass mark.
 
@@ -33,8 +36,14 @@ import xarray as xr
 from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.transform import TestLeakageError
 from oceanscope_ml.live import inputs as live_inputs
-from oceanscope_ml.live.kit import Kit, open_kit, predict_days
-from oceanscope_ml.live.run import DEFAULT_LIVE_CONFIG, default_fetch, load_live_config
+from oceanscope_ml.live.argo import ArgoFetcher
+from oceanscope_ml.live.kit import Kit, argo_window_days, open_kit, predict_days
+from oceanscope_ml.live.run import (
+    DEFAULT_LIVE_CONFIG,
+    default_argo_fetch,
+    default_fetch,
+    load_live_config,
+)
 
 logger = logging.getLogger("oceanscope_ml.evaluation.live_check")
 
@@ -104,18 +113,22 @@ def write_report(
     complete: dict[str, list[str]],
     n_days: int,
     glorys_id: str,
+    argo_note: str = "",
 ) -> Path:
     def f(x: float) -> str:
         return "n/a" if not np.isfinite(x) else f"{x:.3f}"
 
+    names = [m.name for m in kit.members]
+    members = f" (mean of {', '.join(names)})" if len(names) > 1 else ""
     lines = [
         f"# Live mode check: NRT vs reprocessed inputs, {month}",
         "",
-        f"Run `{kit.run_id}`. Created {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC by "
-        "`oceanscope_ml.evaluation.live_check` (PRD_AI_ML §12, PHASES P9-1).",
+        f"Run `{kit.run_id}`{members}. Created {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC "
+        "by `oceanscope_ml.evaluation.live_check` (PRD_AI_ML §12, PHASES P9-1).",
         f"Reference: GLORYS `{glorys_id}`. Scored on days complete in both sets and cells "
         "with a valid prediction in both.",
         "",
+        *([argo_note, ""] if argo_note else []),
         f"Days with complete inputs: NRT {len(complete['nrt'])}/{n_days}, "
         f"reprocessed {len(complete['reprocessed'])}/{n_days}.",
         "",
@@ -180,8 +193,24 @@ def run_check(
     work: Path,
     glorys_id: str,
     live_cfg: dict[str, Any],
+    argo_fetch: ArgoFetcher | None = None,
 ) -> dict[str, Path]:
     days = month_days(month, config)
+    profiles = None
+    argo_note = ""
+    if kit.needs_argo:
+        if argo_fetch is None:
+            raise ValueError("The kit has ARGO input members but no ARGO fetcher was given")
+        argo_start = days[0] - pd.Timedelta(days=argo_window_days(config) - 1)
+        profiles = argo_fetch(argo_start, days[-1])
+        if profiles.empty:
+            raise ValueError(f"No ARGO profiles in {argo_start.date()}..{days[-1].date()}")
+        n_floats = int(profiles["platform_number"].nunique())
+        argo_note = (
+            f"ARGO input profiles (same in both sets): {len(profiles)} from {n_floats} "
+            f"non-held-out floats, {argo_start.date()}..{days[-1].date()}."
+        )
+        logger.info(argo_note)
     raw = live_cfg
     sources = {
         "nrt": dict((raw.get("live") or {}).get("sources") or {}),
@@ -209,7 +238,7 @@ def run_check(
         window = live_inputs.write_window_store(
             work / f"{name}.zarr", inputs, static, fetch_days[0], days[-1]
         )
-        preds[name] = predict_days(config, kit, window, ok)
+        preds[name] = predict_days(config, kit, window, ok, argo_profiles=profiles)
 
     glorys = glorys_fetch(days)
     table = depth_table(config, preds, glorys, days)
@@ -227,6 +256,7 @@ def run_check(
         complete,
         len(days),
         glorys_id,
+        argo_note,
     )
     return {"csv": csv, "report": report}
 
@@ -261,6 +291,7 @@ def main() -> None:
         work,
         spec["dataset_id"],
         live_cfg,
+        argo_fetch=default_argo_fetch(config, kit, work / "argo"),
     )
     print(f"[OK] {paths['report']}\n[OK] {paths['csv']}")
 
