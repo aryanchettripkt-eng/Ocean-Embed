@@ -253,6 +253,97 @@
         "title": "AvailableDates",
         "type": "object"
       },
+      "Body_post_glasses_ask_api_v1_glasses_ask_post": {
+        "properties": {
+          "audio": {
+            "anyOf": [
+              {
+                "contentMediaType": "application/octet-stream",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Spoken question, 30 s or less",
+            "title": "Audio"
+          },
+          "bearing_deg": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 360.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Compass heading, true north, clockwise",
+            "title": "Bearing Deg"
+          },
+          "heading_accuracy_deg": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Compass accuracy reported by the phone, if known",
+            "title": "Heading Accuracy Deg"
+          },
+          "lang": {
+            "default": "en",
+            "description": "BCP-47 language tag for transcription",
+            "title": "Lang",
+            "type": "string"
+          },
+          "lat": {
+            "description": "User latitude",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "description": "User longitude",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          },
+          "max_km": {
+            "default": 300.0,
+            "description": "How far to look",
+            "exclusiveMinimum": 0.0,
+            "maximum": 500.0,
+            "title": "Max Km",
+            "type": "number"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Typed question (used when no audio is sent)",
+            "title": "Text"
+          }
+        },
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "title": "Body_post_glasses_ask_api_v1_glasses_ask_post",
+        "type": "object"
+      },
       "Body_post_transcribe_api_v1_transcribe_post": {
         "properties": {
           "audio": {
@@ -727,6 +818,132 @@
           "beach"
         ],
         "title": "Features",
+        "type": "object"
+      },
+      "GlassesAskResponse": {
+        "description": "Response model for POST /glasses/ask (glasses ocean guide, \u00a74.18).",
+        "properties": {
+          "answer_text": {
+            "description": "Short spoken answer for text-to-speech",
+            "title": "Answer Text",
+            "type": "string"
+          },
+          "bearing_deg": {
+            "title": "Bearing Deg",
+            "type": "number"
+          },
+          "caveats": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Caveats",
+            "type": "array"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "depth_asked_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Depth heard in the question, if any",
+            "title": "Depth Asked M"
+          },
+          "depth_used_m": {
+            "description": "Depth the temperature is for",
+            "title": "Depth Used M",
+            "type": "number"
+          },
+          "direction": {
+            "description": "16-point compass word from the user to the cell",
+            "title": "Direction",
+            "type": "string"
+          },
+          "distance_km": {
+            "title": "Distance Km",
+            "type": "number"
+          },
+          "interpolated": {
+            "description": "True when blended between two levels",
+            "title": "Interpolated",
+            "type": "boolean"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "levels_m": {
+            "description": "Model levels used (two when blended)",
+            "items": {
+              "type": "number"
+            },
+            "title": "Levels M",
+            "type": "array"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "question": {
+            "description": "The question as typed or transcribed",
+            "title": "Question",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "synthetic": {
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "temperature_c": {
+            "description": "Model prediction, rounded to 0.1 \u00b0C",
+            "title": "Temperature C",
+            "type": "number"
+          },
+          "too_shallow": {
+            "description": "True when no water that deep was found, so the deepest level was used",
+            "title": "Too Shallow",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "answer_text",
+          "question",
+          "temperature_c",
+          "depth_used_m",
+          "levels_m",
+          "interpolated",
+          "too_shallow",
+          "lat",
+          "lon",
+          "distance_km",
+          "bearing_deg",
+          "direction",
+          "date",
+          "caveats",
+          "run_id",
+          "synthetic"
+        ],
+        "title": "GlassesAskResponse",
         "type": "object"
       },
       "GridShape": {
@@ -2498,6 +2715,48 @@
         ]
       }
     },
+    "/api/v1/glasses/ask": {
+      "post": {
+        "description": "Takes a spoken question (mono 16-bit PCM WAV at 16 or 24 kHz, 1 MB or less) or typed text, plus the phone's location and compass heading. Finds the first ocean cell along the heading that has water at the asked depth (as GET /nearest-ocean with min_depth_m), reads its profile on the latest available date, blends linearly between the two model levels around the asked depth, and returns a short spoken answer. No chat model is called; the location is not stored or logged.",
+        "operationId": "post_glasses_ask_api_v1_glasses_ask_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_post_glasses_ask_api_v1_glasses_ask_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlassesAskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Glasses ocean guide: temperature where the user is looking",
+        "tags": [
+          "glasses"
+        ]
+      }
+    },
     "/api/v1/headline": {
       "get": {
         "description": "Returns the pre-registered headline comparison in the Bay of Bengal 50-300m with float-bootstrap CIs.",
@@ -2731,7 +2990,7 @@
     },
     "/api/v1/nearest-ocean": {
       "get": {
-        "description": "With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.",
+        "description": "With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. With min_depth_m, only cells with a predicted value at that depth count. The location is not stored or logged.",
         "operationId": "get_nearest_ocean_api_v1_nearest_ocean_get",
         "parameters": [
           {
@@ -2792,6 +3051,25 @@
               "maximum": 500,
               "title": "Max Km",
               "type": "number"
+            }
+          },
+          {
+            "description": "Only cells with a predicted value at this depth (water at least this deep); must not be deeper than the deepest model level",
+            "in": "query",
+            "name": "min_depth_m",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only cells with a predicted value at this depth (water at least this deep); must not be deeper than the deepest model level",
+              "title": "Min Depth M"
             }
           }
         ],

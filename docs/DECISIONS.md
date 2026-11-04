@@ -178,3 +178,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - A reply without a usable mask, a stream that ends before `response.completed`, a `response.failed` or `error` event, or a timeout (10 s for the whole call) falls back to the threshold method, as before. The old guessed `/images/segmentations` route and the COCO RLE helpers are removed.
 - To turn it on: `SEGMENT_PROVIDER=sam`, `META_SEGMENT_MODEL=sam-3.1`, `META_PRICE_PER_SEGMENT=0.0025` ($2.50 per 1,000 images).
 - Asked for by Aryan ("begin the SAM for the lasso as planned"), 2026-11-04.
+
+## 2026-11-04 — Glasses ocean guide (Android app on the Wearables toolkit, hackathon demo only)
+- Revives the Ray-Ban/Oakley Meta glasses idea dropped on 2026-10-24, because Meta's Mock Device Kit now lets the app be built and tested without glasses. Scope: hackathon demo only, Android only, sideloaded; Aryan cannot borrow glasses, so the mic, speakers and touchpad are untested on real hardware and the demo is labelled "tested on mock glasses" (plan: claude.ai/artifact/St11MrD4J3wZbVNZKZWqmC).
+- Contract change (approved by Aryan, "get to it", 2026-11-04): new `POST /glasses/ask` (PRD_BACKEND §4.18) behind `GLASSES_ENABLED`, and optional `min_depth_m` on `/nearest-ocean` (§4.17). No change to existing responses.
+- The answer is built from the prediction store by a fixed template, not by the guide. Reason: the guide may not compute numbers (prompt rule), and blending between levels is a computed number; a template also makes every spoken number exact and costs nothing. The Meta model in the loop is Muse Voice Transcribe. Deviation from the plan doc, which proposed the guide.
+- Physical limits stated in every answer: the nearest answer is the first 0.25° cell (about 27 km wide) at least 5 km out along the heading that has water at the asked depth, with its real distance; heading comes from the phone's compass (the glasses expose no location or heading).
+- Proposed by Claude; asked for by Aryan.
