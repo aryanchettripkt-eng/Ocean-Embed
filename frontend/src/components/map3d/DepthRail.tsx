@@ -89,10 +89,10 @@ export function DepthRail({
       aria-valuetext={formatDepth(selectedDepth)}
       onKeyDown={handleKeyDown}
       onWheel={handleWheel}
-      className="relative flex items-center justify-between py-2 px-3 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl select-none outline-none focus:ring-2 focus:ring-cyan-500 transition-all cursor-pointer h-64 w-32"
+      className="hud-glass relative flex h-64 w-32 cursor-pointer select-none items-center justify-between rounded-[20px] px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
     >
       {/* Ticks and labels on the left */}
-      <div className="relative flex-1 h-full flex flex-col justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
+      <div className="relative flex-1 h-full flex flex-col justify-between text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
         {ticks.map((tick: DepthTick) => {
           const isSelected = Math.abs(tick.depth_m - selectedDepth) < 0.1;
           const topPercent = tick.ratio * 100;
@@ -119,17 +119,17 @@ export function DepthRail({
       </div>
 
       {/* Vertical Rail track on the right */}
-      <div className="relative w-1.5 h-full bg-slate-200 dark:bg-slate-800 rounded-full ml-2">
+      <div className="relative w-[3px] h-full bg-black/10 dark:bg-white/10 rounded-full ml-2">
         {/* Fill down to current ratio */}
         <div
-          className="absolute top-0 left-0 w-full bg-cyan-500/40 dark:bg-cyan-400/40 rounded-full"
+          className="absolute top-0 left-0 w-full bg-cyan-600 dark:bg-cyan-300 rounded-full"
           style={{ height: `${currentRatio * 100}%` }}
         />
 
         {/* Draggable/Current Depth Indicator Thumb */}
         <div
           style={{ top: `${currentRatio * 100}%` }}
-          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-cyan-500 dark:bg-cyan-400 border-2 border-white dark:border-slate-900 rounded-full shadow-md transition-all pointer-events-none"
+          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-neutral-900 dark:bg-white rounded-full shadow-[0_0_0_4px_rgba(34,211,238,0.18),0_1px_3px_rgba(0,0,0,0.4)] transition-all pointer-events-none"
         />
       </div>
     </div>

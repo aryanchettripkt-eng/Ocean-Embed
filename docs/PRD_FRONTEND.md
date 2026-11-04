@@ -69,7 +69,8 @@ Layout: map fills the viewport; a floating glass control card (`Ocean Controls`,
 **Map**
 - Grid overlay with the colormap (`cmocean thermal` for temperature, `balance` for difference); colour range from `meta.color_ranges` for the selected depth (fixed across dates so animation is comparable); `meta.error_range` for the difference field.
 - **Grid style (`Dots` default | `Classic` toggle):** defaults to a 1-dot-per-0.25°-cell dot-matrix (`style=dots`) with a pill toggle back to continuous cells (`style=solid`).
-  - In **Dots** mode: valid ocean cells (`coverage = 1`) are filled colormap dots, insufficient inputs (`coverage = 2`) are hollow slate rings, and land / unmodelled cells (`coverage = 0`) are smaller muted stipple dots over a dark obsidian (or light paper) backing.
+  - In **Dots** mode: valid ocean cells (`coverage = 1`) are filled colormap dots, insufficient inputs (`coverage = 2`) are hollow slate rings, and land / unmodelled cells (`coverage = 0`) are smaller muted stipple dots over a dark obsidian (or light paper) backing. A `coverage = 1` cell whose value is `null` (no value at this depth, e.g. water shallower than the selected level) is drawn like land, as Classic leaves it transparent; it is never a ring and never coloured (2D and 3D top face). The tooltip says "No value at this depth".
+  - In **Dots** mode the basemap shows only sea and country labels so city and road names do not print over the dots; Classic shows all labels.
   - In **Classic** mode: land / unmodelled cells (`coverage = 0`) are transparent and insufficient inputs (`coverage = 2`) use a grey diagonal hatch pattern.
 - Colorbar legend with units (°C) and a coverage legend whose swatches match the active grid style (dot / hollow ring / land dot vs solid / hatch / land).
 - Hover tooltip: lat, lon, value with source label, or "No prediction (insufficient input data)".

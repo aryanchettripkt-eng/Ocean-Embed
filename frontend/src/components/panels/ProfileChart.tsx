@@ -152,9 +152,9 @@ export function ProfileChart({ profile, selectedDepth }: ProfileChartProps) {
               reversed={true}
               domain={[0, "dataMax"]}
               tick={{ fill: "#94a3b8", fontSize: 10 }}
-              tickFormatter={(d) => `${d}m`}
+              tickFormatter={(d) => formatDepth(d)}
               axisLine={{ stroke: "#475569" }}
-              width={42}
+              width={48}
             />
             <Tooltip content={<ProfileTooltip />} />
             <ReferenceLine

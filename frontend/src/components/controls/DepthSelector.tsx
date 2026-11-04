@@ -20,42 +20,42 @@ export function DepthSelector({
   const currentIndex = depths.findIndex((d) => Math.abs(d - selectedDepth) < 0.05);
   const activeIdx = currentIndex >= 0 ? currentIndex : 0;
 
+  const fillPct = `${depths.length > 1 ? (activeIdx / (depths.length - 1)) * 100 : 0}%`;
+
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
       <div className="flex items-center justify-between">
-        <label
-          htmlFor="explorer-depth-slider"
-          className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5"
-        >
-          <ArrowDownCircle aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+        <label htmlFor="explorer-depth-slider" className="hud-label flex items-center gap-1.5">
+          <ArrowDownCircle aria-hidden="true" className="h-3.5 w-3.5" />
           <span>Depth</span>
         </label>
-        <span className="text-[11px] font-mono font-medium text-cyan-700 dark:text-cyan-300 bg-cyan-500/12 border border-cyan-500/30 px-2 py-0.5 rounded-full">
-          {formatDepth(selectedDepth)} ({activeIdx + 1}/{depths.length})
+        <span className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
+          <span className="font-semibold text-neutral-900 dark:text-white">{formatDepth(selectedDepth)}</span>
+          <span className="ml-1">
+            level {activeIdx + 1}/{depths.length}
+          </span>
         </span>
       </div>
 
-      {/* Slider selector for smooth scrubbing */}
-      <div className="px-0.5">
-        <input
-          id="explorer-depth-slider"
-          type="range"
-          min={0}
-          max={depths.length - 1}
-          step={1}
-          value={activeIdx}
-          onChange={(e) => {
-            const idx = parseInt(e.target.value, 10);
-            if (depths[idx] !== undefined) {
-              onChange(depths[idx]);
-            }
-          }}
-          className="w-full h-1.5 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-cyan-500 dark:accent-cyan-400 transition-all"
-        />
-      </div>
+      <input
+        id="explorer-depth-slider"
+        type="range"
+        min={0}
+        max={depths.length - 1}
+        step={1}
+        value={activeIdx}
+        onChange={(e) => {
+          const idx = parseInt(e.target.value, 10);
+          if (depths[idx] !== undefined) {
+            onChange(depths[idx]);
+          }
+        }}
+        className="hud-range"
+        style={{ "--fill": fillPct } as React.CSSProperties}
+      />
 
-      {/* Quick selection chips */}
-      <div className="flex gap-1 overflow-x-auto pb-1 pt-0.5 scrollbar-thin scrollbar-thumb-slate-700">
+      {/* Every model level at a glance */}
+      <div className="grid grid-cols-5 gap-1">
         {depths.map((d, idx) => {
           const isSelected = idx === activeIdx;
           return (
@@ -64,10 +64,10 @@ export function DepthSelector({
               type="button"
               aria-pressed={isSelected}
               onClick={() => onChange(d)}
-              className={`shrink-0 px-2 py-1 rounded-full text-[11px] font-mono transition-all ${
+              className={`h-7 rounded-full px-1 text-[11px] tabular-nums transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
                 isSelected
-                  ? "bg-cyan-500 text-slate-950 font-bold shadow-sm shadow-cyan-500/25"
-                  : "bg-slate-100 dark:bg-white/[0.04] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/10"
+                  ? "bg-neutral-900 font-semibold text-white dark:bg-white dark:text-neutral-950"
+                  : "text-neutral-600 hover:bg-black/[0.05] hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-white"
               }`}
             >
               {formatDepth(d)}

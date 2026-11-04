@@ -140,9 +140,11 @@ export function renderGridToCanvas(
             const mask = subLut[dy * scale + dx];
 
             let out: [number, number, number, number];
-            if (cov === 0) {
+            if (cov === 0 || (cov === 1 && rgba[3] === 0)) {
+              // Land, or a valid cell with no value at this depth (null in /map; transparent in
+              // Classic mode). Drawn as land so it is not mistaken for insufficient inputs.
               out = blendOverBacking(landR, landG, landB, mask.landAlpha, bgR, bgG, bgB, bgA);
-            } else if (cov === 2 || rgba[3] === 0) {
+            } else if (cov === 2) {
               out = blendOverBacking(ringR, ringG, ringB, mask.ringAlpha * 0.92, bgR, bgG, bgB, bgA);
             } else {
               const boost = mask.coreBoost * 255;

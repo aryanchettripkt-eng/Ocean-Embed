@@ -81,6 +81,53 @@ function getBasemapStyle(isLight: boolean): string {
 }
 
 /**
+ * Basemap labels kept in Dots mode: seas and countries for orientation. City, road and
+ * state names are hidden there because they print over the dot matrix; Classic shows all.
+ * Layer ids are from the OpenFreeMap dark and positron styles.
+ */
+const DOTS_KEEP_LABEL = /^(water_name|place_country|label_country)/;
+
+function applyLabelDensity(map: MapLibreMap, style: GridStyle) {
+  const layers = map.getStyle?.()?.layers ?? [];
+  for (const layer of layers) {
+    if (layer.type !== "symbol" || layer.id.startsWith(LASSO_SOURCE)) continue;
+    const visible = style !== "dots" || DOTS_KEEP_LABEL.test(layer.id);
+    const next = visible ? "visible" : "none";
+    if (map.getLayoutProperty(layer.id, "visibility") !== next) {
+      map.setLayoutProperty(layer.id, "visibility", next);
+    }
+  }
+}
+
+/**
+ * True once the style JSON is parsed, i.e. sources and layers may be added. This is the flag
+ * Style#addLayer checks; isStyleLoaded() also waits for tiles, so it reads false after every
+ * camera move and would skip redraws. Falls back to isStyleLoaded() if the field ever goes away.
+ */
+function canEditStyle(map: MapLibreMap): boolean {
+  const loaded = (map as unknown as { style?: { _loaded?: boolean } }).style?._loaded;
+  return loaded ?? Boolean(map.isStyleLoaded());
+}
+
+/** Frame the model region, leaving room for the floating controls card on wide screens. */
+function fitRegion(map: MapLibreMap, rgn: RegionBounds, animate: boolean) {
+  const w = map.getContainer().clientWidth;
+  const wide = w >= 1024;
+  map.fitBounds(
+    [
+      [rgn.lon_min, rgn.lat_min],
+      [rgn.lon_max, rgn.lat_max],
+    ],
+    {
+      padding: wide
+        ? { top: 32, bottom: 96, left: 388, right: 48 }
+        : { top: 24, bottom: 120, left: 16, right: 16 },
+      duration: animate ? 600 : 0,
+    }
+  );
+}
+
+/**
  * Find the nearest index in an array of sorted coordinate values.
  */
 function findNearestIndex(arr: number[], target: number): number {
@@ -188,7 +235,7 @@ export function MapView({
 
   const syncGridLayer = useCallback(() => {
     const map = mapInstanceRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !canEditStyle(map)) return;
 
     // In 3D mode, the 2D raster grid layer is hidden to avoid z-fighting
     if (view === "3d") {
@@ -277,7 +324,7 @@ export function MapView({
   // Lazy-load and attach 3D cutaway layer when view is "3d"
   const sync3DLayer = useCallback(async () => {
     const map = mapInstanceRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !canEditStyle(map)) return;
 
     if (view === "3d") {
       if (!cutawayLayerRef.current) {
@@ -347,9 +394,20 @@ export function MapView({
     sections,
   ]);
 
+  // The map is created once; its style handlers call the latest sync functions through refs.
+  // (Depending on the callbacks directly tore the whole map down on every new slice.)
+  const syncGridLayerRef = useRef(syncGridLayer);
+  syncGridLayerRef.current = syncGridLayer;
+  const sync3DLayerRef = useRef(sync3DLayer);
+  sync3DLayerRef.current = sync3DLayer;
+  const initialViewRef = useRef(view);
+  const gridStyleRef = useRef(gridStyle);
+  gridStyleRef.current = gridStyle;
+
   // Initialize MapLibre Map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
+    const view = initialViewRef.current;
 
     const initialLight =
       typeof document !== "undefined" &&
@@ -374,7 +432,7 @@ export function MapView({
       bearing: view === "3d" ? -20 : 0,
       maxPitch: view === "3d" ? 85 : 0,
       dragRotate: view === "3d",
-      pitchWithRotate: view === "3d",
+      pitchWithRotate: true,
       touchPitch: view === "3d",
       attributionControl: false,
     });
@@ -382,9 +440,10 @@ export function MapView({
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
 
     const handleStyleReady = () => {
-      if (map.isStyleLoaded()) {
-        syncGridLayer();
-        sync3DLayer();
+      if (canEditStyle(map)) {
+        applyLabelDensity(map, gridStyleRef.current);
+        syncGridLayerRef.current();
+        void sync3DLayerRef.current();
         syncOutlineRef.current();
       }
     };
@@ -392,6 +451,7 @@ export function MapView({
     map.on("load", () => {
       setMapLoaded(true);
       handleStyleReady();
+      fitRegion(map, rgn, false);
     });
     map.on("style.load", () => {
       setMapLoaded(true);
@@ -414,7 +474,14 @@ export function MapView({
       mapInstanceRef.current = null;
       cutawayLayerRef.current = null;
     };
-  }, [syncGridLayer, sync3DLayer, view]);
+  }, []);
+
+  // Basemap label density follows the grid style
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapLoaded || !canEditStyle(map)) return;
+    applyLabelDensity(map, gridStyle);
+  }, [gridStyle, mapLoaded]);
 
   // Guide / time machine camera moves: one short animation (≤ 1.2 s), none under reduced motion
   const lastFocusIdRef = useRef<number | null>(null);
@@ -766,7 +833,7 @@ export function MapView({
   outlineRef.current = outline;
   const syncOutline = useCallback(() => {
     const map = mapInstanceRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !canEditStyle(map)) return;
     const ring = outlineRef.current;
     const data: GeoJSON.FeatureCollection = {
       type: "FeatureCollection",
@@ -823,10 +890,11 @@ export function MapView({
       if (!selectionMarkerRef.current) {
         const el = document.createElement("div");
         el.className = "relative flex items-center justify-center cursor-pointer";
+        el.setAttribute("aria-hidden", "true");
         el.innerHTML = `
-          <span class="animate-ping motion-reduce:animate-none absolute inline-flex h-7 w-7 rounded-full bg-cyan-400/50"></span>
-          <span class="relative inline-flex items-center justify-center rounded-full h-6 w-6 bg-[#0b1116]/90 border border-cyan-400/70 shadow-lg">
-            <span class="h-2.5 w-2.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-300"></span>
+          <span class="animate-ping motion-reduce:animate-none absolute inline-flex h-8 w-8 rounded-full bg-cyan-400/40"></span>
+          <span class="relative inline-flex items-center justify-center rounded-full h-7 w-7 bg-[#111314]/90 ring-1 ring-white/20 shadow-[0_4px_16px_rgba(0,0,0,0.5)]">
+            <span class="h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]"></span>
           </span>
         `;
         selectionMarkerRef.current = new maplibregl.Marker({ element: el })
@@ -854,18 +922,17 @@ export function MapView({
         const el = document.createElement("div");
         el.className = "group relative cursor-pointer";
         el.innerHTML = `
-          <div class="h-5 w-5 rounded-full bg-[#0b1116]/90 border border-amber-400/60 shadow-md flex items-center justify-center transition-transform group-hover:scale-125">
-            <span class="h-2 w-2 rounded-full bg-amber-400"></span>
+          <div class="h-6 w-6 rounded-full bg-[#111314]/90 ring-1 ring-white/15 shadow-[0_4px_12px_rgba(0,0,0,0.5)] flex items-center justify-center transition-transform group-hover:scale-110">
+            <span class="h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]"></span>
           </div>
         `;
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([p.lon, p.lat])
           .setPopup(
             new maplibregl.Popup({ offset: 12, closeButton: false }).setHTML(`
-              <div class="text-xs p-1 text-slate-900 dark:text-slate-100">
-                <p class="font-bold">ARGO Float ${p.platform_number}</p>
-                <p>Cycle: ${p.cycle} (${p.n_obs} obs)</p>
-                <p class="text-[10px] text-slate-500 dark:text-slate-400">${p.time.slice(0, 10)}</p>
+              <div class="text-xs leading-relaxed text-neutral-900 dark:text-neutral-100">
+                <p class="font-semibold">ARGO float ${p.platform_number}</p>
+                <p class="text-neutral-600 dark:text-neutral-400">Cycle ${p.cycle} · ${p.n_obs} obs · ${p.time.slice(0, 10)}</p>
               </div>
             `)
           )
@@ -885,10 +952,10 @@ export function MapView({
 
   return (
     <div
-      className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-[#070d12] transition-colors ${className}`}
+      className={`absolute inset-0 overflow-hidden select-none bg-neutral-100 dark:bg-[#0a0c0d] ${className}`}
       style={{ viewTransitionName: view === "3d" ? "ocean-section" : undefined }}
     >
-      <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
+      <div ref={mapContainerRef} className="absolute inset-0" />
 
       {/* Subtle edge vignette in dark dot-matrix mode so the ocean matrix blends into the HUD frame */}
       {!isLightMode && gridStyle === "dots" && (
@@ -897,7 +964,7 @@ export function MapView({
           className="pointer-events-none absolute inset-0 z-10"
           style={{
             background:
-              "radial-gradient(ellipse at 54% 48%, transparent 55%, rgba(7, 13, 18, 0.58) 100%)",
+              "radial-gradient(ellipse at 55% 45%, transparent 50%, rgba(10, 12, 13, 0.7) 100%)",
           }}
         />
       )}
@@ -905,27 +972,29 @@ export function MapView({
       {/* Hover tooltip */}
       {hoverInfo && (
         <div
-          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-[#0b1116]/92 backdrop-blur-xl border border-slate-300 dark:border-white/15 rounded-xl px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
-          style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
+          className="hud-glass pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full rounded-xl px-3 py-2 text-xs"
+          style={{ left: hoverInfo.x, top: hoverInfo.y - 14 }}
         >
-          <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
             <span>{formatCoord(hoverInfo.lat, hoverInfo.lon)}</span>
             {view === "3d" && hoverInfo.depth_m !== undefined && (
-              <span className="text-cyan-500 font-semibold">· {formatDepth(hoverInfo.depth_m)}</span>
+              <span className="font-medium text-cyan-700 dark:text-cyan-300">· {formatDepth(hoverInfo.depth_m)}</span>
             )}
           </div>
           {hoverInfo.coverage === 0 ? (
-            <div className="text-slate-500 font-medium text-[11px]">Land / Unmodelled</div>
+            <div className="mt-0.5 text-[11px] font-medium text-neutral-500">Land / Unmodelled</div>
           ) : hoverInfo.coverage === 2 ? (
-            <div className="text-amber-500 dark:text-amber-400/90 font-medium text-[11px]">
+            <div className="mt-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
               No prediction (insufficient input data)
             </div>
+          ) : hoverInfo.value === null ? (
+            <div className="mt-0.5 text-[11px] font-medium text-neutral-500">No value at this depth</div>
           ) : (
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="font-semibold text-cyan-600 dark:text-cyan-300 font-mono text-sm">
+            <div className="mt-0.5 flex items-baseline gap-1.5">
+              <span className="text-sm font-semibold tabular-nums text-neutral-950 dark:text-white">
                 {formatTemp(hoverInfo.value, 1)}
               </span>
-              <span className="text-[10px] text-slate-500 dark:text-slate-400">({sourceLabel})</span>
+              <span className="text-[10px] text-neutral-500 dark:text-neutral-400">{sourceLabel}</span>
             </div>
           )}
         </div>

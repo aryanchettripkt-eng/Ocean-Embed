@@ -6,9 +6,6 @@ import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   MapPin,
-  SlidersHorizontal,
-  Eye,
-  EyeOff,
   AlertTriangle,
   CalendarRange,
   MessageCircle,
@@ -44,9 +41,9 @@ import { Banner } from "../../../components/common/Banner";
 import { Loading } from "../../../components/common/Loading";
 import { ErrorState } from "../../../components/common/ErrorState";
 import { ErrorBoundary } from "../../../components/common/ErrorBoundary";
-import { formatCoord } from "../../../lib/format";
+import { formatCoord, formatDate, formatDepth } from "../../../lib/format";
 import { getWallColorRange } from "../../../components/map3d/depthScale";
-import { ViewSwitch } from "../../../components/map3d/ViewSwitch";
+import { ToolbarDivider, ViewSwitch } from "../../../components/map3d/ViewSwitch";
 import { DepthRail } from "../../../components/map3d/DepthRail";
 
 // MapView is statically included so MapLibre is counted directly in the bundle budget (PRD_FRONTEND §4)
@@ -58,7 +55,7 @@ const DetailsPanel = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="bg-white/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-xl p-6 text-sm text-slate-700 dark:text-slate-300">
+      <div className="hud-glass rounded-2xl p-5 text-sm text-neutral-600 dark:text-neutral-300">
         Loading details...
       </div>
     ),
@@ -94,6 +91,9 @@ function ExplorerContent() {
   const [state, setState] = useState<ExplorerState>(() =>
     parseExplorerParams(searchParams, null)
   );
+
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => setHasMounted(true), []);
 
   const [showControls, setShowControls] = useState(true);
   const [showArgo, setShowArgo] = useState(false);
@@ -154,6 +154,9 @@ function ExplorerContent() {
     window.history.replaceState(null, "", newUrl);
   }, [state]);
 
+  // Fetch only once the depth is snapped to a model level (the pre-metadata default may not be one)
+  const depthIsModelLevel = !!meta?.depths_m?.some((d) => Math.abs(d - state.depth) < 0.01);
+
   // Query 2D map slice for active date, depth, field
   const {
     data: mapData,
@@ -166,7 +169,7 @@ function ExplorerContent() {
       depth_m: state.depth,
       field: state.field,
     },
-    { enabled: !!state.date }
+    { enabled: !!state.date && depthIsModelLevel }
   );
 
   // Query ARGO profile markers when toggled
@@ -451,7 +454,9 @@ function ExplorerContent() {
     });
   }, []);
 
-  if (isMetaLoading) {
+  // The header's useMeta can resolve before this boundary hydrates; render the server's loading
+  // markup until mounted so the first client render matches it.
+  if (!hasMounted || isMetaLoading) {
     return (
       <>
         <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
@@ -476,16 +481,19 @@ function ExplorerContent() {
 
   const activeGridStyle: GridStyle = state.gridStyle ?? "dots";
   const hasSelection = state.lat !== null && state.lon !== null;
+  const fieldLabel =
+    state.field === "error" ? "Model − GLORYS" : state.field === "glorys" ? "GLORYS reanalysis" : "Model prediction";
+  const clearSelection = () => setState((prev) => ({ ...prev, lat: null, lon: null }));
 
   return (
-    <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden bg-slate-100 dark:bg-[#070d12] transition-colors">
+    <div className="relative min-h-[480px] w-full flex-1 overflow-hidden bg-neutral-100 dark:bg-[#0a0c0d]">
       {/* Main Accessible Heading for Focus Management (PLAN_LANDING §6 item 5) */}
       <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
         OceanScope AI Subsurface Temperature Explorer
       </h1>
 
-      {/* Full-bleed Map Viewport */}
-      <div className="relative w-full h-full min-h-[400px]">
+      {/* Full-bleed map */}
+      <div className="absolute inset-0">
         <ErrorBoundary name="Interactive Map">
           <MapView
             mapData={mapData}
@@ -514,95 +522,100 @@ function ExplorerContent() {
             pendingPoint={lassoPending}
           />
         </ErrorBoundary>
+      </div>
 
-        {/* Top-center status pills (loading, error, side-wall fallback) */}
-        <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2">
-          {isMapLoading && (
-            <div className="bg-white/90 dark:bg-[#0b1116]/88 backdrop-blur-xl border border-slate-300 dark:border-white/12 rounded-full px-4 py-1.5 shadow-2xl flex items-center gap-2 text-xs text-cyan-700 dark:text-cyan-300 font-medium animate-pulse motion-reduce:animate-none">
-              <span className="h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
-              <span>Fetching temperature slice...</span>
-            </div>
-          )}
+      {/* Status pills (loading, error, side-wall fallback) */}
+      <div className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 flex-col items-center gap-2 lg:left-[calc(50%+178px)]">
+        {isMapLoading && (
+          <div className="hud-glass flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-medium">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 motion-reduce:animate-none dark:bg-cyan-300" />
+            <span>Fetching temperature slice...</span>
+          </div>
+        )}
 
-          {mapError && (
-            <div className="pointer-events-auto bg-white/95 dark:bg-[#0b1116]/92 backdrop-blur-xl border border-red-500/50 rounded-full px-4 py-1.5 shadow-2xl flex items-center gap-3 text-xs text-red-600 dark:text-red-200">
-              <span>Failed to load slice.</span>
-              <button
-                type="button"
-                onClick={() => refetchMap()}
-                className="text-cyan-600 dark:text-cyan-400 underline font-semibold"
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {wallsUnavailable && (
-            <div className="bg-amber-500/95 text-slate-950 font-medium text-xs px-3.5 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 backdrop-blur-md">
-              <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
-              <span>Side walls unavailable for this date</span>
-            </div>
-          )}
-        </div>
-
-        {/* Floating Left Glass HUD Panel (Controls + Colorbar + Coverage Legend) */}
-        <aside
-          aria-label="Explorer controls"
-          className={`absolute inset-x-3 bottom-16 md:inset-x-auto md:bottom-auto md:top-4 md:left-4 md:w-[348px] z-20 rounded-2xl border border-slate-200/90 dark:border-white/12 bg-white/90 dark:bg-[#0b1116]/88 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200 ${
-            showControls
-              ? "max-h-[54vh] md:max-h-[calc(100vh-5.5rem)]"
-              : "max-h-11"
-          }`}
-        >
-          {/* Compact HUD card header */}
-          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200/70 dark:border-white/10 shrink-0">
-            <div className="flex items-center gap-2 text-xs font-semibold tracking-wide text-slate-800 dark:text-slate-100">
-              <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-              <span>Ocean Controls</span>
-            </div>
+        {mapError && (
+          <div className="hud-glass pointer-events-auto flex items-center gap-3 rounded-full px-3.5 py-1.5 text-xs text-red-700 dark:text-red-300">
+            <span>Failed to load slice.</span>
             <button
               type="button"
-              aria-expanded={showControls}
-              onClick={() => setShowControls(!showControls)}
-              className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium px-2 py-0.5 rounded-full hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
+              onClick={() => refetchMap()}
+              className="font-semibold text-neutral-900 underline underline-offset-2 dark:text-white"
             >
-              <span>{showControls ? "Hide" : "Show"}</span>
-              {showControls ? (
-                <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
-              )}
+              Retry
             </button>
           </div>
+        )}
 
-          {/* Scrollable controls & scale body */}
-          <div className={`p-3.5 space-y-4 overflow-y-auto ${!showControls ? "hidden" : ""}`}>
-            {/* Selected Point Status */}
-            {state.lat !== null && state.lon !== null ? (
-              <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2.5 text-xs flex items-center justify-between">
-                <div className="flex items-center gap-2 text-cyan-950 dark:text-cyan-100">
-                  <MapPin aria-hidden="true" className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
-                  <div>
-                    <p className="font-semibold font-mono">{formatCoord(state.lat, state.lon)}</p>
-                    <p className="text-[11px] text-cyan-700 dark:text-cyan-400/80">Selected cell centre</p>
+        {wallsUnavailable && (
+          <div className="flex items-center gap-1.5 rounded-full bg-amber-400 px-3.5 py-1.5 text-xs font-medium text-neutral-950 shadow-lg">
+            <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+            <span>Side walls unavailable for this date</span>
+          </div>
+        )}
+      </div>
+
+      {/* Controls card */}
+      <aside
+        aria-label="Explorer controls"
+        className={`hud-glass absolute inset-x-3 bottom-[60px] z-20 flex flex-col overflow-hidden rounded-[20px] md:inset-x-auto md:bottom-auto md:left-4 md:top-4 md:w-[340px] ${
+          showControls ? "max-h-[55%] md:max-h-[calc(100%-6.5rem)]" : ""
+        }`}
+      >
+        {/* Title: what the map is showing right now */}
+        <div className="flex shrink-0 items-start justify-between gap-3 px-4 pb-3 pt-3.5">
+          <div className="min-w-0">
+            <p className="hud-label">Ocean temperature</p>
+            <p className="mt-1 text-[26px] font-light leading-none tracking-tight tabular-nums text-neutral-950 dark:text-white">
+              {formatDepth(state.depth)}
+              <span className="ml-1.5 text-neutral-400 dark:text-neutral-500">deep</span>
+            </p>
+            <p className="mt-1.5 truncate text-xs text-neutral-500 dark:text-neutral-400">
+              {formatDate(state.date)} · {fieldLabel}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-expanded={showControls}
+            aria-label={showControls ? "Hide controls" : "Show controls"}
+            title={showControls ? "Hide controls" : "Show controls"}
+            onClick={() => setShowControls(!showControls)}
+            className="hud-icon-btn mt-0.5"
+          >
+            {showControls ? (
+              <ChevronUp aria-hidden="true" className="h-4 w-4" />
+            ) : (
+              <ChevronDown aria-hidden="true" className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+
+        <div className={`min-h-0 overflow-y-auto overscroll-contain ${showControls ? "" : "hidden"}`}>
+          {/* Selected cell, or how to pick one */}
+          <div className="px-4 pb-3">
+            {hasSelection ? (
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-cyan-500/10 px-3 py-2 ring-1 ring-inset ring-cyan-500/25">
+                <div className="flex min-w-0 items-center gap-2">
+                  <MapPin aria-hidden="true" className="h-4 w-4 shrink-0 text-cyan-700 dark:text-cyan-300" />
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold tabular-nums text-neutral-950 dark:text-white">
+                      {formatCoord(state.lat!, state.lon!)}
+                    </p>
+                    <p className="text-[11px] text-neutral-600 dark:text-neutral-400">Selected cell centre</p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
-                  className="text-[11px] text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white bg-white/80 dark:bg-white/[0.06] border border-slate-200 dark:border-white/12 px-2.5 py-1 rounded-full transition-colors"
-                >
+                <button type="button" onClick={clearSelection} className="hud-btn h-7 px-2.5">
                   Clear
                 </button>
               </div>
             ) : (
-              <div className="bg-slate-100/80 dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/10 rounded-xl p-2.5 text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                <MapPin aria-hidden="true" className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
-                <span>Click any ocean dot to inspect vertical profile &amp; time series.</span>
-              </div>
+              <p className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+                <MapPin aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                <span>Click any ocean dot for its profile and time series.</span>
+              </p>
             )}
+          </div>
 
-            {/* Date Picker */}
+          <div className="hud-divider space-y-4 border-t px-4 py-3.5">
             <DatePicker
               date={state.date}
               startDate={meta.available_dates.start}
@@ -614,215 +627,195 @@ function ExplorerContent() {
               prefetchAhead={handlePrefetchAhead}
             />
 
-            {/* Depth Selector */}
-            <DepthSelector
-              depths={meta.depths_m}
-              selectedDepth={state.depth}
-              onChange={handleDepthChange}
-            />
+            <DepthSelector depths={meta.depths_m} selectedDepth={state.depth} onChange={handleDepthChange} />
 
-            {/* Field Toggle */}
-            <FieldToggle
-              value={state.field}
-              onChange={handleFieldChange}
-              isLive={isLive}
-            />
+            <FieldToggle value={state.field} onChange={handleFieldChange} isLive={isLive} />
 
-            {/* Live caveat when on live dates */}
             {isLive && <Banner type="live" />}
-
-            {/* Scale & Coverage Legend */}
-            <div className="pt-2 border-t border-slate-200/80 dark:border-white/10 space-y-2">
-              <Colorbar
-                field={state.field}
-                vmin={colorRange.vmin}
-                vmax={colorRange.vmax}
-                wallRange={wallRange}
-              />
-              <CoverageLegend gridStyle={activeGridStyle} />
-            </div>
           </div>
-        </aside>
 
-        {/* Contextual Meta Feature Cards (Lasso, Postcard, Events Time Machine) */}
-        {(eventsOpen || (meta.features.segment && lassoActive) || (meta.features.postcards && postcard)) && (
-          <div className="absolute top-4 left-3 right-3 sm:right-auto md:left-[376px] z-30 flex flex-col items-start gap-2 pointer-events-auto max-w-[calc(100%-1.5rem)]">
-            {meta.features.segment && lassoActive && (
-              <LassoPanel
-                pending={!!lassoPending}
-                error={lassoError}
-                result={lassoResult}
-                onAsk={chatEnabled ? handleAskAboutArea : undefined}
-                onClose={closeLasso}
-              />
-            )}
-            {meta.features.postcards && postcard && (
-              <PostcardPanel
-                key={postcard.nonce}
-                date={postcard.date}
-                depth={postcard.depth}
-                eventId={postcard.eventId}
-                eventTitle={postcard.eventTitle}
-                caveat={meta.caveats.postcard}
-                onClose={() => setPostcard(null)}
-              />
-            )}
-            {eventsOpen && (
-              <TimeMachine
-                meta={meta}
-                events={events}
-                isLoading={isEventsLoading}
-                isError={isEventsError}
-                active={activeEvent}
-                currentDate={state.date}
-                onOpen={openEventPhase}
-                onSetDate={handleDateChange}
-                onBack={() => setActiveEvent(null)}
-                onClose={() => {
-                  setEventsOpen(false);
-                  setActiveEvent(null);
-                }}
-                onExplain={chatEnabled ? handleExplainEvent : undefined}
-              />
-            )}
+          <div className="hud-divider space-y-3.5 border-t px-4 py-3.5">
+            <Colorbar field={state.field} vmin={colorRange.vmin} vmax={colorRange.vmax} wallRange={wallRange} />
+            <CoverageLegend gridStyle={activeGridStyle} />
           </div>
-        )}
+        </div>
+      </aside>
 
-        {/* Bottom-Center Floating Glass Pill Toolbar (functional tools only) */}
-        <div className="pointer-events-none absolute bottom-3 inset-x-3 md:inset-x-auto md:bottom-5 md:left-[calc(50%+96px)] lg:left-1/2 md:-translate-x-1/2 z-20 flex flex-wrap items-end justify-center gap-2">
-          <ViewSwitch
-            view={state.view}
-            onChangeView={handleViewChange}
-            gridStyle={activeGridStyle}
-            onChangeGridStyle={handleGridStyleChange}
-            isTouring={isTouring}
-            onToggleTour={() => setIsTouring(!isTouring)}
-            isExploded={isExploded}
-            onToggleExploded={() => setIsExploded(!isExploded)}
-            isSmoothed={isSmoothed}
-            onToggleSmoothed={() => setIsSmoothed(!isSmoothed)}
-            showContours={showContours}
-            onToggleContours={() => setShowContours(!showContours)}
-          />
+      {/* Meta feature cards (Lasso, Postcard, Events time machine) */}
+      {(eventsOpen || (meta.features.segment && lassoActive) || (meta.features.postcards && postcard)) && (
+        <div className="pointer-events-auto absolute left-3 right-3 top-4 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 sm:right-auto md:left-[372px]">
+          {meta.features.segment && lassoActive && (
+            <LassoPanel
+              pending={!!lassoPending}
+              error={lassoError}
+              result={lassoResult}
+              onAsk={chatEnabled ? handleAskAboutArea : undefined}
+              onClose={closeLasso}
+            />
+          )}
+          {meta.features.postcards && postcard && (
+            <PostcardPanel
+              key={postcard.nonce}
+              date={postcard.date}
+              depth={postcard.depth}
+              eventId={postcard.eventId}
+              eventTitle={postcard.eventTitle}
+              caveat={meta.caveats.postcard}
+              onClose={() => setPostcard(null)}
+            />
+          )}
+          {eventsOpen && (
+            <TimeMachine
+              meta={meta}
+              events={events}
+              isLoading={isEventsLoading}
+              isError={isEventsError}
+              active={activeEvent}
+              currentDate={state.date}
+              onOpen={openEventPhase}
+              onSetDate={handleDateChange}
+              onBack={() => setActiveEvent(null)}
+              onClose={() => {
+                setEventsOpen(false);
+                setActiveEvent(null);
+              }}
+              onExplain={chatEnabled ? handleExplainEvent : undefined}
+            />
+          )}
+        </div>
+      )}
 
-          <div className="pointer-events-auto flex flex-wrap items-center gap-1 p-1 rounded-full bg-white/90 dark:bg-[#0b1116]/90 backdrop-blur-xl border border-slate-300/80 dark:border-white/12 shadow-2xl">
+      {/* Bottom toolbar: view, grid style, layers and tools in one pill */}
+      <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center md:bottom-5">
+        <ViewSwitch
+          view={state.view}
+          onChangeView={handleViewChange}
+          gridStyle={activeGridStyle}
+          onChangeGridStyle={handleGridStyleChange}
+          isTouring={isTouring}
+          onToggleTour={() => setIsTouring(!isTouring)}
+          isExploded={isExploded}
+          onToggleExploded={() => setIsExploded(!isExploded)}
+          isSmoothed={isSmoothed}
+          onToggleSmoothed={() => setIsSmoothed(!isSmoothed)}
+          showContours={showContours}
+          onToggleContours={() => setShowContours(!showContours)}
+        >
+          <ToolbarDivider />
+          <button
+            type="button"
+            aria-pressed={showArgo}
+            aria-label="ARGO Floats"
+            title="Show ARGO float profiles for this date"
+            onClick={() => setShowArgo(!showArgo)}
+            className={`hud-btn ${showArgo ? "hud-btn-active" : ""}`}
+          >
+            <span
+              aria-hidden="true"
+              className={`h-2 w-2 rounded-full ${showArgo ? "bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]" : "bg-amber-500/60"}`}
+            />
+            <span className="hidden sm:inline">ARGO</span>
+            {showArgo && argoData?.profiles && (
+              <span className="tabular-nums opacity-60">{argoData.profiles.length}</span>
+            )}
+          </button>
+
+          {events.length > 0 && !eventsOpen && (
             <button
               type="button"
-              aria-pressed={showArgo}
-              onClick={() => setShowArgo(!showArgo)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
-                showArgo
-                  ? "bg-amber-500 text-slate-950 font-semibold shadow-sm"
-                  : "text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10"
-              }`}
+              aria-label="Events"
+              title="Ocean events time machine"
+              onClick={() => setEventsOpen(true)}
+              className="hud-btn"
             >
-              {showArgo ? (
-                <Eye aria-hidden="true" className="h-3.5 w-3.5" />
-              ) : (
-                <EyeOff aria-hidden="true" className="h-3.5 w-3.5 text-slate-400" />
-              )}
-              <span>ARGO Floats {argoData?.profiles ? `(${argoData.profiles.length})` : ""}</span>
+              <CalendarRange aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Events</span>
             </button>
+          )}
 
-            {events.length > 0 && !eventsOpen && (
-              <button
-                type="button"
-                onClick={() => setEventsOpen(true)}
-                className="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 inline-flex items-center gap-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
-              >
-                <CalendarRange aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-                <span>Events</span>
-              </button>
-            )}
+          {meta.features.postcards && !postcard && (
+            <button
+              type="button"
+              aria-label="Make a postcard"
+              title="Make a postcard of this view"
+              onClick={() => openPostcard(activeEvent?.event)}
+              className="hud-btn"
+            >
+              <ImageIcon aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Postcard</span>
+            </button>
+          )}
 
-            {meta.features.postcards && !postcard && (
-              <button
-                type="button"
-                onClick={() => openPostcard(activeEvent?.event)}
-                className="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 inline-flex items-center gap-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
-              >
-                <ImageIcon aria-hidden="true" className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                <span>Make a postcard</span>
-              </button>
-            )}
+          {meta.features.segment && (
+            <button
+              type="button"
+              aria-pressed={lassoActive}
+              aria-label="Lasso"
+              title="Lasso a water mass: tap the map after turning this on"
+              onClick={() => (lassoActive ? closeLasso() : setLassoActive(true))}
+              className={`hud-btn ${lassoActive ? "hud-btn-active" : ""}`}
+            >
+              <Lasso aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Lasso</span>
+            </button>
+          )}
 
-            {meta.features.segment && (
-              <button
-                type="button"
-                aria-pressed={lassoActive}
-                onClick={() => (lassoActive ? closeLasso() : setLassoActive(true))}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
-                  lassoActive
-                    ? "bg-slate-900 text-white dark:bg-white dark:text-slate-950 font-semibold shadow-sm"
-                    : "text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10"
-                }`}
-              >
-                <Lasso aria-hidden="true" className="h-3.5 w-3.5" />
-                <span>Lasso</span>
-              </button>
-            )}
-
-            {chatEnabled && !guideOpen && (
+          {chatEnabled && !guideOpen && (
+            <>
+              <ToolbarDivider />
               <button
                 type="button"
                 onClick={() => setGuideOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold px-3.5 py-1.5 shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+                aria-label="Ask the ocean"
+                className="hud-btn bg-cyan-400 font-semibold text-neutral-950 hover:bg-cyan-300 hover:text-neutral-950 dark:text-neutral-950 dark:hover:bg-cyan-300 dark:hover:text-neutral-950"
               >
                 <MessageCircle aria-hidden="true" className="h-3.5 w-3.5" />
-                <span>Ask the ocean</span>
+                <span className="hidden sm:inline">Ask the ocean</span>
               </button>
-            )}
-          </div>
-        </div>
-
-        {/* 3D Depth Rail overlay on right edge */}
-        {state.view === "3d" && meta.depths_m && (
-          <div
-            className={`absolute top-4 z-20 pointer-events-auto animate-in fade-in duration-300 ${
-              hasSelection ? "right-4 lg:right-[452px]" : "right-4"
-            }`}
-          >
-            <DepthRail
-              availableDepths={meta.depths_m}
-              selectedDepth={state.depth}
-              onChangeDepth={handleDepthChange}
-            />
-          </div>
-        )}
-
-        {chatEnabled && guideOpen && (
-          <GuideDrawer
-            meta={meta}
-            state={state}
-            eventTitles={events.map((e) => e.title)}
-            onNavigate={handleGuideNavigate}
-            onUndo={handleGuideUndo}
-            onClose={() => setGuideOpen(false)}
-            prompt={guidePrompt}
-          />
-        )}
-
-        {/* Details Panel overlay when lat/lon selected */}
-        {state.lat !== null && state.lon !== null && (
-          <div className="absolute top-4 right-4 z-30 w-[calc(100%-2rem)] sm:w-96 md:w-[420px] pointer-events-auto">
-            <ErrorBoundary
-              name="Point Details Panel"
-              onReset={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
-            >
-              <DetailsPanel
-                lat={state.lat}
-                lon={state.lon}
-                date={state.date}
-                depth={state.depth}
-                minDate={meta.available_dates.start}
-                maxDate={meta.available_dates.end}
-                onClose={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
-                onSelectDepth={handleDepthChange}
-              />
-            </ErrorBoundary>
-          </div>
-        )}
+            </>
+          )}
+        </ViewSwitch>
       </div>
+
+      {/* 3D depth rail on the right edge */}
+      {state.view === "3d" && meta.depths_m && (
+        <div
+          className={`pointer-events-auto absolute top-4 z-20 ${hasSelection ? "right-4 lg:right-[432px]" : "right-4"}`}
+        >
+          <DepthRail availableDepths={meta.depths_m} selectedDepth={state.depth} onChangeDepth={handleDepthChange} />
+        </div>
+      )}
+
+      {chatEnabled && guideOpen && (
+        <GuideDrawer
+          meta={meta}
+          state={state}
+          eventTitles={events.map((e) => e.title)}
+          onNavigate={handleGuideNavigate}
+          onUndo={handleGuideUndo}
+          onClose={() => setGuideOpen(false)}
+          prompt={guidePrompt}
+        />
+      )}
+
+      {/* Details panel for the selected cell */}
+      {hasSelection && (
+        <div className="pointer-events-none absolute bottom-[60px] right-3 top-3 z-30 flex [&>*]:pointer-events-auto w-[calc(100%-1.5rem)] flex-col sm:w-96 md:bottom-20 md:right-4 md:top-4 md:w-[400px]">
+          <ErrorBoundary name="Point Details Panel" onReset={clearSelection}>
+            <DetailsPanel
+              className="pointer-events-auto max-h-full"
+              lat={state.lat!}
+              lon={state.lon!}
+              date={state.date}
+              depth={state.depth}
+              minDate={meta.available_dates.start}
+              maxDate={meta.available_dates.end}
+              onClose={clearSelection}
+              onSelectDepth={handleDepthChange}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
     </div>
   );
 }

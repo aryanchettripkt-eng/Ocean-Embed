@@ -35,12 +35,12 @@ export function FieldToggle({
   ];
 
   return (
-    <div className={`flex flex-col gap-1.5 ${className}`}>
-      <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-        <Layers aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+    <div className={`flex flex-col gap-2 ${className}`}>
+      <label className="hud-label flex items-center gap-1.5">
+        <Layers aria-hidden="true" className="h-3.5 w-3.5" />
         <span>Field</span>
       </label>
-      <div className="grid grid-cols-3 gap-1 bg-slate-100/90 dark:bg-white/[0.04] p-1 rounded-xl border border-slate-200/90 dark:border-white/10 shadow-inner">
+      <div className="grid grid-cols-3 gap-0.5 rounded-full bg-black/[0.04] p-0.5 dark:bg-white/[0.05]">
         {options.map((opt) => {
           const isSelected = value === opt.id;
           const isDisabled = opt.disabled;
@@ -51,25 +51,25 @@ export function FieldToggle({
               type="button"
               disabled={isDisabled}
               aria-pressed={isSelected}
+              aria-label={opt.label}
               onClick={() => onChange(opt.id)}
               title={isDisabled ? "No GLORYS reference yet for live dates" : opt.label}
-              className={`px-2 py-1.5 rounded-lg text-xs font-medium transition-all text-center truncate ${
+              className={`h-7 truncate rounded-full px-2 text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
                 isSelected
-                  ? "bg-cyan-500 text-slate-950 font-semibold shadow-sm shadow-cyan-500/20"
+                  ? "bg-neutral-900 text-white shadow-sm dark:bg-white dark:text-neutral-950"
                   : isDisabled
-                  ? "opacity-35 cursor-not-allowed text-slate-400 dark:text-slate-500"
-                  : "text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10"
+                  ? "cursor-not-allowed text-neutral-400 opacity-50 dark:text-neutral-600"
+                  : "text-neutral-600 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white"
               }`}
             >
-              <span className="hidden sm:inline">{opt.label}</span>
-              <span className="sm:hidden">{opt.shortLabel}</span>
+              {opt.shortLabel}
             </button>
           );
         })}
       </div>
       {isLive && (
-        <p className="text-[11px] text-amber-600 dark:text-amber-400/90 italic flex items-center gap-1">
-          * GLORYS & Difference unavailable on Live dates
+        <p className="text-[11px] text-amber-700 dark:text-amber-400/90">
+          * GLORYS &amp; Difference unavailable on Live dates
         </p>
       )}
     </div>

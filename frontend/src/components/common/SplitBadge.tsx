@@ -7,10 +7,10 @@ interface SplitBadgeProps {
 }
 
 const variantStyles: Record<SplitVariant, string> = {
-  val: "bg-blue-950/80 text-blue-300 border-blue-700/60",
-  test: "bg-purple-950/80 text-purple-300 border-purple-700/60",
-  train: "bg-slate-900/80 text-slate-300 border-slate-700/60",
-  live: "bg-emerald-950/80 text-emerald-300 border-emerald-600/60",
+  val: "bg-blue-500/10 text-blue-700 border-blue-500/30 dark:bg-blue-400/10 dark:text-blue-300 dark:border-blue-400/30",
+  test: "bg-purple-500/10 text-purple-700 border-purple-500/30 dark:bg-purple-400/10 dark:text-purple-300 dark:border-purple-400/30",
+  train: "bg-neutral-500/10 text-neutral-700 border-neutral-500/30 dark:bg-white/[0.06] dark:text-neutral-300 dark:border-white/15",
+  live: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:bg-emerald-400/10 dark:text-emerald-300 dark:border-emerald-400/30",
 };
 
 export function SplitBadge({ split, className = "" }: SplitBadgeProps) {
@@ -19,7 +19,7 @@ export function SplitBadge({ split, className = "" }: SplitBadgeProps) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border shadow-sm backdrop-blur-sm ${variantStyles[variant]} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border ${variantStyles[variant]} ${className}`}
     >
       {isLive && (
         <span className="relative flex h-2 w-2">

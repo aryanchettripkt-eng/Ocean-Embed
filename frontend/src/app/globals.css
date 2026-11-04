@@ -20,31 +20,130 @@
   --foreground: #f8fafc;
 }
 
-/* Dark glass MapLibre popups and attribution controls on Explorer */
+/*
+ * Explorer HUD (PRD_FRONTEND §3.1): neutral charcoal glass surfaces floating over the map,
+ * pill buttons whose active state is a solid white (dark) / ink (light) chip.
+ */
+@layer components {
+  .hud-glass {
+    @apply border border-black/[0.06] bg-white/80 text-neutral-900 shadow-[0_8px_30px_rgba(15,23,42,0.12)] backdrop-blur-xl backdrop-saturate-150
+      dark:border-white/[0.08] dark:bg-[#111314]/80 dark:text-neutral-100 dark:shadow-[0_16px_48px_rgba(0,0,0,0.55)];
+  }
+  .hud-label {
+    @apply text-[11px] font-medium text-neutral-500 dark:text-neutral-400;
+  }
+  .hud-divider {
+    @apply border-black/[0.06] dark:border-white/[0.07];
+  }
+  .hud-btn {
+    @apply inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-xs font-medium sm:px-3 text-neutral-600 transition-colors
+      hover:bg-black/[0.05] hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-white/[0.08] dark:hover:text-white
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400
+      disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent;
+  }
+  .hud-btn-active {
+    @apply bg-neutral-900 text-white shadow-sm hover:bg-neutral-900 hover:text-white
+      dark:bg-white dark:text-neutral-950 dark:hover:bg-white dark:hover:text-neutral-950;
+  }
+  .hud-icon-btn {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/[0.06] text-neutral-500 transition-colors
+      hover:bg-black/[0.05] hover:text-neutral-950 dark:border-white/[0.08] dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-white
+      focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400
+      disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent;
+  }
+}
+
+/* Thin HUD range slider; the filled part is driven by the --fill custom property (0%–100%) */
+.hud-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+  --track: rgba(15, 23, 42, 0.1);
+  --fill-color: #0891b2;
+  --thumb: #0f172a;
+}
+.dark .hud-range {
+  --track: rgba(255, 255, 255, 0.1);
+  --fill-color: #22d3ee;
+  --thumb: #ffffff;
+}
+.hud-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--fill-color) var(--fill, 0%), var(--track) var(--fill, 0%));
+}
+.hud-range::-moz-range-track {
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--track);
+}
+.hud-range::-moz-range-progress {
+  height: 3px;
+  border-radius: 9999px;
+  background: var(--fill-color);
+}
+.hud-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  margin-top: -5.5px;
+  border-radius: 9999px;
+  background: var(--thumb);
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.18), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.hud-range::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--thumb);
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.18), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.hud-range:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
+/* MapLibre popups and controls as HUD glass */
+.maplibregl-popup-content {
+  border-radius: 0.875rem;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.14);
+}
 .dark .maplibregl-popup-content {
-  background: rgba(11, 17, 22, 0.94);
-  color: #e2e8f0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 0.75rem;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(12px);
+  background: rgba(17, 19, 20, 0.92);
+  color: #e5e5e5;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(16px);
 }
-
 .dark .maplibregl-popup-tip {
-  border-top-color: rgba(11, 17, 22, 0.94) !important;
-  border-bottom-color: rgba(11, 17, 22, 0.94) !important;
+  border-top-color: rgba(17, 19, 20, 0.92) !important;
+  border-bottom-color: rgba(17, 19, 20, 0.92) !important;
 }
 
-.dark .maplibregl-ctrl-group {
-  background: rgba(11, 17, 22, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
+.maplibregl-ctrl-group:not(:empty) {
+  border-radius: 9999px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.12);
 }
-
+.dark .maplibregl-ctrl-group:not(:empty) {
+  background: rgba(17, 19, 20, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(16px);
+}
 .dark .maplibregl-ctrl-group button + button {
-  border-top-color: rgba(255, 255, 255, 0.1);
+  border-top-color: rgba(255, 255, 255, 0.07);
 }
-
+.dark .maplibregl-ctrl button:not(:disabled):hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
 .dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
   filter: invert(0.9) hue-rotate(180deg);
 }

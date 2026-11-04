@@ -168,4 +168,41 @@ describe("renderGridToCanvas", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("draws a valid cell with no value at this depth as a land dot, not an insufficient-input ring", () => {
+    // 1 x 2 grid: col 0 is cov 1 with a null value (e.g. shallower than the selected depth), col 1 is cov 2
+    const values: (number | null)[][] = [[null, null]];
+    const coverage: number[][] = [[1, 2]];
+    const scale = 8;
+    const width = 2 * scale;
+    const height = scale;
+    const pixelData = new Uint8ClampedArray(width * height * 4);
+    const mockCtx = {
+      createImageData: vi.fn().mockReturnValue({ width, height, data: pixelData }),
+      putImageData: vi.fn(),
+    };
+    const mockCanvas = { width: 0, height: 0, getContext: vi.fn().mockReturnValue(mockCtx) };
+    vi.stubGlobal("document", {
+      createElement: vi.fn().mockImplementation((tag: string) => (tag === "canvas" ? mockCanvas : {})),
+    });
+
+    renderGridToCanvas(values, coverage, 10, 30, "thermal", scale, null, { gridStyle: "dots", isDark: true });
+
+    const rgbaAt = (px: number, py: number) => {
+      const i = (py * width + px) * 4;
+      return [pixelData[i], pixelData[i + 1], pixelData[i + 2], pixelData[i + 3]];
+    };
+
+    // Null-valued cov 1 cell: filled warm land dot at the centre, no ring stroke
+    const nullCenter = rgbaAt(4, 4);
+    expect(nullCenter[0]).toBeGreaterThan(nullCenter[2]);
+    expect(nullCenter[0]).toBeGreaterThan(80);
+    expect(rgbaAt(6, 4)).toEqual([7, 13, 18, 218]);
+
+    // cov 2 cell next to it keeps the hollow ring (backing at the centre, stroke at the edge)
+    expect(rgbaAt(12, 4)).toEqual([7, 13, 18, 218]);
+    expect(rgbaAt(14, 4)[2]).toBeGreaterThan(130);
+
+    vi.unstubAllGlobals();
+  });
 });
