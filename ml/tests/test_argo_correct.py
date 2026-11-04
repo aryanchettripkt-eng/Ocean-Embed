@@ -130,3 +130,30 @@ def test_refuses_test_dates(tmp_path: Path) -> None:
     path, _ = _store(tmp_path, pd.date_range("2021-01-01", periods=3, freq="D"))
     with pytest.raises((TestLeakageError, ValueError)):
         ac.run(config, path, [], {"1"}, "x_oi", out_dir=tmp_path / "out")
+
+
+def test_per_depth_turns_the_correction_off_where_it_hurts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(CONFIG_PATH)
+    path, depths = _store(tmp_path)
+    fit = _profiles(depths, 30, 2900000, seed=1)
+    rng = np.random.default_rng(3)
+    noisy = fit.copy()
+    noisy["t_0"] = noisy["t_0"] + rng.normal(0.0, 3.0, len(noisy))  # surface: noise only
+    monkeypatch.setattr(ac, "read_levels", lambda paths, start, end: pd.DataFrame())
+    monkeypatch.setattr(
+        ac, "profile_levels", lambda levels, depths_m, exclude: noisy.reset_index(drop=True)
+    )
+    monkeypatch.setattr(ac, "GRID", {"length_deg": (1.0, 3.0), "tau_days": (10.0,),
+                                     "window_days": (30,), "noise": (0.25,)})  # fmt: skip
+    dest, plan = ac.run(config, path, [], set(), "base_run_oid", out_dir=tmp_path / "out",
+                        per_depth=True)  # fmt: skip
+    band = (depths >= 50) & (depths <= 300)
+    assert plan[0] is None  # the noisy surface level is left alone
+    assert all(plan[k] is not None for k in np.flatnonzero(band))
+    before = xr.open_zarr(path)["temp_pred"].values.astype(float)
+    after = xr.open_zarr(dest)["temp_pred"].values.astype(float)
+    assert np.array_equal(after[:, 0], before[:, 0])
+    choices = pd.read_csv(tmp_path / "out" / "metrics" / "argo_correct_depths_base_run_oid.csv")
+    assert len(choices) == depths.size and not bool(choices["corrected"].iloc[0])

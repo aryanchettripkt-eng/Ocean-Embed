@@ -5,7 +5,7 @@ Usage (from ml/):
     python -m oceanscope_ml.inference.argo_correct --config configs/experiment.yaml \
         --predictions outputs/predictions/predictions_<run_id>.zarr \
         --argo <argo_YYYY-MM.nc...> --holdout configs/argo_eval_floats.json \
-        --run-id <run_id>_oi [--out-dir outputs] [--params L,TAU,WINDOW,NOISE]
+        --run-id <run_id>_oi [--out-dir outputs] [--params L,TAU,WINDOW,NOISE] [--per-depth]
 
 The model learns to copy GLORYS, so on its own it cannot use the floats that are in the water
 on day t. This step does: for every profile of a non-held-out float, the residual
@@ -24,6 +24,11 @@ L, tau, window and noise are picked on the validation period with non-held-out f
 the lowest RMSE on those in the Bay of Bengal at 50-300 m is used (the §1.1 band). The final
 store then uses all non-held-out floats. Held-out floats (PRD_AI_ML §7) are never read as
 residuals, in tuning or in the final store. Only validation dates are read or written.
+
+With ``--per-depth`` each depth gets its own setting: the one with the lowest RMSE on the tuning
+floats at that depth (whole domain), or no correction at all where none beats the model by at
+least 1%. This keeps the correction away from levels where the floats only add noise (the
+surface level was made worse by a single shared setting on main2_ai).
 
 Writes ``<out>/predictions/predictions_<run_id>.zarr`` (same layout as ``inference.predict``,
 ``temp_pred`` corrected, ``temp_glorys`` and ``coverage`` copied) and
@@ -57,6 +62,7 @@ BAND_M = (50.0, 300.0)
 TUNE_FRACTION = 0.2
 TUNE_SEED = 42
 BLOCK_DAYS = 16
+MIN_GAIN = 0.01  # per-depth: a setting must beat no correction by 1% at that depth
 GRID = {
     "length_deg": (0.5, 1.0, 2.0, 3.0),
     "tau_days": (5.0, 15.0, 45.0),
@@ -81,6 +87,17 @@ class OIParams:
     tau_days: float
     window_days: int
     noise: float
+
+
+Plan = tuple[OIParams | None, ...]  # one setting per depth; None = no correction there
+
+
+def uniform_plan(params: OIParams, n_depth: int) -> Plan:
+    return (params,) * n_depth
+
+
+def plan_json(plan: Plan) -> str:
+    return json.dumps([None if p is None else asdict(p) for p in plan])
 
 
 @dataclass
@@ -171,6 +188,17 @@ def correction(
     return num / (den + params.noise)
 
 
+def plan_correction(
+    res: Residuals, plan: Plan, day: int, lat: np.ndarray, lon: np.ndarray
+) -> np.ndarray:
+    """[m, D] correction with one setting per depth (zero where the plan says None)."""
+    out = np.zeros((lat.size, len(plan)))
+    for params in {p for p in plan if p is not None}:
+        cols = [k for k, p in enumerate(plan) if p == params]
+        out[:, cols] = correction(res, params, day, lat, lon)[:, cols]
+    return out
+
+
 def _band_mask(lat: np.ndarray, lon: np.ndarray, depths: np.ndarray) -> np.ndarray:
     cells = (lon >= BAY_OF_BENGAL_MIN_LON) & (lat >= EQUATORIAL_MAX_LAT)
     band = (depths >= BAND_M[0]) & (depths <= BAND_M[1])
@@ -187,13 +215,24 @@ def split_floats(
     return {str(f) for f in rng.choice(floats, size=n, replace=False)}
 
 
-def score(fit: Residuals, tune: Residuals, params: OIParams | None, depths: np.ndarray) -> dict:
-    """RMSE of the corrected model at the tuning profiles; ``params=None`` scores the model."""
+def errors(fit: Residuals, tune: Residuals, params: OIParams | None) -> np.ndarray:
+    """[n, D] remaining error at the tuning profiles; ``params=None`` is the model alone."""
     err = tune.values.copy()
     if params is not None:
         for d in np.unique(tune.day):
             idx = np.flatnonzero(tune.day == d)
             err[idx] -= correction(fit, params, int(d), tune.lat[idx], tune.lon[idx])
+    return err
+
+
+def _depth_rmse(err: np.ndarray) -> np.ndarray:
+    finite = np.isfinite(err)
+    sq = np.where(finite, err, 0.0) ** 2
+    n = finite.sum(axis=0)
+    return np.where(n > 0, np.sqrt(sq.sum(axis=0) / np.maximum(n, 1)), np.nan)
+
+
+def _summary(err: np.ndarray, tune: Residuals, depths: np.ndarray) -> dict:
     finite = np.isfinite(err)
     band = finite & _band_mask(tune.lat, tune.lon, depths)
     return {
@@ -204,8 +243,16 @@ def score(fit: Residuals, tune: Residuals, params: OIParams | None, depths: np.n
     }
 
 
-def tune(res: Residuals, depths: np.ndarray) -> tuple[OIParams, pd.DataFrame]:
-    """Grid search on the tuning floats; returns the best setting and the full table."""
+def score(fit: Residuals, tune: Residuals, params: OIParams | None, depths: np.ndarray) -> dict:
+    """RMSE of the corrected model at the tuning profiles; ``params=None`` scores the model."""
+    return _summary(errors(fit, tune, params), tune, depths)
+
+
+def tune(
+    res: Residuals, depths: np.ndarray, per_depth: bool = False
+) -> tuple[Plan, pd.DataFrame, pd.DataFrame | None]:
+    """Grid search on the tuning floats; returns the plan, the full table and, with
+    ``per_depth``, the per-depth choices."""
     tune_floats = split_floats(res)
     is_tune = np.isin(res.platform, list(tune_floats))
     fit, held = res.subset(~is_tune), res.subset(is_tune)
@@ -214,14 +261,20 @@ def tune(res: Residuals, depths: np.ndarray) -> tuple[OIParams, pd.DataFrame]:
         len(fit), np.unique(fit.platform).size, len(held), len(tune_floats),
     )  # fmt: skip
     rows = [{"length_deg": 0.0, "tau_days": 0.0, "window_days": 0, "noise": 0.0}]
-    rows[0].update(score(fit, held, None, depths))
+    base_err = errors(fit, held, None)
+    rows[0].update(_summary(base_err, held, depths))
+    settings: list[OIParams] = []
+    depth_rmse: list[np.ndarray] = []
     logger.info("No correction: RMSE %.3f C, BoB 50-300 m %.3f C", rows[0]["rmse_c"],
                 rows[0]["bob_band_rmse_c"])  # fmt: skip
     for values in itertools.product(*GRID.values()):
         params = OIParams(*values)  # type: ignore[arg-type]
         row: dict = asdict(params)
-        row.update(score(fit, held, params, depths))
+        err = errors(fit, held, params)
+        row.update(_summary(err, held, depths))
         rows.append(row)
+        settings.append(params)
+        depth_rmse.append(_depth_rmse(err))
         logger.info("%s: RMSE %.3f C, BoB 50-300 m %.3f C", params, row["rmse_c"],
                     row["bob_band_rmse_c"])  # fmt: skip
     table = pd.DataFrame(rows, columns=TUNING_COLUMNS)
@@ -231,10 +284,43 @@ def tune(res: Residuals, depths: np.ndarray) -> tuple[OIParams, pd.DataFrame]:
         float(best["length_deg"]), float(best["tau_days"]), int(best["window_days"]),
         float(best["noise"]),
     )  # fmt: skip
-    return params, table
+    if not per_depth:
+        return uniform_plan(params, depths.size), table, None
+
+    base_rmse = _depth_rmse(base_err)
+    grid_rmse = np.vstack(depth_rmse)  # [settings, D]
+    plan: list[OIParams | None] = []
+    choice_rows = []
+    for k, depth in enumerate(depths):
+        col = np.where(np.isfinite(grid_rmse[:, k]), grid_rmse[:, k], np.inf)
+        j = int(np.argmin(col))
+        use = np.isfinite(base_rmse[k]) and col[j] < (1.0 - MIN_GAIN) * base_rmse[k]
+        plan.append(settings[j] if use else None)
+        choice_rows.append(
+            {
+                "depth_m": float(depth),
+                **({f: (getattr(settings[j], f) if use else 0) for f in GRID}),
+                "corrected": bool(use),
+                "rmse_none_c": float(base_rmse[k]),
+                "rmse_chosen_c": float(col[j] if use else base_rmse[k]),
+                "n_obs": int(np.isfinite(base_err[:, k]).sum()),
+            }
+        )
+        logger.info("  %.1f m: %s (RMSE %.3f -> %.3f C)", depth,
+                    settings[j] if use else "no correction", base_rmse[k],
+                    col[j] if use else base_rmse[k])  # fmt: skip
+    final = tuple(plan)
+    err = base_err.copy()
+    for params_k in {p for p in final if p is not None}:
+        cols = [k for k, p in enumerate(final) if p == params_k]
+        err[:, cols] = errors(fit, held, params_k)[:, cols]
+    summary = _summary(err, held, depths)
+    logger.info("Per-depth plan: RMSE %.3f C, BoB 50-300 m %.3f C", summary["rmse_c"],
+                summary["bob_band_rmse_c"])  # fmt: skip
+    return final, table, pd.DataFrame(choice_rows)
 
 
-def write_store(pred_path: Path, res: Residuals, params: OIParams, run_id: str, dest: Path) -> Path:
+def write_store(pred_path: Path, res: Residuals, plan: Plan, run_id: str, dest: Path) -> Path:
     """Copy the prediction store to ``dest`` with ``temp_pred`` corrected on valid cells."""
     if dest.exists():
         shutil.rmtree(dest)
@@ -253,7 +339,7 @@ def write_store(pred_path: Path, res: Residuals, params: OIParams, run_id: str, 
         cov = block["coverage"].values
         for k in range(b1 - b0):
             valid = cov[k] == 1
-            c = correction(res, params, int(days[b0 + k]), lat2[valid], lon2[valid])
+            c = plan_correction(res, plan, int(days[b0 + k]), lat2[valid], lon2[valid])
             temp[k][:, valid] += c.T
             sq += (c**2).sum(axis=0)
             n_cells += int(valid.sum())
@@ -266,7 +352,7 @@ def write_store(pred_path: Path, res: Residuals, params: OIParams, run_id: str, 
         {
             "run_id": run_id,
             "base_run_id": base_run,
-            "argo_correction": json.dumps(asdict(params)),
+            "argo_correction": plan_json(plan),
         }
     )
     zarr.consolidate_metadata(str(dest))
@@ -283,8 +369,10 @@ def run(
     run_id: str,
     out_dir: Path | None = None,
     params: OIParams | None = None,
-) -> tuple[Path, OIParams]:
-    """Tune (unless ``params`` is given) and write the corrected store; returns its path."""
+    per_depth: bool = False,
+) -> tuple[Path, Plan]:
+    """Tune (unless ``params`` is given) and write the corrected store; returns its path and
+    the per-depth plan used."""
     pred = xr.open_zarr(predictions)
     dates = pd.DatetimeIndex(pred["time"].values).normalize()
     check_no_test_leakage(dates, config.splits.test)
@@ -314,13 +402,19 @@ def run(
     out = Path(out_dir or config.paths.outputs)
     (out / "metrics").mkdir(parents=True, exist_ok=True)
     if params is None:
-        params, table = tune(res, depths)
+        plan, table, choices = tune(res, depths, per_depth=per_depth)
         table.round(6).to_csv(out / "metrics" / f"argo_correct_tuning_{run_id}.csv", index=False)
-    logger.info("Using %s", params)
+        if choices is not None:
+            choices.round(6).to_csv(
+                out / "metrics" / f"argo_correct_depths_{run_id}.csv", index=False
+            )
+    else:
+        plan = uniform_plan(params, depths.size)
+    logger.info("Using %s", plan_json(plan))
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    write_store(predictions, res, params, run_id, dest)
-    return dest, params
+    write_store(predictions, res, plan, run_id, dest)
+    return dest, plan
 
 
 def _load_holdout(path: Path) -> set[str]:
@@ -341,6 +435,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--params", default=None, help="L_deg,tau_days,window_days,noise (skips tuning)"
     )
+    parser.add_argument(
+        "--per-depth", action="store_true", help="Tune one setting per depth (or none)"
+    )
     return parser
 
 
@@ -360,8 +457,9 @@ def main() -> None:
         args.run_id,
         out_dir=Path(args.out_dir) if args.out_dir else None,
         params=params,
+        per_depth=args.per_depth,
     )
-    print(json.dumps({"store": str(dest), "params": asdict(used)}))
+    print(json.dumps({"store": str(dest), "plan": json.loads(plan_json(used))}))
 
 
 if __name__ == "__main__":
