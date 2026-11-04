@@ -4,7 +4,11 @@ Usage (from ml/):
 
     # Once per published run: pack the kit, and upload it to live.kit_repo (needs HF_TOKEN)
     python -m oceanscope_ml.live kit --checkpoint checkpoints/<run_id>/best.pt \
-        --stats <stats.zarr> --static-store <part.zarr> --out kit/ [--upload]
+        --stats <stats.zarr> --static-store <part.zarr> --out kit/ [--run-id <published name>] \
+        [--upload]
+
+    # Before P9-1: check every dataset ID in configs/live.yaml and its newest day
+    python -m oceanscope_ml.live sources [--all]
 
     # Every day (the scheduled workflow): one new day, or nothing if it is already published
     python -m oceanscope_ml.live run [--kit-dir kit/] [--dry-run] [--log outputs/live/log.json]
@@ -17,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -52,6 +58,11 @@ def build_cli() -> argparse.ArgumentParser:
     kit.add_argument("--stats", required=True, help="Stats store (clim + norm_stats)")
     kit.add_argument("--static-store", required=True, help="Any part store with static fields")
     kit.add_argument("--out", required=True)
+    kit.add_argument(
+        "--run-id",
+        default=None,
+        help="Published name (manifest active_run_id), if not the one in the checkpoint",
+    )
     kit.add_argument("--upload", action="store_true", help="Upload to live.kit_repo")
 
     run = sub.add_parser("run", help="Publish the newest complete NRT day")
@@ -62,7 +73,39 @@ def build_cli() -> argparse.ArgumentParser:
     run.add_argument("--today", default=None, help="YYYY-MM-DD; default: today in UTC")
     run.add_argument("--dry-run", action="store_true", help="Do everything but upload")
     run.add_argument("--log", default="outputs/live/live_run.json")
+
+    src = sub.add_parser("sources", help="Check every live dataset ID and its newest day")
+    src.add_argument(
+        "--all", action="store_true", help="Also the P9-1 reprocessed products and GLORYS"
+    )
+    src.add_argument("--today", default=None, help="YYYY-MM-DD; default: today in UTC")
+    src.add_argument("--log", default="outputs/live/sources_check.json")
     return parser
+
+
+def run_sources(args: argparse.Namespace, config: Any) -> int:
+    from oceanscope_ml.live import sources
+
+    live_cfg = load_live_config(args.live_config)
+    settings = LiveSettings.from_dict(live_cfg)
+    today = pd.Timestamp(args.today) if args.today else utc_today()
+    r = config.region
+    results = sources.check_sources(
+        live_cfg,
+        today,
+        (r.lon_min, r.lon_max, r.lat_min, r.lat_max),
+        sources.REAL_PROBES,
+        include_check=args.all,
+        max_lag_days=settings.max_lag_days,
+    )
+    text = sources.markdown(results, today)
+    print(text)
+    sources.write_report(results, today, Path(args.log))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(text)
+    return 0 if all(res.ok for res in results) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,7 +115,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "kit":
         kit = build_kit(
-            config, Path(args.checkpoint), Path(args.stats), Path(args.static_store), Path(args.out)
+            config,
+            Path(args.checkpoint),
+            Path(args.stats),
+            Path(args.static_store),
+            Path(args.out),
+            run_id=args.run_id,
         )
         if args.upload:
             repo = LiveSettings.from_dict(load_live_config(args.live_config)).kit_repo
@@ -80,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("live.kit_repo is empty in the config")
             upload_kit(kit, repo)
         return 0
+
+    if args.command == "sources":
+        return run_sources(args, config)
 
     settings = LiveSettings.from_dict(load_live_config(args.live_config))
     today = pd.Timestamp(args.today) if args.today else utc_today()

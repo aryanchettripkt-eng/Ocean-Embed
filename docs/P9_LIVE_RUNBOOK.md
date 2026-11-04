@@ -6,13 +6,20 @@ Workflow: `.github/workflows/live.yml` (manual trigger only until the schedule i
 
 ## Steps for Aryan, in order
 
-1. **Confirm the NRT dataset IDs** in `configs/live.yaml` (`live.sources`) with `copernicusmarine describe --dataset-id <id>`. The OSCAR NRT short name is `OSCAR_L4_OC_NRT_V2.0`. ERA5T comes from the CDS daily-statistics dataset.
-2. **Build the live kit** from the published run, then upload it to a private HF model repo. Set `live.kit_repo` to that repo first.
+1. **Check the dataset IDs** in `configs/live.yaml`. Either way works:
+   - On GitHub: add the secrets from step 4 (all but `HF_TOKEN` are needed here), then Actions › Live › Run workflow with mode `sources`. The table is in the run summary.
+   - On your machine, from `ml/` with the credentials in the environment: `python -m oceanscope_ml.live sources --all`.
+   It checks every live source, the P9-1 reprocessed products and GLORYS: the ID exists, the variables are there, and the newest day. It fails (red) if any ID is wrong or a live source is older than `max_lag_days`. Fix any wrong ID in `live.yaml` and rerun until it is green.
+2. **Build the live kit** from the run that is published now (`active_run_id` in the HF `manifest.json`), then upload it to a private HF model repo. Set `live.kit_repo` to that repo first. The live run refuses a kit that is not for the active run.
+   - As of 2026-11-03 the active run is `main2_ft`. Its checkpoint is `main2_ft_l0.3/best_ft.pt` from the fine-tune notebook, and the stats store comes from the stats notebook.
+   - The checkpoint stores the name `main2_ft_l0.3`, so pass `--run-id main2_ft` (the published name):
    ```
    cd ml
-   python -m oceanscope_ml.live kit --checkpoint <best.pt> --stats <stats.zarr> \
-       --static-store <any part.zarr> --out kit/ --upload
+   python -m oceanscope_ml.live kit --checkpoint <checkpoints>/main2_ft_l0.3/best_ft.pt \
+       --stats <stats.zarr> --static-store <any part.zarr> --out kit/ \
+       --run-id main2_ft --upload
    ```
+   - Rebuild the kit whenever a new run is published.
 3. **P9-1 check**: run the model on one past month with NRT inputs and with reprocessed inputs:
    ```
    python -m oceanscope_ml.evaluation.live_check --kit-dir kit/ --month YYYY-MM \
