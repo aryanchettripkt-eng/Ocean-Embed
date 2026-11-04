@@ -484,6 +484,17 @@ function ExplorerContent() {
   const fieldLabel =
     state.field === "error" ? "Model − GLORYS" : state.field === "glorys" ? "GLORYS reanalysis" : "Model prediction";
   const clearSelection = () => setState((prev) => ({ ...prev, lat: null, lon: null }));
+  const guideShown = chatEnabled && guideOpen;
+  // Right-hand stack on wide screens: guide card (380 px) at the edge, details panel (400 px) beside
+  // it from xl up; below xl the guide overlays the details panel.
+  const detailsRight = guideShown ? "md:right-4 xl:right-[412px]" : "md:right-4";
+  const railRight = hasSelection
+    ? guideShown
+      ? "right-4 lg:right-[432px] xl:right-[828px]"
+      : "right-4 lg:right-[432px]"
+    : guideShown
+    ? "right-4 lg:right-[412px]"
+    : "right-4";
 
   return (
     <div className="relative min-h-[480px] w-full flex-1 overflow-hidden bg-neutral-100 dark:bg-[#0a0c0d]">
@@ -780,13 +791,13 @@ function ExplorerContent() {
       {/* 3D depth rail on the right edge */}
       {state.view === "3d" && meta.depths_m && (
         <div
-          className={`pointer-events-auto absolute top-4 z-20 ${hasSelection ? "right-4 lg:right-[432px]" : "right-4"}`}
+          className={`pointer-events-auto absolute top-4 z-20 ${railRight}`}
         >
           <DepthRail availableDepths={meta.depths_m} selectedDepth={state.depth} onChangeDepth={handleDepthChange} />
         </div>
       )}
 
-      {chatEnabled && guideOpen && (
+      {guideShown && (
         <GuideDrawer
           meta={meta}
           state={state}
@@ -795,12 +806,15 @@ function ExplorerContent() {
           onUndo={handleGuideUndo}
           onClose={() => setGuideOpen(false)}
           prompt={guidePrompt}
+          placementClassName="absolute inset-x-3 bottom-3 h-[75%] md:inset-x-auto md:right-4 md:top-4 md:bottom-[104px] md:h-auto md:w-[380px]"
         />
       )}
 
       {/* Details panel for the selected cell */}
       {hasSelection && (
-        <div className="pointer-events-none absolute bottom-[60px] right-3 top-3 z-30 flex [&>*]:pointer-events-auto w-[calc(100%-1.5rem)] flex-col sm:w-96 md:bottom-20 md:right-4 md:top-4 md:w-[400px]">
+        <div
+          className={`pointer-events-none absolute bottom-[60px] right-3 top-3 z-30 flex w-[calc(100%-1.5rem)] flex-col sm:w-96 md:bottom-[104px] md:top-4 md:w-[400px] [&>*]:pointer-events-auto ${detailsRight}`}
+        >
           <ErrorBoundary name="Point Details Panel" onReset={clearSelection}>
             <DetailsPanel
               className="pointer-events-auto max-h-full"

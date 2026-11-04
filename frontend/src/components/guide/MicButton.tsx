@@ -9,9 +9,10 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Mic, MicOff, Square } from "lucide-react";
+import { Mic, MicOff, Square } from "lucide-react";
 import { apiClient, ApiError } from "../../lib/api/client";
 import { recordingToWav } from "../../lib/wav";
+import { TypingDots } from "../common/TypingDots";
 
 export const MAX_RECORD_S = 30;
 export const AUTO_SEND_MS = 1500;
@@ -201,32 +202,32 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
           else if (!permissionAsked.current) setPhase("explain");
           else void start();
         }}
-        className={`p-2.5 rounded-lg border touch-none select-none ${
+        className={`inline-flex h-9 w-9 shrink-0 touch-none select-none items-center justify-center rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400 disabled:opacity-40 ${
           phase === "recording"
-            ? "bg-red-600 border-red-500 text-white animate-pulse"
-            : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200"
-        } disabled:opacity-40`}
+            ? "animate-pulse bg-red-600 text-white motion-reduce:animate-none"
+            : "text-neutral-600 hover:bg-black/[0.06] hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
+        }`}
       >
         {phase === "transcribing" ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <TypingDots label="Transcribing" />
         ) : phase === "recording" ? (
-          <Square className="h-4 w-4" />
+          <Square aria-hidden="true" className="h-4 w-4" />
         ) : phase === "denied" ? (
-          <MicOff className="h-4 w-4" />
+          <MicOff aria-hidden="true" className="h-4 w-4" />
         ) : (
-          <Mic className="h-4 w-4" />
+          <Mic aria-hidden="true" className="h-4 w-4" />
         )}
       </button>
 
       {(phase === "explain" || phase === "denied" || phase === "recording" || phase === "countdown" || message) && (
-        <div className="absolute bottom-full right-0 mb-2 w-60 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-2.5 text-[11px] text-slate-700 dark:text-slate-200 shadow-xl">
+        <div className="hud-glass absolute bottom-full right-0 mb-2 w-60 rounded-2xl p-3 text-[11px] leading-snug">
           {phase === "explain" && (
             <>
               <p>Ask out loud: your browser will ask to use the microphone. Audio goes only to our server to turn it into text.</p>
               <div className="mt-2 flex gap-2">
                 <button
                   type="button"
-                  className="px-2 py-1 rounded bg-cyan-600 text-white"
+                  className="hud-btn hud-btn-active h-7"
                   onClick={() => {
                     permissionAsked.current = true;
                     pressStartRef.current = 0;
@@ -235,7 +236,7 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
                 >
                   Start talking
                 </button>
-                <button type="button" className="px-2 py-1 underline" onClick={() => setPhase("idle")}>
+                <button type="button" className="hud-btn h-7" onClick={() => setPhase("idle")}>
                   Not now
                 </button>
               </div>

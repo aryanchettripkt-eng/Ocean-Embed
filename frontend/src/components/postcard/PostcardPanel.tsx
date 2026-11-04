@@ -8,10 +8,11 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Download, Link2, Loader2, X } from "lucide-react";
+import { Check, Download, Link2, X } from "lucide-react";
 
 import { ApiError, apiClient, resolveApiUrl, type PostcardResponse } from "../../lib/api/client";
 import { formatDate, formatDepth, formatTemp } from "../../lib/format";
+import { TypingDots } from "../common/TypingDots";
 
 export const POSTCARD_TIMEOUT_MS = 45_000;
 
@@ -67,14 +68,18 @@ export function PostcardPanel({ date, depth, eventId, eventTitle, caveat, onClos
         { date, depth_m: depth, ...(eventId ? { event_id: eventId } : {}) },
         controller.signal
       );
-      setResult(res);
+      if (abortRef.current === controller) setResult(res);
     } catch (err) {
+      // A superseded request (e.g. aborted by an effect re-run) must not overwrite the current one
+      if (abortRef.current !== controller) return;
       if (!controller.signal.aborted || timedOut) setError(postcardErrorMessage(err, timedOut));
       else setError("Cancelled.");
     } finally {
       clearTimeout(timer);
-      if (abortRef.current === controller) abortRef.current = null;
-      setPending(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setPending(false);
+      }
     }
   }, [date, depth, eventId]);
 
@@ -133,27 +138,27 @@ export function PostcardPanel({ date, depth, eventId, eventTitle, caveat, onClos
   return (
     <section
       aria-label="Ocean postcard"
-      className="w-full sm:w-[380px] rounded-xl border border-amber-200/70 dark:border-amber-900/60 bg-[#f5efe2] dark:bg-[#1f1b16] text-slate-800 dark:text-amber-50 shadow-2xl"
+      className="hud-glass flex max-h-[calc(100dvh-12rem)] w-full flex-col overflow-hidden rounded-[20px] sm:w-[380px]"
     >
-      <header className="flex items-center justify-between px-3 py-2.5 border-b border-amber-200/70 dark:border-amber-900/60">
-        <h2 className="text-sm font-semibold">
+      <header className="hud-divider flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+        <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-white">
           Ocean postcard{eventTitle ? ` · ${eventTitle}` : ""}
         </h2>
-        <button type="button" onClick={onClose} aria-label="Close postcard" className="p-1 rounded hover:bg-amber-100 dark:hover:bg-amber-950">
-          <X className="h-4 w-4" />
+        <button type="button" onClick={onClose} aria-label="Close postcard" className="hud-icon-btn">
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </header>
 
-      <div className="p-3 space-y-2">
+      <div className="min-h-0 space-y-2.5 overflow-y-auto overscroll-contain p-4 text-neutral-700 dark:text-neutral-300">
         {pending && (
           <div role="status" className="space-y-2">
-            <div className="relative h-40 overflow-hidden rounded-md border border-dashed border-amber-300 dark:border-amber-800">
-              <div className="absolute inset-x-3 top-0 h-full bg-white/70 dark:bg-amber-100/10 animate-[pulse_1.6s_ease-in-out_infinite]" />
+            <div className="relative h-40 overflow-hidden rounded-xl bg-[#f5efe2] p-2 dark:bg-[#24201a]">
+              <div className="h-full rounded-lg bg-white/70 motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] dark:bg-amber-100/10" />
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <div className="flex items-center gap-2.5 text-xs">
+              <TypingDots label="Printing" className="text-neutral-500" />
               <span>Printing your postcard… this can take up to 45 seconds.</span>
-              <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto underline">
+              <button type="button" onClick={() => abortRef.current?.abort()} className="ml-auto text-neutral-500 underline underline-offset-2 hover:text-neutral-900 dark:hover:text-white">
                 Cancel
               </button>
             </div>
@@ -163,45 +168,45 @@ export function PostcardPanel({ date, depth, eventId, eventTitle, caveat, onClos
         {error && !pending && (
           <div className="text-xs space-y-2">
             <p>{error}</p>
-            <button type="button" onClick={() => void make()} className="underline">
+            <button type="button" onClick={() => void make()} className="hud-btn h-7 border border-black/10 dark:border-white/10">
               Try again
             </button>
           </div>
         )}
 
         {result && (
-          <figure className="space-y-2">
+          <figure className="space-y-2.5">
             {/* eslint-disable-next-line @next/next/no-img-element -- backend-served image, not a static asset */}
             <img
               src={resolveApiUrl(result.image_url)}
               alt={`Artistic postcard of the ocean on ${formatDate(result.caption.date)}`}
-              className="w-full rounded-md border border-amber-200 dark:border-amber-900"
+              className="w-full rounded-xl bg-[#f5efe2] p-2 dark:bg-[#24201a]"
             />
             <figcaption className="space-y-0.5 text-xs">
               {captionLines(result).map((l, i) => (
-                <p key={i} className={i === 0 ? "font-semibold text-sm" : ""}>
+                <p key={i} className={i === 0 ? "text-sm font-semibold text-neutral-950 dark:text-white" : ""}>
                   {l}
                 </p>
               ))}
-              <p className="text-[11px] opacity-80">{result.label}</p>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">{result.label}</p>
             </figcaption>
-            <p className="text-[10px] leading-snug opacity-75">{caveat}</p>
+            <p className="text-[10px] leading-snug text-neutral-500">{caveat}</p>
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => void download()}
-                className="inline-flex items-center gap-1 rounded-md bg-slate-900 text-white dark:bg-amber-100 dark:text-slate-900 px-2.5 py-1.5 text-xs"
+                className="hud-btn hud-btn-active"
               >
-                <Download className="h-3.5 w-3.5" /> Download
+                <Download aria-hidden="true" className="h-3.5 w-3.5" /> Download
               </button>
               <button
                 type="button"
                 onClick={() => {
                   void navigator.clipboard?.writeText(window.location.href).then(() => setCopied(true));
                 }}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-400 dark:border-amber-800 px-2.5 py-1.5 text-xs"
+                className="hud-btn border border-black/10 dark:border-white/10"
               >
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
+                {copied ? <Check aria-hidden="true" className="h-3.5 w-3.5" /> : <Link2 aria-hidden="true" className="h-3.5 w-3.5" />}
                 {copied ? "Link copied" : "Copy link"}
               </button>
             </div>

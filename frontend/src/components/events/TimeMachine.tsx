@@ -66,41 +66,41 @@ export function TimeMachine({
   return (
     <section
       aria-label="Event time machine"
-      className="w-full sm:w-[380px] max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl shadow-2xl"
+      className="hud-glass flex max-h-[60vh] w-full flex-col overflow-hidden rounded-[20px] sm:w-[380px]"
     >
-      <header className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-slate-200 dark:border-slate-800">
+      <header className="hud-divider flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
         <div className="flex items-center gap-2 min-w-0">
           {active && (
-            <button type="button" onClick={onBack} aria-label="Back to events" className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-900">
-              <ArrowLeft className="h-4 w-4 text-slate-500" />
+            <button type="button" onClick={onBack} aria-label="Back to events" className="hud-icon-btn">
+              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
             </button>
           )}
-          <CalendarRange className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+          <CalendarRange aria-hidden="true" className="h-4 w-4 shrink-0 text-neutral-500" />
+          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-white">
             {active ? active.event.title : "Ocean events"}
           </h2>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close events" className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-900">
-          <X className="h-4 w-4 text-slate-500" />
+        <button type="button" onClick={onClose} aria-label="Close events" className="hud-icon-btn">
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </header>
 
       {!active && (
-        <div className="p-3 space-y-2">
-          {isLoading && <p className="text-xs text-slate-500">Loading events…</p>}
+        <div className="min-h-0 space-y-2 overflow-y-auto overscroll-contain p-3">
+          {isLoading && <p className="text-xs text-neutral-500">Loading events…</p>}
           {isError && <p className="text-xs text-red-600 dark:text-red-300">Couldn&apos;t load events. Try again later.</p>}
           {!isLoading && !isError && events.length === 0 && (
-            <p className="text-xs text-slate-500">No events are available yet.</p>
+            <p className="text-xs text-neutral-500">No events are available yet.</p>
           )}
           {events.map((e) => (
             <button
               key={e.id}
               type="button"
               onClick={() => onOpen(e, "before", { pickDepth: true })}
-              className="block w-full text-left rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-2 hover:border-cyan-400 hover:bg-cyan-50/60 dark:hover:bg-cyan-950/30"
+              className="block w-full rounded-2xl bg-black/[0.03] px-3.5 py-2.5 text-left ring-1 ring-inset ring-black/[0.05] transition-colors hover:bg-black/[0.06] dark:bg-white/[0.04] dark:ring-white/[0.07] dark:hover:bg-white/[0.08]"
             >
-              <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{e.title}</p>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              <p className="text-sm font-medium text-neutral-950 dark:text-white">{e.title}</p>
+              <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
                 {formatDate(e.start)} – {formatDate(e.end)} · {e.source_name}
               </p>
             </button>
@@ -145,8 +145,8 @@ function EventCompare({
   const dayIndex = Math.max(0, days.indexOf(currentDate));
 
   return (
-    <div className="p-3 space-y-3">
-      <div role="tablist" aria-label="Event phase" className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 dark:bg-slate-900 p-1">
+    <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain p-4">
+      <div role="tablist" aria-label="Event phase" className="grid grid-cols-3 gap-0.5 rounded-2xl bg-black/[0.04] p-0.5 dark:bg-white/[0.05]">
         {PHASES.map((p) => {
           const d = phaseDate(event, p.id);
           const ok = isDateInData(d, meta);
@@ -158,21 +158,21 @@ function EventCompare({
               aria-selected={phase === p.id}
               onClick={() => onPhase(p.id)}
               title={ok ? undefined : "This date is not in the data on this site yet"}
-              className={`rounded-md px-2 py-1.5 text-xs ${
+              className={`rounded-[14px] px-2 py-1.5 text-xs transition-colors ${
                 phase === p.id
-                  ? "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow font-semibold"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  ? "bg-neutral-900 font-semibold text-white shadow-sm dark:bg-white dark:text-neutral-950"
+                  : "text-neutral-600 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white"
               } ${ok ? "" : "opacity-60"}`}
             >
               <span className="block">{p.label}</span>
-              <span className="block text-[10px] font-normal">{formatDate(d)}</span>
+              <span className="block text-[10px] font-normal opacity-70">{formatDate(d)}</span>
             </button>
           );
         })}
       </div>
 
       {!phaseInData && (
-        <p className="text-[11px] rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-900 dark:text-amber-100 px-2 py-1.5">
+        <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-[11px] text-amber-900 ring-1 ring-inset ring-amber-500/25 dark:text-amber-100">
           {formatDate(phaseDate(event, phase))} is not in the data on this site yet, so the map stays on{" "}
           {formatDate(currentDate)}. The map has moved to the event area.
         </p>
@@ -180,7 +180,7 @@ function EventCompare({
 
       {phase === "during" && days.length > 1 && (
         <div className="space-y-1">
-          <label htmlFor="event-day" className="text-[11px] text-slate-600 dark:text-slate-400">
+          <label htmlFor="event-day" className="hud-label">
             Day {dayIndex + 1} of {days.length}: {formatDate(days[dayIndex])}
           </label>
           <input
@@ -190,29 +190,30 @@ function EventCompare({
             max={days.length - 1}
             value={dayIndex}
             onChange={(e) => onSetDate(days[Number(e.target.value)])}
-            className="w-full accent-cyan-600"
+            className="hud-range"
+            style={{ "--fill": `${days.length > 1 ? (dayIndex / (days.length - 1)) * 100 : 0}%` } as React.CSSProperties}
           />
         </div>
       )}
 
-      <p className="text-xs text-slate-700 dark:text-slate-300">{event.summary}</p>
+      <p className="text-xs leading-relaxed text-neutral-700 dark:text-neutral-300">{event.summary}</p>
 
       <a
         href={event.source_url}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-[11px] text-cyan-700 dark:text-cyan-400 underline"
+        className="inline-flex items-center gap-1 text-[11px] text-cyan-700 underline underline-offset-2 dark:text-cyan-300"
       >
-        Source: {event.source_name} <ExternalLink className="h-3 w-3" />
+        Source: {event.source_name} <ExternalLink aria-hidden="true" className="h-3 w-3" />
       </a>
 
       {onExplain && (
         <button
           type="button"
           onClick={() => onExplain(event)}
-          className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium px-3 py-2"
+          className="hud-btn w-full bg-cyan-400 font-semibold text-neutral-950 hover:bg-cyan-300 hover:text-neutral-950 dark:text-neutral-950 dark:hover:bg-cyan-300 dark:hover:text-neutral-950"
         >
-          <Sparkles className="h-3.5 w-3.5" /> Explain what changed
+          <Sparkles aria-hidden="true" className="h-3.5 w-3.5" /> Explain what changed
         </button>
       )}
     </div>
