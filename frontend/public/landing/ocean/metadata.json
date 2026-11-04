@@ -1,0 +1,13 @@
+{
+  "synthetic": true,
+  "label": "AI-generated illustration; not observational data.",
+  "purpose": "Decorative landing-page artwork, never a source of scientific values",
+  "tool": "Built-in imagegen",
+  "owner_approval": "2026-11-05: clean background and fish asset generation and commits explicitly approved",
+  "prompts": {
+    "light": "Use case: precise-object-edit. Create a clean background plate for a photorealistic underwater website from this image. Preserve the exact widescreen composition, reef rocks and warm golden corals bottom left and right, thin tethered scientific float at 23% from left, turquoise water and sunlight rippling on underside of surface across top. Remove EVERY text, logo, navbar, button and all fish everywhere; seamlessly restore clear water behind them. No text, no UI, no fish. Preserve the cinematic realistic underwater lighting, empty center for separately rendered website text. Landscape 16:9. This is decorative illustration, not scientific data.",
+    "dark": "Use case: lighting-weather. This is the light-mode background plate. Make its exact spatially aligned DARK MODE counterpart. Change ONLY lighting and color grade, every coral, rock, surface ripple and float stays in exactly the same pixel position and shape. Deep near-black blue teal water, cool cyan glints on water surface, narrow subdued cyan light shafts, warm dim golden coral edges and float light remain. Dramatic dark moody underwater cinematic photograph, same wide 16:9 composition. No fish, no letters, no text, no logos, no UI.",
+    "fish": "Use case: photorealistic-natural. Asset type: transparent fish sprite for cinematic underwater scene. A SINGLE realistic slender bluefin trevally fish, horizontal side profile facing LEFT, head on LEFT and forked tail on RIGHT. Dark teal silvery body, subtle narrow cyan and golden sunlight along top edge, shadowed underside. Entire fish centered, isolated on genuinely transparent background, no shadow, no water, no text, no other fish. Landscape canvas wide 3:1, fish fills canvas with small transparent margins. Photorealistic silhouette like distant swimming ocean fish, not cartoon, not shiny product render."
+  },
+  "geometry": "Backgrounds share a 1672:941 coordinate space. Fish positions are decorative, not observations."
+}

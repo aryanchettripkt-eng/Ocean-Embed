@@ -2,10 +2,31 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const focusExplorer = useRef(false);
+  useEffect(() => {
+    const requestFocus = () => { focusExplorer.current = true; };
+    window.addEventListener("oceanscope:focus-explorer", requestFocus);
+    return () => window.removeEventListener("oceanscope:focus-explorer", requestFocus);
+  }, []);
+  useEffect(() => {
+    if (pathname !== "/explore" || !focusExplorer.current) return;
+    const focus = () => {
+      const heading = document.getElementById("explorer-heading");
+      if (!heading) return;
+      heading.focus();
+      focusExplorer.current = false;
+      observer.disconnect();
+    };
+    const observer = new MutationObserver(focus);
+    observer.observe(document.body, { childList: true, subtree: true });
+    focus();
+    const timer = setTimeout(() => observer.disconnect(), 10000);
+    return () => { observer.disconnect(); clearTimeout(timer); };
+  }, [pathname]);
   const [queryClient] = useState(
     () =>
       new QueryClient({

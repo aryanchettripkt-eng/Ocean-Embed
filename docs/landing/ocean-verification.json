@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-05",
+  "environment": "Isolated mock-backed Next.js production build; Chromium; Lighthouse mobile default profile",
+  "lighthouse_version": "13.6.0",
+  "scores": {
+    "performance": 95,
+    "accessibility": 100,
+    "best-practices": 96,
+    "seo": 100
+  },
+  "metrics": {
+    "lcp_ms": 3005.7033,
+    "cls": 0.00001328748658332952,
+    "tbt_ms": 27.5
+  },
+  "checks": {
+    "typecheck": "pass",
+    "lint": "pass",
+    "vitest": "110 passed",
+    "production_build": "pass",
+    "playwright": "37 passed"
+  },
+  "build": {
+    "landing_specific_kb": 11.2,
+    "initial_route_kb": 143,
+    "initial_route_gzip_bytes": 149613,
+    "deferred_animation_gzip_bytes": 166562,
+    "total_landing_gzip_bytes": 316175,
+    "excluded_development_mock_chunks": [
+      "static/chunks/202.69e2fb90fa73bf00.js",
+      "static/chunks/624.8af99b1f16e9153f.js"
+    ]
+  },
+  "initial_image_bytes": {
+    "desktop": 206646,
+    "mobile": 114856
+  },
+  "notes": [
+    "Lighthouse is a local lab measurement, not a field-performance guarantee.",
+    "Best-practices loses four points to a first-load mock metadata connection error; no real model API was called.",
+    "The existing shared dev server hit a Next.js clientReferenceManifest cache error; final checks ran against an isolated copy at port 3003.",
+    "Node on this machine is 26.13.0; project target remains Node 22. Unit tests pass with existing jsdom canvas/Node localStorage warnings."
+  ]
+}

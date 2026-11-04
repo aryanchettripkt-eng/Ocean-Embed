@@ -73,6 +73,7 @@ export function ExploreLink({
     }
 
     e.preventDefault();
+    window.dispatchEvent(new Event("oceanscope:focus-explorer"));
 
     const prefersReducedMotion =
       typeof window !== "undefined" &&
@@ -96,6 +97,7 @@ export function ExploreLink({
     <a
       href={targetHref}
       className={`${styles.ctaButton} ${className}`}
+      data-micro="cta"
       onClick={handleClick}
       onMouseEnter={handleWarm}
       onFocus={handleWarm}
@@ -103,8 +105,7 @@ export function ExploreLink({
     >
       {children ?? (
         <>
-          <span>EXPLORE THE OCEAN</span>
-          <span aria-hidden="true">→</span>
+          <span>Explore the Ocean</span>
         </>
       )}
     </a>

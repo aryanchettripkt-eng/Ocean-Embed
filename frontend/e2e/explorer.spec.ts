@@ -37,6 +37,7 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7, PLAN_LANDING §8)"
   });
 
   test("toggles theme between dark and light modes", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/explore");
     const themeBtn = page.locator('button[aria-label="Toggle dark/light theme"]');
     await expect(themeBtn).toBeVisible({ timeout: 15000 });

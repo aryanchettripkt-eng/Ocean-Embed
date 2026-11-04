@@ -1,68 +1,17 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useTheme } from "../../lib/use-theme";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Waves, BarChart3, Info, ExternalLink, Sun, Moon, Compass } from "lucide-react";
 import { useMeta } from "../../lib/api/hooks";
 import { Banner } from "./Banner";
 
-function readStoredTheme(): "dark" | "light" | null {
-  try {
-    if (typeof window !== "undefined" && typeof window.localStorage?.getItem === "function") {
-      const val = window.localStorage.getItem("theme");
-      return val === "dark" || val === "light" ? val : null;
-    }
-  } catch {
-    // Ignore storage unavailability
-  }
-  return null;
-}
-
-function writeStoredTheme(next: "dark" | "light"): void {
-  try {
-    if (typeof window !== "undefined" && typeof window.localStorage?.setItem === "function") {
-      window.localStorage.setItem("theme", next);
-    }
-  } catch {
-    // Ignore storage unavailability
-  }
-}
-
 export function Header() {
   const pathname = usePathname();
   const { data: meta } = useMeta();
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-
-  useEffect(() => {
-    const saved = readStoredTheme();
-    const initial = saved ?? "dark";
-    setTheme(initial);
-    if (initial === "dark") {
-      document.documentElement.classList.add("dark");
-      document.documentElement.classList.remove("light");
-    } else {
-      document.documentElement.classList.remove("dark");
-      document.documentElement.classList.add("light");
-    }
-    const metaScheme = document.querySelector('meta[name="color-scheme"]');
-    if (metaScheme) metaScheme.setAttribute("content", initial);
-  }, []);
-
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    writeStoredTheme(next);
-    if (next === "dark") {
-      document.documentElement.classList.add("dark");
-      document.documentElement.classList.remove("light");
-    } else {
-      document.documentElement.classList.remove("dark");
-      document.documentElement.classList.add("light");
-    }
-    const metaScheme = document.querySelector('meta[name="color-scheme"]');
-    if (metaScheme) metaScheme.setAttribute("content", next);
-  };
+  const { theme, toggleTheme } = useTheme();
 
   const navLinks = [
     { href: "/explore", label: "Explorer", icon: Waves, phoneOnly: false },

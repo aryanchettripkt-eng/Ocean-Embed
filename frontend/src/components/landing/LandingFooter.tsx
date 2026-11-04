@@ -13,6 +13,7 @@ export function LandingFooter() {
             Copernicus Marine Service (DUACS SLA, OSTIA SST, SSS), ECMWF (ERA5 surface heat fluxes, 10 m winds & precipitation),
             PO.DAAC (OSCAR currents), NOAA (WOA23 climatology, climate indices), and GEBCO bathymetry.
           </p>
+          <p className={styles.artworkCredit}>AI-generated illustration; not observational data.</p>
           <p style={{ marginTop: "0.5rem", opacity: 0.8 }}>
             Built for &lt;hackathon name&gt;
             {/* TODO(Aryan): Replace with actual hackathon name once confirmed */}
@@ -22,16 +23,16 @@ export function LandingFooter() {
         <nav aria-label="Landing footer navigation">
           <ul className={styles.footerLinks}>
             <li>
-              <Link href="/explore">Explorer</Link>
+              <Link prefetch={false} href="/explore">Explorer</Link>
             </li>
             <li>
-              <Link href="/validation">Validation</Link>
+              <Link prefetch={false} href="/validation">Validation</Link>
             </li>
             <li>
-              <Link href="/about#method">Methodology</Link>
+              <Link prefetch={false} href="/about#method">Methodology</Link>
             </li>
             <li>
-              <Link href="/about">About & Licenses</Link>
+              <Link prefetch={false} href="/about">About & Licenses</Link>
             </li>
             <li>
               {/* TODO(Aryan): Replace '#' with actual GitHub repository URL */}
