@@ -401,7 +401,7 @@ class ChatMessage(BaseModel):
 class ChatContext(BaseModel):
     """Current explorer UI state passed as context to the assistant."""
 
-    date: str | None = None
+    date: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     depth_m: float | None = None
     lat: float | None = None
     lon: float | None = None

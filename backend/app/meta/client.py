@@ -43,6 +43,8 @@ class ChatTurn:
 
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # (prompt_tokens, completion_tokens) when the API reports them; used by the budget.
+    usage: tuple[int, int] | None = None
 
 
 @dataclass
@@ -246,7 +248,8 @@ class HttpMetaModelClient:
         if resp.status_code != 200:
             raise MetaUpstreamError(f"Meta API returned HTTP {resp.status_code}")
         try:
-            message = resp.json()["choices"][0]["message"]
+            body = resp.json()
+            message = body["choices"][0]["message"]
             calls = [
                 ToolCall(
                     id=str(c["id"]),
@@ -256,9 +259,23 @@ class HttpMetaModelClient:
                 for c in message.get("tool_calls") or []
             ]
             content = message.get("content")
-            return ChatTurn(content=str(content) if content else None, tool_calls=calls)
+            return ChatTurn(
+                content=str(content) if content else None,
+                tool_calls=calls,
+                usage=_read_usage(body.get("usage")),
+            )
         except (ValueError, KeyError, IndexError, TypeError):
             raise MetaUpstreamError("Meta API returned an unreadable response") from None
+
+
+def _read_usage(usage: Any) -> tuple[int, int] | None:
+    """OpenAI-style `usage` -> (prompt_tokens, completion_tokens), or None if absent/odd."""
+    if not isinstance(usage, dict):
+        return None
+    pin, pout = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if isinstance(pin, int) and isinstance(pout, int) and pin >= 0 and pout >= 0:
+        return pin, pout
+    return None
 
 
 class _RetryableStatus(Exception):
@@ -471,6 +488,14 @@ def build_client() -> MetaModelClient:
     """Create the configured client. Call only when `chat_available()` is true."""
     if settings.META_CLIENT == "mock":
         return MockMetaModelClient()
+    assert settings.META_API_BASE_URL and settings.META_API_KEY
+    from app.meta.budget import BudgetedClient, get_budget
+
+    # Every real call goes through the credit budget (app/meta/budget.py); no bypass.
+    return BudgetedClient(_http_client(), get_budget())
+
+
+def _http_client() -> HttpMetaModelClient:
     assert settings.META_API_BASE_URL and settings.META_API_KEY
     return HttpMetaModelClient(
         base_url=settings.META_API_BASE_URL,

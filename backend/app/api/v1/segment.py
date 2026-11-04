@@ -44,7 +44,9 @@ _cache_lock = threading.Lock()
 def get_limiter() -> FeatureLimiter:
     global _limiter
     if _limiter is None:
-        _limiter = FeatureLimiter(settings.SEGMENT_RATE_LIMIT, settings.SEGMENT_DAILY_CAP)
+        _limiter = FeatureLimiter(
+            settings.SEGMENT_RATE_LIMIT, settings.SEGMENT_DAILY_CAP, settings.SEGMENT_IP_DAILY_CAP
+        )
     return _limiter
 
 
