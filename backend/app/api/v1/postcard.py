@@ -35,7 +35,11 @@ _limiter: FeatureLimiter | None = None
 def get_limiter() -> FeatureLimiter:
     global _limiter
     if _limiter is None:
-        _limiter = FeatureLimiter(settings.POSTCARD_RATE_LIMIT, settings.POSTCARD_DAILY_CAP)
+        _limiter = FeatureLimiter(
+            settings.POSTCARD_RATE_LIMIT,
+            settings.POSTCARD_DAILY_CAP,
+            settings.POSTCARD_IP_DAILY_CAP,
+        )
     return _limiter
 
 

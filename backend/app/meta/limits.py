@@ -1,7 +1,8 @@
 """Per-feature rate limits and daily caps (PRD_BACKEND §4.12, §6.5).
 
 In-process and per worker, which matches the single-worker Render service. Per-IP limit
-first (sliding window), then a global cap per UTC day.
+first (sliding window), then a per-IP cap per UTC day, then a global cap per UTC day. These
+limit requests; the credit budget in `app/meta/budget.py` limits money.
 """
 
 from __future__ import annotations
@@ -38,11 +39,14 @@ class FeatureLimiter:
         self,
         rate: str,
         daily_cap: int,
+        ip_daily_cap: int | None = None,
         clock: Callable[[], float] = time.monotonic,
         today: Callable[[], str] = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     ) -> None:
         self.limit, self.window = parse_rate(rate)
         self.daily_cap = daily_cap
+        self.ip_daily_cap = ip_daily_cap
+        self._ip_day_counts: dict[str, int] = {}
         self._clock = clock
         self._today = today
         self._hits: dict[str, deque[float]] = {}
@@ -62,10 +66,15 @@ class FeatureLimiter:
             day = self._today()
             if day != self._day:
                 self._day, self._day_count = day, 0
+                self._ip_day_counts = {}
                 # Drop idle IPs once a day so the table does not grow without bound.
                 self._hits = {k: v for k, v in self._hits.items() if v}
                 hits = self._hits.setdefault(ip, deque())
+            ip_count = self._ip_day_counts.get(ip, 0)
+            if self.ip_daily_cap is not None and ip_count >= self.ip_daily_cap:
+                raise APIError(429, "daily_cap_reached", "Daily limit reached; try again tomorrow")
             if self._day_count >= self.daily_cap:
                 raise APIError(429, "daily_cap_reached", "Daily limit reached; try again tomorrow")
             self._day_count += 1
+            self._ip_day_counts[ip] = ip_count + 1
             hits.append(now)

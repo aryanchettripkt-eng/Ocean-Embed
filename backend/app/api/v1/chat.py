@@ -28,7 +28,9 @@ _limiter: FeatureLimiter | None = None
 def get_limiter() -> FeatureLimiter:
     global _limiter
     if _limiter is None:
-        _limiter = FeatureLimiter(settings.CHAT_RATE_LIMIT, settings.CHAT_DAILY_CAP)
+        _limiter = FeatureLimiter(
+            settings.CHAT_RATE_LIMIT, settings.CHAT_DAILY_CAP, settings.CHAT_IP_DAILY_CAP
+        )
     return _limiter
 
 
