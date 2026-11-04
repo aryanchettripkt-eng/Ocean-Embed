@@ -243,3 +243,44 @@ def test_http_payload_uses_max_completion_tokens_and_low_reasoning() -> None:
     client.chat([{"role": "user", "content": "hi"}], None, max_tokens=2048, timeout_s=5)
     assert seen[0]["max_completion_tokens"] == 2048 and "max_tokens" not in seen[0]
     assert seen[0]["reasoning_effort"] == "low"
+
+
+# -- preamble-only replies (first real Muse Spark run) ----------------------------------------
+
+
+def test_preamble_detection() -> None:
+    from app.meta.guide import is_preamble
+
+    assert is_preamble("I'll check the water temperature at 100 m for you.")
+    assert is_preamble("Let me look that up.")
+    assert not is_preamble("I can't find Atlantis in the data region.")
+    assert not is_preamble("The surface is 28.1 °C (synthetic data).")
+    assert not is_preamble(None)
+
+
+def test_preamble_only_reply_gets_one_nudge() -> None:
+    from app.meta.client import ChatTurn
+    from app.meta.guide import NUDGE, run_guide
+    from app.schemas.models import ChatRequest
+
+    seen: list[list[dict]] = []
+
+    class Client:
+        def __init__(self) -> None:
+            self.turns = [
+                ChatTurn(content="I'll check the dataset for you."),
+                ChatTurn(content="I'll check again."),
+                ChatTurn(content="should not be reached"),
+            ]
+
+        def chat(self, messages, tools, *, max_tokens, timeout_s):  # type: ignore[no-untyped-def]
+            seen.append(list(messages))
+            return self.turns.pop(0)
+
+    from tests.guide_eval.harness import make_store
+
+    req = ChatRequest.model_validate({"messages": [{"role": "user", "content": "hi"}]})
+    res = run_guide(req, Client(), make_store(), events=[])
+    assert len(seen) == 2  # nudged once, then the second preamble is the answer
+    assert seen[1][-1] == {"role": "user", "content": NUDGE}
+    assert res.answer == "I'll check again."

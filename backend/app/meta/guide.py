@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -53,6 +54,23 @@ class GuideResult:
         self.rounds = rounds
 
 
+NUDGE = "Please make the tool calls now, then answer."
+_PREAMBLE_RE = re.compile(
+    r"^\s*(?:okay,?\s*|sure,?\s*)?(?:i'?ll|i will|i'?m going to|let me)\s+"
+    r"(?:first\s+|now\s+|quickly\s+)?"
+    r"(?:check|look|fetch|get|pull|query|find|see|grab|retrieve)\b",
+    re.I,
+)
+
+
+def is_preamble(content: str | None) -> bool:
+    """True for a short reply that only promises to look something up ("I'll check...")."""
+    if not content:
+        return False
+    text = content.strip()
+    return len(text) <= 300 and bool(_PREAMBLE_RE.match(text))
+
+
 def run_guide(
     request: ChatRequest,
     client: MetaModelClient,
@@ -84,6 +102,7 @@ def run_guide(
     ui_actions: list[UIAction] = []
     answer: str | None = None
     rounds = 0
+    nudged = False
 
     while True:
         remaining = deadline - clock()
@@ -91,6 +110,13 @@ def run_guide(
             raise MetaUpstreamError("Guide request timed out")
         tools = TOOL_SCHEMAS if rounds < MAX_ROUNDS else None
         turn = client.chat(messages, tools, max_tokens=MAX_OUTPUT_TOKENS, timeout_s=remaining)
+        if not turn.tool_calls and tools is not None and not nudged and is_preamble(turn.content):
+            # Muse Spark sometimes answers "I'll check the temperature..." and stops without
+            # calling a tool. Ask once to make the calls; a second preamble is the answer.
+            nudged = True
+            messages.append({"role": "assistant", "content": turn.content})
+            messages.append({"role": "user", "content": NUDGE})
+            continue
         if not turn.tool_calls or tools is None:
             answer = turn.content
             break
