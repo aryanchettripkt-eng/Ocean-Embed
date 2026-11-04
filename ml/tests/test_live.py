@@ -459,3 +459,42 @@ def test_cds_fetch_drops_newest_days_cds_refuses(
             (80.0, 95.0, 5.0, 22.0),
             tmp_path / "again",
         )
+
+
+def test_arco_fetch_makes_daily_means_and_nan_past_the_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ERA5 from the ARCO copy: hourly to daily means per month, NaN where hours are missing."""
+    from oceanscope_ml.data import build_store
+
+    hours = pd.date_range("2024-09-28", "2024-10-03 23:00", freq="h")  # ends 3 Oct
+    lat = np.array([7.0, 6.75, 6.5], dtype=np.float32)
+    lon = np.array([80.0, 80.25], dtype=np.float32)
+    fake = xr.Dataset(
+        {
+            name: (("time", "latitude", "longitude"), np.ones((len(hours), 3, 2), np.float32))
+            for name in build_store.ARCO_ERA5_VARIABLES
+        },
+        coords={"time": hours, "latitude": lat, "longitude": lon},
+    )
+    opened: list[str] = []
+
+    def fake_open(url: str, **kwargs: Any) -> xr.Dataset:
+        opened.append(url)
+        return fake
+
+    monkeypatch.setattr(xr, "open_zarr", fake_open)
+    ds = live_inputs._fetch_arco_daily(
+        pd.Timestamp("2024-09-29"), pd.Timestamp("2024-10-04"), (80.0, 80.25, 6.5, 7.0), tmp_path
+    )
+    assert ds is not None
+    assert list(ds.data_vars) == [v[0] for v in build_store.ARCO_ERA5_VARIABLES.values()]
+    assert [str(t)[:10] for t in ds["time"].values][0] == "2024-09-29" and ds.sizes["time"] == 6
+    valid = np.isfinite(ds["u10"].values).all(axis=(1, 2))
+    assert valid.tolist() == [True, True, True, True, True, False]  # 4 Oct has no hours
+    assert len(list(tmp_path.glob("era5_arco_*.nc"))) == 2  # one file per month
+    # A second call reads the cached files and does not open the store again.
+    live_inputs._fetch_arco_daily(
+        pd.Timestamp("2024-09-29"), pd.Timestamp("2024-10-04"), (80.0, 80.25, 6.5, 7.0), tmp_path
+    )
+    assert len(opened) == 1

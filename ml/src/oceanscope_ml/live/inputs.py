@@ -49,7 +49,7 @@ PRODUCT_VARS: dict[str, tuple[str, ...]] = {
     "currents": ("u_current", "v_current"),
     "era5": ("u_wind", "v_wind", "wind_stress_curl", "net_heat_flux", "precip"),
 }
-SERVICES = ("copernicusmarine", "earthdata", "cds")
+SERVICES = ("copernicusmarine", "earthdata", "cds", "arco")
 # Newest ERA5T days to give up on, one at a time, when CDS refuses a request.
 CDS_MAX_DROPPED_DAYS = 3
 
@@ -272,6 +272,8 @@ def fetch_remote(
         return _fetch_earthdata(spec, start, end, bbox, scratch / product)
     if service == "cds":
         return _fetch_cds_daily(spec, start, end, bbox, scratch / product)
+    if service == "arco":
+        return _fetch_arco_daily(start, end, bbox, scratch / product)
     raise ValueError(f"Unknown service {service!r} for {product}")
 
 
@@ -377,6 +379,56 @@ def _fetch_cds_daily(
         return None
     time_dim = "valid_time" if "valid_time" in parts[0].dims else "time"
     ds = xr.concat(parts, dim=time_dim) if len(parts) > 1 else parts[0]
+    ds.attrs["daily_statistic"] = "daily_mean"
+    ds.attrs["is_daily_mean"] = True
+    return ds
+
+
+def _fetch_arco_daily(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    bbox: tuple[float, float, float, float],
+    out_dir: Path,
+) -> xr.Dataset | None:
+    """ERA5 daily means from Google's public ARCO ERA5 copy, the source the training store
+    used (``build_store.stream_era5_arco``). No CDS queue. ARCO also holds ERA5T up to its
+    ``valid_time_stop_era5t`` attribute (about 5-6 days behind, like CDS), so it serves the
+    daily live run too. Days past its end come back NaN and the coverage check skips them.
+    """
+    from oceanscope_ml.data.build_store import (
+        ARCO_ERA5_URL,
+        ARCO_ERA5_VARIABLES,
+        _load_with_retries,
+        hourly_to_daily_mean,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lon_min, lon_max, lat_min, lat_max = bbox
+    src: xr.Dataset | None = None
+    parts = []
+    days_all = pd.date_range(start.normalize(), end.normalize(), freq="D")
+    for _, days in pd.Series(days_all, index=days_all).groupby([days_all.year, days_all.month]):
+        days = pd.DatetimeIndex(days.values)
+        target = out_dir / f"era5_arco_{days[0].date()}_{days[-1].date()}.nc"
+        if not (target.exists() and target.stat().st_size > 0):
+            if src is None:
+                src = xr.open_zarr(ARCO_ERA5_URL, chunks=None, consolidated=True, zarr_format=2)
+            logger.info("ARCO ERA5 %s..%s", days[0].date(), days[-1].date())
+            # Include 00 UTC of the next day: it closes the last day's accumulations.
+            subset = src[list(ARCO_ERA5_VARIABLES)].sel(
+                time=slice(days[0], days[-1] + pd.Timedelta(days=1)),
+                latitude=slice(lat_max + 1.0, lat_min - 1.0),
+                longitude=slice(lon_min - 1.0, lon_max + 1.0),
+            )
+            hourly = _load_with_retries(subset, f"ARCO ERA5 {days[0].date()}")
+            for long_name, (_short, accum) in ARCO_ERA5_VARIABLES.items():
+                hourly[long_name].attrs["is_accumulation"] = accum
+            hourly = hourly.rename({k: v[0] for k, v in ARCO_ERA5_VARIABLES.items()})
+            hourly_to_daily_mean(hourly, days).to_netcdf(target)
+        parts.append(xr.open_dataset(target))
+    if not parts:
+        return None
+    ds = xr.concat(parts, dim="time") if len(parts) > 1 else parts[0]
     ds.attrs["daily_statistic"] = "daily_mean"
     ds.attrs["is_daily_mean"] = True
     return ds
