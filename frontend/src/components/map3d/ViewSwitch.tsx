@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Grip, Grid2x2, Layers, Play, RotateCw, Sparkles, Map as MapIcon, Waves } from "lucide-react";
 import type { GridStyle } from "../../lib/url-state";
 import { isWebGL2Supported } from "./webglUtils";
+import { Presence, Spin } from "../common/Motion";
 
 interface ViewSwitchProps {
   view: "map" | "3d";
@@ -76,7 +77,7 @@ export function ViewSwitch({
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* 3D-only options float just above the main toolbar */}
-      {view === "3d" && (
+      <Presence show={view === "3d"} from="bottom" className="max-w-full">
         <div
           role="group"
           aria-label="3D options"
@@ -91,7 +92,9 @@ export function ViewSwitch({
               title="Automatically rotate around the ocean block"
             >
               {isTouring ? (
-                <RotateCw aria-hidden="true" className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
+                <Spin>
+                  <RotateCw aria-hidden="true" className="h-3.5 w-3.5" />
+                </Spin>
               ) : (
                 <Play aria-hidden="true" className="h-3.5 w-3.5" />
               )}
@@ -135,7 +138,7 @@ export function ViewSwitch({
             </button>
           )}
         </div>
-      )}
+      </Presence>
 
       {/* Main toolbar: view, grid style, then the page's tools */}
       <div

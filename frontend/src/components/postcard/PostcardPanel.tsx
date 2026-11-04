@@ -13,6 +13,7 @@ import { Check, Download, Link2, X } from "lucide-react";
 import { ApiError, apiClient, resolveApiUrl, type PostcardResponse } from "../../lib/api/client";
 import { formatDate, formatDepth, formatTemp } from "../../lib/format";
 import { TypingDots } from "../common/TypingDots";
+import { Pulse } from "../common/Motion";
 
 export const POSTCARD_TIMEOUT_MS = 45_000;
 
@@ -153,7 +154,7 @@ export function PostcardPanel({ date, depth, eventId, eventTitle, caveat, onClos
         {pending && (
           <div role="status" className="space-y-2">
             <div className="relative h-40 overflow-hidden rounded-xl bg-[#f5efe2] p-2 dark:bg-[#24201a]">
-              <div className="h-full rounded-lg bg-white/70 motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] dark:bg-amber-100/10" />
+              <Pulse className="block h-full rounded-lg bg-white/70 dark:bg-amber-100/10" />
             </div>
             <div className="flex items-center gap-2.5 text-xs">
               <TypingDots label="Printing" className="text-neutral-500" />

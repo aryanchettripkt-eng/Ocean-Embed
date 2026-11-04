@@ -4,6 +4,7 @@
  * 20°C isotherm line, soft shadow, perimeter outline, and exploded layers mode.
  */
 
+import { gsap, DURATION } from "../../lib/motion";
 import type { CustomLayerInterface, CustomRenderMethod, Map as MapLibreMap } from "maplibre-gl";
 import type { MapResponse, SectionResponse } from "../../lib/api/client";
 import {
@@ -79,7 +80,8 @@ export class CutawayLayer implements CustomLayerInterface {
   private currentZ = 0.0;
   private targetZ = 0.0;
   private heightMercator = 0.05; // 1/3 of region width
-  private animating = false;
+  /** GSAP tween easing the top face to a new depth (the "dive"). */
+  private diveTween: gsap.core.Tween | null = null;
 
   private smoothed = false;
   private exploded = false;
@@ -139,11 +141,20 @@ export class CutawayLayer implements CustomLayerInterface {
     this.currentDepth_m = depth_m;
     this.targetZ = depthToZ(depth_m, this.maxDepth_m, this.heightMercator);
 
+    this.diveTween?.kill();
+    this.diveTween = null;
     if (immediate) {
       this.currentZ = this.targetZ;
-      this.animating = false;
     } else {
-      this.animating = true;
+      this.diveTween = gsap.to(this, {
+        currentZ: this.targetZ,
+        duration: DURATION.dive,
+        ease: "power2.out",
+        onUpdate: () => this.map?.triggerRepaint(),
+        onComplete: () => {
+          this.diveTween = null;
+        },
+      });
     }
     this.map?.triggerRepaint();
   }
@@ -258,18 +269,6 @@ export class CutawayLayer implements CustomLayerInterface {
   render: CustomRenderMethod = (gl, matrix) => {
     if (!this.gl || !(gl instanceof WebGL2RenderingContext) || !this.map) return;
     this.latestMatrix = Array.from(matrix as unknown as ArrayLike<number>);
-
-    // Update dive easing
-    if (this.animating) {
-      const diff = this.targetZ - this.currentZ;
-      if (Math.abs(diff) < 0.0001) {
-        this.currentZ = this.targetZ;
-        this.animating = false;
-      } else {
-        this.currentZ += diff * 0.15; // smooth ~300ms ease
-        this.map.triggerRepaint();
-      }
-    }
 
     this.gl.enable(this.gl.DEPTH_TEST);
     this.gl.depthFunc(this.gl.LEQUAL);
@@ -826,6 +825,8 @@ export class CutawayLayer implements CustomLayerInterface {
   }
 
   onRemove(): void {
+    this.diveTween?.kill();
+    this.diveTween = null;
     if (!this.gl) return;
 
     if (this.topFaceProgram) this.gl.deleteProgram(this.topFaceProgram);

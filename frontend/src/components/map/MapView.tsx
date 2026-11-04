@@ -9,6 +9,7 @@ import type { GridStyle } from "../../lib/url-state";
 import type { WallId } from "../map3d/depthScale";
 import type { CutawayLayer } from "../map3d/CutawayLayer";
 import type { CameraFocus } from "../../lib/guide/ui-actions";
+import { gsap, loopPing, prefersReducedMotion } from "../../lib/motion";
 
 export interface RegionBounds {
   lat_min: number;
@@ -173,6 +174,7 @@ export function MapView({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
   const selectionMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const selectionPingRef = useRef<gsap.core.Tween | null>(null);
   const argoMarkersRef = useRef<maplibregl.Marker[]>([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -561,15 +563,18 @@ export function MapView({
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded || view !== "3d" || !isTouring) return;
 
-    let tourRaf: number | null = null;
-
-    const rotateStep = () => {
-      const currentBearing = map.getBearing();
-      map.setBearing((currentBearing + 0.15) % 360);
-      tourRaf = requestAnimationFrame(rotateStep);
-    };
-
-    tourRaf = requestAnimationFrame(rotateStep);
+    // One full turn every 40 s (the old loop's 0.15° per frame at 60 fps), as a GSAP tween on a
+    // bearing proxy. Under reduced motion the tour doesn't spin.
+    const proxy = { bearing: map.getBearing() };
+    const tourTween = prefersReducedMotion()
+      ? null
+      : gsap.to(proxy, {
+          bearing: "+=360",
+          duration: 40,
+          ease: "none",
+          repeat: -1,
+          onUpdate: () => map.setBearing(proxy.bearing % 360),
+        });
 
     // Cancel tour on user interaction with map canvas
     const handleUserInteract = (e: any) => {
@@ -592,7 +597,7 @@ export function MapView({
     map.on("wheel", handleUserInteract);
 
     return () => {
-      if (tourRaf !== null) cancelAnimationFrame(tourRaf);
+      tourTween?.kill();
       map.off("mousedown", handleUserInteract);
       map.off("touchstart", handleUserInteract);
       map.off("wheel", handleUserInteract);
@@ -870,15 +875,18 @@ export function MapView({
   const pendingMarkerRef = useRef<maplibregl.Marker | null>(null);
   useEffect(() => {
     const map = mapInstanceRef.current;
-    pendingMarkerRef.current?.remove();
-    pendingMarkerRef.current = null;
     if (!map || !mapLoaded || !pendingPoint) return;
     const el = document.createElement("div");
     el.className = "relative flex items-center justify-center pointer-events-none";
-    el.innerHTML = `<span class="animate-ping absolute inline-flex h-10 w-10 rounded-full border-2 border-slate-900 dark:border-white opacity-70"></span>`;
-    pendingMarkerRef.current = new maplibregl.Marker({ element: el })
-      .setLngLat([pendingPoint.lon, pendingPoint.lat])
-      .addTo(map);
+    el.innerHTML = `<span data-ping class="absolute inline-flex h-10 w-10 rounded-full border-2 border-neutral-900 dark:border-white"></span>`;
+    const marker = new maplibregl.Marker({ element: el }).setLngLat([pendingPoint.lon, pendingPoint.lat]).addTo(map);
+    pendingMarkerRef.current = marker;
+    const ping = loopPing(el.querySelector("[data-ping]")!);
+    return () => {
+      ping?.kill();
+      marker.remove();
+      if (pendingMarkerRef.current === marker) pendingMarkerRef.current = null;
+    };
   }, [mapLoaded, pendingPoint]);
 
   // Update selection marker (HUD status badge pin)
@@ -892,18 +900,25 @@ export function MapView({
         el.className = "relative flex items-center justify-center cursor-pointer";
         el.setAttribute("aria-hidden", "true");
         el.innerHTML = `
-          <span class="animate-ping motion-reduce:animate-none absolute inline-flex h-8 w-8 rounded-full bg-cyan-400/40"></span>
-          <span class="relative inline-flex items-center justify-center rounded-full h-7 w-7 bg-[#111314]/90 ring-1 ring-white/20 shadow-[0_4px_16px_rgba(0,0,0,0.5)]">
+          <span data-ping class="absolute inline-flex h-8 w-8 rounded-full bg-cyan-400/40"></span>
+          <span data-pin class="relative inline-flex items-center justify-center rounded-full h-7 w-7 bg-[#111314]/90 ring-1 ring-white/20 shadow-[0_4px_16px_rgba(0,0,0,0.5)]">
             <span class="h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.9)]"></span>
           </span>
         `;
         selectionMarkerRef.current = new maplibregl.Marker({ element: el })
           .setLngLat([selectedLon, selectedLat])
           .addTo(map);
+        selectionPingRef.current = loopPing(el.querySelector("[data-ping]")!);
       } else {
         selectionMarkerRef.current.setLngLat([selectedLon, selectedLat]);
       }
+      const pin = selectionMarkerRef.current.getElement().querySelector("[data-pin]");
+      if (pin && !prefersReducedMotion()) {
+        gsap.fromTo(pin, { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.45, ease: "back.out(2.2)", overwrite: "auto" });
+      }
     } else if (selectionMarkerRef.current) {
+      selectionPingRef.current?.kill();
+      selectionPingRef.current = null;
       selectionMarkerRef.current.remove();
       selectionMarkerRef.current = null;
     }
@@ -922,7 +937,7 @@ export function MapView({
         const el = document.createElement("div");
         el.className = "group relative cursor-pointer";
         el.innerHTML = `
-          <div class="h-6 w-6 rounded-full bg-[#111314]/90 ring-1 ring-white/15 shadow-[0_4px_12px_rgba(0,0,0,0.5)] flex items-center justify-center transition-transform group-hover:scale-110">
+          <div data-argo class="h-6 w-6 rounded-full bg-[#111314]/90 ring-1 ring-white/15 shadow-[0_4px_12px_rgba(0,0,0,0.5)] flex items-center justify-center transition-transform group-hover:scale-110">
             <span class="h-2 w-2 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.9)]"></span>
           </div>
         `;
@@ -940,6 +955,14 @@ export function MapView({
 
         argoMarkersRef.current.push(marker);
       });
+      if (!prefersReducedMotion()) {
+        const pins = argoMarkersRef.current.map((m) => m.getElement().querySelector("[data-argo]"));
+        gsap.fromTo(
+          pins,
+          { scale: 0, opacity: 0 },
+          { scale: 1, opacity: 1, duration: 0.35, ease: "back.out(2)", stagger: { amount: 0.4 }, clearProps: "transform,opacity" }
+        );
+      }
     }
   }, [mapLoaded, showArgo, argoProfiles]);
 

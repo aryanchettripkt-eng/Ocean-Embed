@@ -13,6 +13,7 @@ import { Mic, MicOff, Square } from "lucide-react";
 import { apiClient, ApiError } from "../../lib/api/client";
 import { recordingToWav } from "../../lib/wav";
 import { TypingDots } from "../common/TypingDots";
+import { useLoop } from "../common/Motion";
 
 export const MAX_RECORD_S = 30;
 export const AUTO_SEND_MS = 1500;
@@ -45,6 +46,8 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
   const pressStartRef = useRef<number>(0);
   const autoSendRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useLoop(buttonRef, "pulse", phase === "recording");
 
   const supported =
     typeof window !== "undefined" &&
@@ -189,6 +192,7 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         type="button"
         aria-label={label}
         title={label}
@@ -204,7 +208,7 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
         }}
         className={`inline-flex h-9 w-9 shrink-0 touch-none select-none items-center justify-center rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400 disabled:opacity-40 ${
           phase === "recording"
-            ? "animate-pulse bg-red-600 text-white motion-reduce:animate-none"
+            ? "bg-red-600 text-white"
             : "text-neutral-600 hover:bg-black/[0.06] hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
         }`}
       >

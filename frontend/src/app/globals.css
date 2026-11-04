@@ -53,29 +53,6 @@
   }
 }
 
-/* Three-dot typing indicator (TypingDots) */
-@keyframes hud-typing {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-3px);
-  }
-}
-.hud-typing-dot {
-  animation: hud-typing 1.2s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .hud-typing-dot {
-    animation: none;
-    opacity: 0.6;
-  }
-}
-
 /* Thin HUD range slider; the filled part is driven by the --fill custom property (0%–100%) */
 .hud-range {
   -webkit-appearance: none;

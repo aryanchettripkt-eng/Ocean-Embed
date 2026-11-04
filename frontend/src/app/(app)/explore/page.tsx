@@ -12,7 +12,6 @@ import {
   Image as ImageIcon,
   Lasso,
   ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 
 import { useArgoProfiles, useEvents, useMap, useMeta, useSection } from "../../../lib/api/hooks";
@@ -45,6 +44,7 @@ import { formatCoord, formatDate, formatDepth } from "../../../lib/format";
 import { getWallColorRange } from "../../../components/map3d/depthScale";
 import { ToolbarDivider, ViewSwitch } from "../../../components/map3d/ViewSwitch";
 import { DepthRail } from "../../../components/map3d/DepthRail";
+import { Collapse, FlipIcon, Presence, Pulse } from "../../../components/common/Motion";
 
 // MapView is statically included so MapLibre is counted directly in the bundle budget (PRD_FRONTEND §4)
 import { MapView } from "../../../components/map/MapView";
@@ -537,14 +537,14 @@ function ExplorerContent() {
 
       {/* Status pills (loading, error, side-wall fallback) */}
       <div className="pointer-events-none absolute left-1/2 top-4 z-20 flex -translate-x-1/2 flex-col items-center gap-2 lg:left-[calc(50%+178px)]">
-        {isMapLoading && (
+        <Presence show={isMapLoading} from="top">
           <div className="hud-glass flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-medium">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500 motion-reduce:animate-none dark:bg-cyan-300" />
+            <Pulse className="h-1.5 w-1.5 rounded-full bg-cyan-500 dark:bg-cyan-300" />
             <span>Fetching temperature slice...</span>
           </div>
-        )}
+        </Presence>
 
-        {mapError && (
+        <Presence show={!!mapError} from="top">
           <div className="hud-glass pointer-events-auto flex items-center gap-3 rounded-full px-3.5 py-1.5 text-xs text-red-700 dark:text-red-300">
             <span>Failed to load slice.</span>
             <button
@@ -555,14 +555,14 @@ function ExplorerContent() {
               Retry
             </button>
           </div>
-        )}
+        </Presence>
 
-        {wallsUnavailable && (
+        <Presence show={wallsUnavailable} from="top">
           <div className="flex items-center gap-1.5 rounded-full bg-amber-400 px-3.5 py-1.5 text-xs font-medium text-neutral-950 shadow-lg">
             <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
             <span>Side walls unavailable for this date</span>
           </div>
-        )}
+        </Presence>
       </div>
 
       {/* Controls card */}
@@ -587,20 +587,19 @@ function ExplorerContent() {
           <button
             type="button"
             aria-expanded={showControls}
+            aria-controls="explorer-controls-body"
             aria-label={showControls ? "Hide controls" : "Show controls"}
             title={showControls ? "Hide controls" : "Show controls"}
             onClick={() => setShowControls(!showControls)}
             className="hud-icon-btn mt-0.5"
           >
-            {showControls ? (
-              <ChevronUp aria-hidden="true" className="h-4 w-4" />
-            ) : (
+            <FlipIcon open={showControls}>
               <ChevronDown aria-hidden="true" className="h-4 w-4" />
-            )}
+            </FlipIcon>
           </button>
         </div>
 
-        <div className={`min-h-0 overflow-y-auto overscroll-contain ${showControls ? "" : "hidden"}`}>
+        <Collapse open={showControls} id="explorer-controls-body" className="min-h-0 overflow-y-auto overscroll-contain">
           {/* Selected cell, or how to pick one */}
           <div className="px-4 pb-3">
             {hasSelection ? (
@@ -649,13 +648,13 @@ function ExplorerContent() {
             <Colorbar field={state.field} vmin={colorRange.vmin} vmax={colorRange.vmax} wallRange={wallRange} />
             <CoverageLegend gridStyle={activeGridStyle} />
           </div>
-        </div>
+        </Collapse>
       </aside>
 
       {/* Meta feature cards (Lasso, Postcard, Events time machine) */}
-      {(eventsOpen || (meta.features.segment && lassoActive) || (meta.features.postcards && postcard)) && (
-        <div className="pointer-events-auto absolute left-3 right-3 top-4 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 sm:right-auto md:left-[372px]">
-          {meta.features.segment && lassoActive && (
+      {/* Always mounted so each card can animate out; the column itself takes no clicks */}
+      <div className="pointer-events-none absolute left-3 right-3 top-4 z-30 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 sm:right-auto md:left-[372px]">
+          <Presence show={!!meta.features.segment && lassoActive} from="left" className="pointer-events-auto w-full sm:w-auto">
             <LassoPanel
               pending={!!lassoPending}
               error={lassoError}
@@ -663,19 +662,21 @@ function ExplorerContent() {
               onAsk={chatEnabled ? handleAskAboutArea : undefined}
               onClose={closeLasso}
             />
-          )}
-          {meta.features.postcards && postcard && (
-            <PostcardPanel
-              key={postcard.nonce}
-              date={postcard.date}
-              depth={postcard.depth}
-              eventId={postcard.eventId}
-              eventTitle={postcard.eventTitle}
-              caveat={meta.caveats.postcard}
-              onClose={() => setPostcard(null)}
-            />
-          )}
-          {eventsOpen && (
+          </Presence>
+          <Presence show={!!meta.features.postcards && !!postcard} from="left" className="pointer-events-auto w-full sm:w-auto">
+            {postcard && (
+              <PostcardPanel
+                key={postcard.nonce}
+                date={postcard.date}
+                depth={postcard.depth}
+                eventId={postcard.eventId}
+                eventTitle={postcard.eventTitle}
+                caveat={meta.caveats.postcard}
+                onClose={() => setPostcard(null)}
+              />
+            )}
+          </Presence>
+          <Presence show={eventsOpen} from="left" className="pointer-events-auto w-full sm:w-auto">
             <TimeMachine
               meta={meta}
               events={events}
@@ -692,9 +693,8 @@ function ExplorerContent() {
               }}
               onExplain={chatEnabled ? handleExplainEvent : undefined}
             />
-          )}
-        </div>
-      )}
+          </Presence>
+      </div>
 
       {/* Bottom toolbar: view, grid style, layers and tools in one pill */}
       <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center md:bottom-5">
@@ -789,15 +789,19 @@ function ExplorerContent() {
       </div>
 
       {/* 3D depth rail on the right edge */}
-      {state.view === "3d" && meta.depths_m && (
-        <div
-          className={`pointer-events-auto absolute top-4 z-20 ${railRight}`}
-        >
-          <DepthRail availableDepths={meta.depths_m} selectedDepth={state.depth} onChangeDepth={handleDepthChange} />
-        </div>
-      )}
+      <Presence
+        show={state.view === "3d" && !!meta.depths_m}
+        from="right"
+        className={`pointer-events-auto absolute top-4 z-20 ${railRight}`}
+      >
+        <DepthRail availableDepths={meta.depths_m} selectedDepth={state.depth} onChangeDepth={handleDepthChange} />
+      </Presence>
 
-      {guideShown && (
+      <Presence
+        show={guideShown}
+        from="right"
+        className="absolute inset-x-3 bottom-3 z-40 flex h-[75%] flex-col md:inset-x-auto md:bottom-[104px] md:right-4 md:top-4 md:h-auto md:w-[380px]"
+      >
         <GuideDrawer
           meta={meta}
           state={state}
@@ -806,15 +810,16 @@ function ExplorerContent() {
           onUndo={handleGuideUndo}
           onClose={() => setGuideOpen(false)}
           prompt={guidePrompt}
-          placementClassName="absolute inset-x-3 bottom-3 h-[75%] md:inset-x-auto md:right-4 md:top-4 md:bottom-[104px] md:h-auto md:w-[380px]"
+          placementClassName="min-h-0 w-full flex-1"
         />
-      )}
+      </Presence>
 
       {/* Details panel for the selected cell */}
-      {hasSelection && (
-        <div
-          className={`pointer-events-none absolute bottom-[60px] right-3 top-3 z-30 flex w-[calc(100%-1.5rem)] flex-col sm:w-96 md:bottom-[104px] md:top-4 md:w-[400px] [&>*]:pointer-events-auto ${detailsRight}`}
-        >
+      <Presence
+        show={hasSelection}
+        from="right"
+        className={`pointer-events-none absolute bottom-[60px] right-3 top-3 z-30 flex w-[calc(100%-1.5rem)] flex-col sm:w-96 md:bottom-[104px] md:top-4 md:w-[400px] [&>*]:pointer-events-auto ${detailsRight}`}
+      >
           <ErrorBoundary name="Point Details Panel" onReset={clearSelection}>
             <DetailsPanel
               className="pointer-events-auto max-h-full"
@@ -828,8 +833,7 @@ function ExplorerContent() {
               onSelectDepth={handleDepthChange}
             />
           </ErrorBoundary>
-        </div>
-      )}
+      </Presence>
     </div>
   );
 }
