@@ -8,8 +8,8 @@ Two implementations share one interface, so the real key drops in without code c
 The HTTP client assumes an OpenAI-compatible `/chat/completions` surface with `tools`. This is
 [CONFIRM] against the Meta Model API docs (OPEN_QUESTIONS 2026-10-24, PHASES P7-0). Model ids
 come only from env vars; none are guessed here. Transcription and image generation follow the
-Meta docs (2026-11-04); `segment()` is still a guess, because SAM 3.1 runs through the Responses
-API with its own streamed mask format (DECISIONS 2026-11-04).
+Meta docs (2026-11-04), and `segment()` calls SAM 3.1 through the Responses API with Meta's own
+parser for its mask format (dev.meta.ai/docs/sam).
 """
 
 from __future__ import annotations
@@ -17,11 +17,24 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
 import numpy as np
+from meta_sam_parser import (
+    CompletedOutcome,
+    FramePrompt,
+    InvalidSegmentationMaskError,
+    ObjectPromptError,
+    PromptObject,
+    PromptPoint,
+    SegmentationMaskRecord,
+    build_object_prompt,
+    decode_mask_to_raster,
+    image_segmentation_format,
+)
 
 from app.settings import settings
 
@@ -156,28 +169,109 @@ class HttpMetaModelClient:
         return data
 
     def segment(self, png: bytes, point_xy: tuple[int, int], *, timeout_s: float) -> np.ndarray:
-        """Ask SAM for the mask containing `point_xy` (pixel x, y) in our own rendered PNG.
+        """Ask SAM 3.1 for the object at `point_xy` (pixel x, y) in our own rendered PNG.
 
+        SAM runs through the Responses API (dev.meta.ai/docs/sam/segmenting): one user message
+        with the point as an object-prompt token and the image as a data URL, streamed. The
+        reply's output text holds box and mask records, decoded with Meta's `meta_sam_parser`.
         Returns a (height, width) bool array; an all-false array means SAM found nothing.
         """
         if not self._segment_model:
             raise MetaUpstreamError("Segment model is not configured")
-        # [CONFIRM] route and fields; masks assumed as uncompressed COCO RLE (SAM's usual output).
+        try:
+            width, height = png_size(png)
+            prompt = build_object_prompt(
+                size=(width, height),
+                objects=[
+                    PromptObject(
+                        id=1,
+                        prompts=[
+                            FramePrompt(points=[PromptPoint(int(point_xy[0]), int(point_xy[1]))])
+                        ],
+                    )
+                ],
+            )
+        except (ValueError, ObjectPromptError):
+            raise MetaUpstreamError("Segment request could not be built") from None
         payload = {
             "model": self._segment_model,
-            "image": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
-            "points": [[int(point_xy[0]), int(point_xy[1])]],
-            "point_labels": [1],
-            "multimask_output": False,
+            "stream": True,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,"
+                            + base64.b64encode(png).decode("ascii"),
+                        },
+                    ],
+                }
+            ],
         }
-        body = self._post_json("/images/segmentations", payload, timeout_s)
+        text = self._responses_output_text(payload, timeout_s)
+        return sam_text_to_mask(text, width, height)
+
+    def _responses_output_text(self, payload: dict[str, Any], timeout_s: float) -> str:
+        """POST to /responses and return the completed response's output text.
+
+        Reads a `text/event-stream` reply (deltas, then `*.done` events) or, if the server answers
+        with plain JSON, the `output_text` parts of the response. `timeout_s` bounds the whole
+        call, not just each read. Errors never carry the upstream body or key.
+        """
+        headers = {"Authorization": f"Bearer {self._api_key}", "Accept": "text/event-stream"}
+        deadline = time.monotonic() + timeout_s
+        deltas: list[str] = []
+        final: str | None = None
+        completed = False
+        size = 0
         try:
-            masks = body["masks"]
-            if not masks:
-                return np.zeros((0, 0), dtype=bool)
-            return decode_rle(masks[0]["size"], masks[0]["counts"])
-        except (ValueError, KeyError, IndexError, TypeError):
-            raise MetaUpstreamError("Meta API returned an unreadable mask") from None
+            with httpx.Client(timeout=timeout_s, transport=self._transport) as client:
+                with client.stream(
+                    "POST", self._base + "/responses", json=payload, headers=headers
+                ) as resp:
+                    if resp.status_code != 200:
+                        raise MetaUpstreamError(f"Meta API returned HTTP {resp.status_code}")
+                    if resp.headers.get("content-type", "").startswith("application/json"):
+                        resp.read()
+                        return _responses_json_text(resp.json())
+                    for line in resp.iter_lines():
+                        if time.monotonic() > deadline:
+                            raise MetaUpstreamError("Meta API request timed out")
+                        size += len(line)
+                        if size > MAX_SAM_OUTPUT_CHARS:
+                            raise MetaUpstreamError("Meta API returned too much output")
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        event = json.loads(data)
+                        kind = event.get("type") if isinstance(event, dict) else None
+                        if kind == "response.output_text.delta":
+                            deltas.append(str(event.get("delta") or ""))
+                        elif kind == "response.output_text.done":
+                            final = str(event.get("text") or "")
+                        elif kind == "response.content_part.done" and final is None:
+                            part = event.get("part")
+                            if isinstance(part, dict) and part.get("type") == "output_text":
+                                final = str(part.get("text") or "")
+                        elif kind == "response.completed":
+                            completed = True
+                            break
+                        elif kind in ("response.failed", "response.incomplete", "error"):
+                            raise MetaUpstreamError("Meta API did not complete the segmentation")
+        except httpx.TimeoutException:
+            raise MetaUpstreamError("Meta API request timed out") from None
+        except httpx.HTTPError as exc:
+            raise MetaUpstreamError(f"Meta API request failed ({type(exc).__name__})") from None
+        except (ValueError, TypeError, AttributeError):
+            raise MetaUpstreamError("Meta API returned an unreadable response") from None
+        if not completed:
+            raise MetaUpstreamError("Meta API did not complete the segmentation")
+        return final if final is not None else "".join(deltas)
 
     def transcribe(self, audio: bytes, mime: str, lang: str, *, timeout_s: float) -> Transcript:
         """Send one WAV clip to Muse Voice Transcribe. The audio is held in memory only.
@@ -307,6 +401,56 @@ def language_bias(lang: str) -> list[str] | None:
     """`languageBias` hint for a BCP-47 tag, or None to let the model detect the language."""
     name = _LANGUAGE_NAMES.get(lang.split("-")[0].lower())
     return [name] if name else None
+
+
+# Upper bound on SAM's streamed reply (masks are compact base85, a few kB for our images).
+MAX_SAM_OUTPUT_CHARS = 4_000_000
+
+
+def _responses_json_text(body: Any) -> str:
+    """Output text of a non-streamed Responses API body, or MetaUpstreamError."""
+    if not isinstance(body, dict) or body.get("status") != "completed":
+        raise MetaUpstreamError("Meta API did not complete the segmentation")
+    parts = [
+        str(part.get("text") or "")
+        for item in body.get("output") or []
+        if isinstance(item, dict) and item.get("type") == "message"
+        for part in item.get("content") or []
+        if isinstance(part, dict) and part.get("type") == "output_text"
+    ]
+    return "".join(parts)
+
+
+def sam_text_to_mask(text: str, width: int, height: int) -> np.ndarray:
+    """SAM's output text -> (height, width) bool mask, the union of every returned object.
+
+    Each record has a box (pixels of the image we sent) and a box-local mask raster, which may be
+    coarser than the box; it is scaled to the box (nearest) and placed there.
+    """
+    parser = image_segmentation_format().create_parser()
+    parser.push(text if text.endswith("\n") else text + "\n", emit=False)
+    result = parser.finish(CompletedOutcome()).result
+    # Records the parser rejects (malformed, or a mask that fails to decode) are dropped with a
+    # diagnostic; no usable mask means "nothing found", and the lasso falls back to threshold.
+    masks = [r for r in result.records if isinstance(r, SegmentationMaskRecord)]
+    out = np.zeros((height, width), dtype=bool)
+    for record in masks:
+        try:
+            raster = decode_mask_to_raster(record.mask)
+        except InvalidSegmentationMaskError:
+            raise MetaUpstreamError("Meta API returned an unreadable mask") from None
+        mh, mw = record.mask.height, record.mask.width
+        local = np.frombuffer(raster, dtype=np.uint8).reshape(mh, mw).astype(bool)
+        left, top = int(record.bounds.left), int(record.bounds.top)
+        right = min(int(record.bounds.right), width)
+        bottom = min(int(record.bounds.bottom), height)
+        bw, bh = int(record.bounds.right) - left, int(record.bounds.bottom) - top
+        if right <= left or bottom <= top or bw <= 0 or bh <= 0:
+            continue
+        rows = (np.arange(bottom - top) * mh) // bh
+        cols = (np.arange(right - left) * mw) // bw
+        out[top:bottom, left:right] |= local[np.ix_(rows, cols)]
+    return out
 
 
 def _read_usage(usage: Any) -> tuple[int, int] | None:
@@ -483,39 +627,6 @@ def _describe_dataset(res: dict[str, Any]) -> str:
         f"The data covers {dates.get('start')} to {dates.get('end')} at {len(depths)} depths, "
         f"from {depths[0]} m to {depths[-1]} m."
     )
-
-
-def decode_rle(size: Any, counts: Any) -> np.ndarray:
-    """Uncompressed COCO RLE -> (height, width) bool mask. Runs alternate 0/1 starting with 0,
-    in column-major order."""
-    height, width = int(size[0]), int(size[1])
-    if height <= 0 or width <= 0 or height * width > 16_000_000:
-        raise ValueError("bad mask size")
-    runs = [int(c) for c in counts]
-    if any(r < 0 for r in runs) or sum(runs) != height * width:
-        raise ValueError("bad mask counts")
-    flat = np.zeros(height * width, dtype=bool)
-    pos = 0
-    for i, run in enumerate(runs):
-        if i % 2 == 1:
-            flat[pos : pos + run] = True
-        pos += run
-    return flat.reshape((width, height)).T
-
-
-def encode_rle(mask: np.ndarray) -> dict[str, Any]:
-    """Inverse of `decode_rle`; used by tests to fake SAM responses."""
-    flat = np.asarray(mask, dtype=bool).T.reshape(-1)
-    counts: list[int] = []
-    current, run = False, 0
-    for v in flat:
-        if bool(v) == current:
-            run += 1
-        else:
-            counts.append(run)
-            current, run = bool(v), 1
-    counts.append(run)
-    return {"size": [int(mask.shape[0]), int(mask.shape[1])], "counts": counts}
 
 
 def png_size(png: bytes) -> tuple[int, int]:
