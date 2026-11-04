@@ -127,7 +127,7 @@ export interface paths {
   "/api/v1/transcribe": {
     /**
      * Voice input (Muse Voice Transcribe)
-     * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+     * @description Transcribes one short clip (30 s or less, 1 MB or less; mono 16-bit PCM WAV at 16 or 24 kHz, which the browser converts its recording to). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
      */
     post: operations["post_transcribe_api_v1_transcribe_post"];
   };
@@ -1478,7 +1478,7 @@ export interface operations {
   };
   /**
    * Voice input (Muse Voice Transcribe)
-   * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+   * @description Transcribes one short clip (30 s or less, 1 MB or less; mono 16-bit PCM WAV at 16 or 24 kHz, which the browser converts its recording to). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
    */
   post_transcribe_api_v1_transcribe_post: {
     requestBody: {

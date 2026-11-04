@@ -4,12 +4,14 @@
  * Voice dive mic button (PRD_FRONTEND §3.4b). Hold to talk, or tap to start and tap again
  * to stop. Max 30 s with a countdown, then /transcribe; the transcript sits in the input
  * for 1.5 s (any key cancels auto-send) and is then sent to the guide as text.
- * Audio goes only to our backend and is never stored in the browser.
+ * Audio goes only to our backend and is never stored in the browser. The clip is converted to
+ * 16 kHz mono WAV in memory first, the only format Muse Voice Transcribe's file endpoint takes.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Mic, MicOff, Square } from "lucide-react";
 import { apiClient, ApiError } from "../../lib/api/client";
+import { recordingToWav } from "../../lib/wav";
 
 export const MAX_RECORD_S = 30;
 export const AUTO_SEND_MS = 1500;
@@ -65,13 +67,8 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
   );
 
   const transcribe = useCallback(
-    async (blob: Blob) => {
-      if (blob.size === 0) {
-        setPhase("idle");
-        return;
-      }
-      if (blob.size > MAX_BYTES) {
-        setMessage("That clip was too long. Try a shorter question.");
+    async (recording: Blob) => {
+      if (recording.size === 0) {
         setPhase("idle");
         return;
       }
@@ -79,6 +76,12 @@ export function MicButton({ disabled, onTranscript, onAutoSend }: MicButtonProps
       const controller = new AbortController();
       abortRef.current = controller;
       try {
+        const blob = await recordingToWav(recording);
+        if (blob.size > MAX_BYTES) {
+          setMessage("That clip was too long. Try a shorter question.");
+          setPhase("idle");
+          return;
+        }
         const res = await apiClient.postTranscribe(blob, navigator.language || "en", controller.signal);
         const text = res.text.trim();
         if (!text) {

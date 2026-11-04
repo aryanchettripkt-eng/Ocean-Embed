@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-TIMEOUT_S = 45.0
+# Under the frontend's 45 s abort (POSTCARD_TIMEOUT_MS), so the backend gives up first and the
+# browser gets a clean 502 rather than an abort while the image may still be billed.
+TIMEOUT_S = 40.0
 CAPTION_SOURCE = "Model prediction"
 
 _limiter: FeatureLimiter | None = None
