@@ -18,6 +18,7 @@ import {
 } from "../../../lib/guide/ui-actions";
 import type { GuidePrompt, NavigateResult } from "../../../components/guide/GuideDrawer";
 import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
+import { ServedDays } from "../../../lib/date-ranges";
 import { DatePicker } from "../../../components/controls/DatePicker";
 import { DepthSelector } from "../../../components/controls/DepthSelector";
 import { FieldToggle, type FieldType } from "../../../components/controls/FieldToggle";
@@ -240,17 +241,21 @@ function ExplorerContent() {
   const handlePrefetchAhead = useCallback(
     (currentDate: string) => {
       if (!meta) return;
-      const currentDays = Math.floor(new Date(currentDate + "T00:00:00Z").getTime() / 86400000);
-      const endDays = Math.floor(new Date(meta.available_dates.end + "T00:00:00Z").getTime() / 86400000);
+      const served = new ServedDays(
+        meta.available_dates.start,
+        meta.available_dates.end,
+        meta.date_ranges
+      );
+      let nextDate: string | null = currentDate;
       for (let offset = 1; offset <= 3; offset++) {
-        const nextDays = currentDays + offset;
-        if (nextDays <= endDays) {
-          const nextDate = new Date(nextDays * 86400000).toISOString().slice(0, 10);
+        nextDate = nextDate ? served.step(nextDate, 1) : null;
+        if (nextDate) {
+          const day = nextDate;
           queryClient.prefetchQuery({
-            queryKey: ["map", nextDate, state.depth, undefined, state.field],
+            queryKey: ["map", day, state.depth, undefined, state.field],
             queryFn: () =>
               apiClient.getMap({
-                date: nextDate,
+                date: day,
                 depth_m: state.depth,
                 field: state.field,
               }),
@@ -755,6 +760,7 @@ function ExplorerContent() {
             endDate={meta.available_dates.end}
             currentSplit={mapData?.split}
             latestLiveDate={meta.latest_live_date}
+            dateRanges={meta.date_ranges}
             splits={meta.splits}
             onChange={handleDateChange}
             prefetchAhead={handlePrefetchAhead}

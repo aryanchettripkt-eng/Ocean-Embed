@@ -139,3 +139,23 @@ def test_manifest_reload_broken_keeps_previous(tmp_path: Path, monkeypatch: Any)
     assert res3.status_code == 200
     assert res3.json()["run_id"] == "stable_run_v1"
     assert test_loader.is_loaded is True
+
+
+def test_meta_date_ranges_split_at_gaps() -> None:
+    """Live mode appends recent days after the historical ones; /meta lists each run."""
+    import pandas as pd
+    import xarray as xr
+
+    client = TestClient(app)
+    ranges = client.get("/api/v1/meta").json()["date_ranges"]
+    assert ranges == [{"start": "2020-01-01", "end": "2020-01-10"}]
+
+    times = pd.to_datetime(["2018-01-01", "2018-01-02", "2018-01-03", "2026-10-28", "2026-10-29"])
+    ds = xr.Dataset(coords={"time": times})
+    got = OutputStore._served_date_ranges(ds)
+    assert got is not None
+    assert [(r.start, r.end) for r in got] == [
+        ("2018-01-01", "2018-01-03"),
+        ("2026-10-28", "2026-10-29"),
+    ]
+    assert OutputStore._served_date_ranges(xr.Dataset()) is None
