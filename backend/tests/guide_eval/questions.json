@@ -130,9 +130,10 @@
       "context": null,
       "safety": {
         "answer_none": [
+          "this is live",
           "this is real-time",
-          "is real-time data",
-          "live, real-time data"
+          "is live data",
+          "is real-time data"
         ]
       },
       "quality": {

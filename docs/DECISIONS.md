@@ -157,3 +157,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Prompt `guide-v2`:** °C only; temperature only (no salinity, currents, forecasts); coordinates only for places known to be in the region, none for fictional ones; only dates in range, none in the sealed test period.
 - Known gaps left (P7-R harness strict xfails): a made-up place given real in-region coordinates, a number spelled in words, and a real temperature quoted at the wrong depth.
 - Approved by Aryan ("do the recommended"), 2026-11-04.
+
+## 2026-11-04 — Guide tuned on the first real Muse Spark run
+- Base URL `https://api.meta.ai/v1` (Meta API reference); the dashboard page URL returns HTTP 307.
+- Muse Spark always reasons and its reasoning tokens count as output (about 600 per turn at the default effort; 7–8 s per call). Chat calls now send `reasoning_effort` (`META_CHAT_REASONING_EFFORT`, default `low`) and `max_completion_tokens` (the API's name; `max_tokens` is a deprecated alias), raised from 1,024 to 2,048 because several final answers came back empty. The guide's total timeout is 23 s, under the frontend's 25 s.
+- Prompt `guide-v3`: the dataset facts (model depths, date range, region bounds) are in the system prompt, so the model needs no `get_dataset_info` round, and it is asked to make all tool calls in one round. The same facts, and dates the user wrote (never numbers), count as guard sources.
+- P7-R harness: an upstream error now fails the quality group, and a real run stops after 2 in a row.
+- Proposed by Claude from the 2026-11-04 real run ($0.41 of a $2 local cap).

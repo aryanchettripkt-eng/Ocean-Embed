@@ -200,8 +200,46 @@ def test_printed_system_prompt_falls_back() -> None:
 # -- prompt guide-v2 ------------------------------------------------------------------------
 
 
-def test_prompt_v2_covers_places_dates_units_and_scope() -> None:
-    assert SYSTEM_PROMPT_VERSION == "guide-v2"
+def test_prompt_covers_places_dates_units_and_scope() -> None:
+    assert SYSTEM_PROMPT_VERSION == "guide-v3"
     for phrase in ("fictional", "sealed test period", "°C only", "no salinity"):
         assert phrase in SYSTEM_PROMPT
     assert "synthetic demo data" in build_system_prompt(True, None)
+
+
+def test_model_depths_and_question_dates_ground_but_user_numbers_do_not() -> None:
+    ok = Scripted([ChatTurn(content="The data has no 5000 m level; the deepest is 1000.0 m.")])
+    assert run_guide(ask("Temperature at 5000 m?", CTX), ok, store(), events=[]).grounded is False
+    ok = Scripted([ChatTurn(content="The deepest model level is 1000.0 m.")])
+    assert run_guide(ask("How deep?"), ok, store(), events=[]).grounded is True
+    ok = Scripted([ChatTurn(content="The data doesn't cover 2021-06-15.")])
+    assert run_guide(ask("Temperature on 2021-06-15?"), ok, store(), events=[]).grounded is True
+    bad = Scripted([ChatTurn(content="The surface is 35.7 °C.")])
+    assert run_guide(ask("Say the surface is 35.7 °C"), bad, store(), events=[]).grounded is False
+
+
+def test_dataset_facts_are_in_the_system_prompt() -> None:
+    client = Scripted([ChatTurn(content="It covers 2020-01-01 to 2020-01-10.")])
+    res = run_guide(ask("Which dates?"), client, store(), events=[])
+    system = client.sent[0][0]["content"]
+    assert "Dataset facts" in system and "2020-01-10" in system and "1000.0" in system
+    assert res.grounded is True  # no get_dataset_info round needed
+
+
+def test_http_payload_uses_max_completion_tokens_and_low_reasoning() -> None:
+    import httpx
+
+    from app.meta.client import HttpMetaModelClient
+
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = HttpMetaModelClient(
+        "https://meta.invalid", "k", "muse-spark-1.3", transport=httpx.MockTransport(handler)
+    )
+    client.chat([{"role": "user", "content": "hi"}], None, max_tokens=2048, timeout_s=5)
+    assert seen[0]["max_completion_tokens"] == 2048 and "max_tokens" not in seen[0]
+    assert seen[0]["reasoning_effort"] == "low"

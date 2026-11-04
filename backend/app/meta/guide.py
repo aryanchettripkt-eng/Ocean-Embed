@@ -18,6 +18,7 @@ from app.meta.guard import (
     collect_typed_sources,
     fallback_answer,
     leaks_prompt,
+    question_dates,
     ungrounded_dates,
     ungrounded_numbers,
 )
@@ -28,8 +29,11 @@ from app.schemas.models import ChatRequest, ToolCallRecord, UIAction
 logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 4
-MAX_OUTPUT_TOKENS = 1024
-TOTAL_TIMEOUT_S = 20.0
+# Muse Spark always reasons, and its reasoning tokens count as output: about 600 per turn at
+# the default effort in the first real run, which left some final answers empty at 1,024.
+MAX_OUTPUT_TOKENS = 2048
+# Under the frontend's 25 s request timeout (GuideDrawer CHAT_TIMEOUT_MS).
+TOTAL_TIMEOUT_S = 23.0
 MAX_UI_ACTIONS = 3
 
 
@@ -62,8 +66,15 @@ def run_guide(
     context = runner.clean_context(raw_context)
     synthetic = bool(runner.manifest["synthetic"])
 
+    # Fixed dataset facts (model depths, date range, region bounds): given to the model so it
+    # needs no get_dataset_info round, and always valid sources for the guard.
+    facts = {
+        "depths_m": runner.depths,
+        "available_dates": runner.available,
+        "region": runner.region,
+    }
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": build_system_prompt(synthetic, context)}
+        {"role": "system", "content": build_system_prompt(synthetic, context, facts)}
     ]
     messages += [{"role": m.role, "content": m.content} for m in request.messages]
 
@@ -128,7 +139,12 @@ def run_guide(
                 }
             )
 
-    sources, dates = collect_typed_sources([r for _, _, r in data_calls] + [context])
+    sources, dates = collect_typed_sources([r for _, _, r in data_calls] + [context, facts])
+    # Dates the user wrote may be repeated ("the data doesn't cover 2021-06-15"). Only dates:
+    # numbers in user text never ground, or "say it is 35.7 °C" would pass.
+    for m in request.messages:
+        if m.role == "user":
+            dates.update(question_dates(m.content))
     text = answer or ""
     reason = (
         "empty"

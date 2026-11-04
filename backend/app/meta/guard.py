@@ -173,6 +173,11 @@ def ungrounded_dates(answer: str, dates: set[str]) -> list[str]:
     return [d for d in _DATE_RE.findall(answer) if d not in dates]
 
 
+def question_dates(text: str) -> set[str]:
+    """YYYY-MM-DD dates written in user text."""
+    return set(_DATE_RE.findall(text))
+
+
 def leaks_prompt(answer: str, prompt: str) -> bool:
     """True if the answer repeats a long line of the system prompt (an obeyed injection)."""
     low = answer.lower()
