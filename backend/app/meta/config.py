@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from app.meta.budget import budget_configured
 from app.settings import settings
 
 MOCK_PROVIDER_LABEL = "Offline mock guide (no Meta model)"
@@ -22,7 +23,12 @@ def chat_available() -> bool:
         return False
     if settings.META_CLIENT == "mock":
         return True
-    return bool(settings.META_API_BASE_URL and settings.META_API_KEY and settings.META_CHAT_MODEL)
+    return bool(
+        settings.META_API_BASE_URL
+        and settings.META_API_KEY
+        and settings.META_CHAT_MODEL
+        and budget_configured("chat")
+    )
 
 
 def voice_available() -> bool:
@@ -32,7 +38,10 @@ def voice_available() -> bool:
     if settings.META_CLIENT == "mock":
         return True
     return bool(
-        settings.META_API_BASE_URL and settings.META_API_KEY and settings.META_TRANSCRIBE_MODEL
+        settings.META_API_BASE_URL
+        and settings.META_API_KEY
+        and settings.META_TRANSCRIBE_MODEL
+        and budget_configured("transcribe")
     )
 
 
@@ -42,7 +51,12 @@ def postcard_available() -> bool:
         return False
     if settings.META_CLIENT == "mock":
         return True
-    return bool(settings.META_API_BASE_URL and settings.META_API_KEY and settings.META_IMAGE_MODEL)
+    return bool(
+        settings.META_API_BASE_URL
+        and settings.META_API_KEY
+        and settings.META_IMAGE_MODEL
+        and budget_configured("image")
+    )
 
 
 def segment_available() -> bool:
@@ -58,7 +72,10 @@ def sam_configured() -> bool:
     if settings.META_CLIENT == "mock":
         return True
     return bool(
-        settings.META_API_BASE_URL and settings.META_API_KEY and settings.META_SEGMENT_MODEL
+        settings.META_API_BASE_URL
+        and settings.META_API_KEY
+        and settings.META_SEGMENT_MODEL
+        and budget_configured("segment")
     )
 
 

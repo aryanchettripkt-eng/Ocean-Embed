@@ -476,7 +476,14 @@ def test_guard_accepts_context_numbers() -> None:
 
 def test_guard_number_extraction() -> None:
     text = "On 2019-05-01 in 2019, 3 floats saw 28.1 °C at 50 m, 1,000 km away, 12% and 15°N."
-    assert extract_checked_numbers(text) == [(28.1, 1), (50.0, 0), (1000.0, 0), (12.0, 0)]
+    # Guard v2 also checks degree coordinates ("15°N"), against coordinate fields.
+    assert extract_checked_numbers(text) == [
+        (28.1, 1),
+        (50.0, 0),
+        (1000.0, 0),
+        (12.0, 0),
+        (15.0, 0),
+    ]
     assert ungrounded_numbers("It is 28.10 °C.", [28.1]) == []
     assert ungrounded_numbers("It is 28.1 °C.", [28.14]) == []
     assert ungrounded_numbers("It is 28.2 °C.", [28.14]) == [28.2]

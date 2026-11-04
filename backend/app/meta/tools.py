@@ -224,6 +224,8 @@ class ToolRunner:
         return nearest
 
     def _in_sealed_test(self, date: str) -> bool:
+        # Applies to data tools as well as UI tools: test-period values (and above all the
+        # error against GLORYS) must not reach the user while the test split is sealed.
         return not self.test_evaluated and self.test_range[0] <= date <= self.test_range[1]
 
     def _check_date(self, value: Any) -> str:
@@ -256,13 +258,37 @@ class ToolRunner:
             return False
         return not any(self._in_sealed_test(d) for d in dates)
 
+    def clean_context(self, context: dict[str, Any]) -> dict[str, Any]:
+        """The explorer context with every field validated like a tool argument. Invalid fields
+        are dropped, so user-sent values never reach the prompt or count as number sources
+        unless they are a real date, a model depth and a point in the region."""
+        out: dict[str, Any] = {}
+        checks: dict[str, Any] = {
+            "date": self._check_date,
+            "depth_m": self._snap_depth,
+        }
+        for key, check in checks.items():
+            if key in context:
+                try:
+                    out[key] = check(context[key])
+                except (ToolArgError, APIError):
+                    pass
+        if "lat" in context and "lon" in context:
+            try:
+                out["lat"], out["lon"] = self._snap_point(context["lat"], context["lon"])
+            except (ToolArgError, APIError):
+                pass
+        return out
+
     # -- data tools ------------------------------------------------------------
 
     def _get_temperature(self, args: dict[str, Any]) -> dict[str, Any]:
         _only(args, {"lat", "lon", "date", "depth_m"})
         depth = self._snap_depth(_req(args, "depth_m"))
         prof = self.store.get_profile(
-            _number(_req(args, "lat"), "lat"), _number(_req(args, "lon"), "lon"), _req(args, "date")
+            _number(_req(args, "lat"), "lat"),
+            _number(_req(args, "lon"), "lon"),
+            self._check_date(_req(args, "date")),
         )
         i = self.depths.index(depth)
         return {
@@ -281,7 +307,9 @@ class ToolRunner:
     def _get_temperature_profile(self, args: dict[str, Any]) -> dict[str, Any]:
         _only(args, {"lat", "lon", "date"})
         prof = self.store.get_profile(
-            _number(_req(args, "lat"), "lat"), _number(_req(args, "lon"), "lon"), _req(args, "date")
+            _number(_req(args, "lat"), "lat"),
+            _number(_req(args, "lon"), "lon"),
+            self._check_date(_req(args, "date")),
         )
         return prof.model_dump(mode="json", exclude={"run_id"})
 
@@ -296,7 +324,7 @@ class ToolRunner:
         if region is None:
             bbox = [_number(_req(args, k), k) for k in BBOX_KEYS]
         summary = self.store.get_region_summary(
-            date=_req(args, "date"),
+            date=self._check_date(_req(args, "date")),
             depth_m=self._snap_depth(_req(args, "depth_m")),
             lat_min=bbox[0],
             lat_max=bbox[1],
@@ -314,7 +342,7 @@ class ToolRunner:
         lat = args.get("lat")
         lon = args.get("lon")
         sec = self.store.get_section(
-            date=_req(args, "date"),
+            date=self._check_date(_req(args, "date")),
             field=_field(args),
             lat=None if lat is None else _number(lat, "lat"),
             lon=None if lon is None else _number(lon, "lon"),
@@ -352,6 +380,7 @@ class ToolRunner:
                             break
                 iso.append({sec.axis: pos, "depth_m": level})
             out["first_level_below_20c"] = iso
+            out["isotherm_c"] = ISOTHERM_C
         return out
 
     def _get_validation_metrics(self, args: dict[str, Any]) -> dict[str, Any]:

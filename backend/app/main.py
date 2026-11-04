@@ -18,6 +18,7 @@ from app.errors import (
     http_exception_handler,
     validation_exception_handler,
 )
+from app.meta.budget import flush_budget
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await load_task
     except asyncio.CancelledError:
         pass
+    # Save any spend not yet pushed to the budget ledger (app/meta/budget.py).
+    try:
+        await asyncio.to_thread(flush_budget)
+    except Exception as e:
+        logger.error("Budget ledger flush failed: %s", e)
 
 
 app = FastAPI(

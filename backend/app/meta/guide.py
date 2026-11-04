@@ -14,8 +14,14 @@ from typing import Any
 
 from app.data.store import OutputStore
 from app.meta.client import MetaModelClient, MetaUpstreamError
-from app.meta.guard import collect_sources, fallback_answer, ungrounded_numbers
-from app.meta.prompts import build_system_prompt
+from app.meta.guard import (
+    collect_typed_sources,
+    fallback_answer,
+    leaks_prompt,
+    ungrounded_dates,
+    ungrounded_numbers,
+)
+from app.meta.prompts import SYSTEM_PROMPT, build_system_prompt
 from app.meta.tools import TOOL_SCHEMAS, ToolRunner, is_tool_error
 from app.schemas.models import ChatRequest, ToolCallRecord, UIAction
 
@@ -52,7 +58,8 @@ def run_guide(
 ) -> GuideResult:
     """Run one guide request. Raises `MetaUpstreamError` on upstream failure or timeout."""
     runner = ToolRunner(store, events)
-    context = request.context.model_dump(exclude_none=True) if request.context else {}
+    raw_context = request.context.model_dump(exclude_none=True) if request.context else {}
+    context = runner.clean_context(raw_context)
     synthetic = bool(runner.manifest["synthetic"])
 
     messages: list[dict[str, Any]] = [
@@ -121,11 +128,26 @@ def run_guide(
                 }
             )
 
-    sources = collect_sources([r for _, _, r in data_calls] + [context])
-    grounded = bool(answer) and not ungrounded_numbers(answer or "", sources)
+    sources, dates = collect_typed_sources([r for _, _, r in data_calls] + [context])
+    text = answer or ""
+    reason = (
+        "empty"
+        if not text
+        else "numbers"
+        if ungrounded_numbers(text, sources)
+        else "dates"
+        if ungrounded_dates(text, dates)
+        else "prompt_leak"
+        if leaks_prompt(text, SYSTEM_PROMPT)
+        else None
+    )
+    grounded = reason is None
     if not grounded:
         logger.warning(
-            "feature=chat guard=fallback rounds=%d data_calls=%d", rounds, len(data_calls)
+            "feature=chat guard=fallback reason=%s rounds=%d data_calls=%d",
+            reason,
+            rounds,
+            len(data_calls),
         )
         answer = fallback_answer(data_calls)
     assert answer is not None

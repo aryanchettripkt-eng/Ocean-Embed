@@ -88,3 +88,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# P7-R real-model runs (budget ledger and reports stay local)
+p7r-budget-ledger.json
+p7r-real*.md
