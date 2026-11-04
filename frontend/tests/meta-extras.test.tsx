@@ -75,6 +75,9 @@ describe("lasso", () => {
     expect(askAboutAreaPrompt(seg)).toContain("13.50–16.50°N, 86.50–89.50°E");
     expect(methodLabel("sam")).toBe("Selected by SAM 3.1");
     expect(segmentErrorMessage(new ApiError(422, "point_not_ocean", "x"))).toMatch(/water/);
+    expect(segmentErrorMessage(new DOMException("aborted", "AbortError"), true)).toMatch(/too long/);
+    expect(segmentErrorMessage(new ApiError(500, "internal_error", "x"))).toContain("(internal_error)");
+    expect(segmentErrorMessage(new TypeError("Failed to fetch"))).toMatch(/reach/);
   });
 });
 

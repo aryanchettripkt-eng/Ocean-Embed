@@ -29,14 +29,18 @@ export function outlineBBox(outline: number[][]): BBox | null {
   };
 }
 
-export function segmentErrorMessage(err: unknown): string {
+export function segmentErrorMessage(err: unknown, timedOut = false): string {
+  if (timedOut) return "The lasso took too long to answer. Please try again.";
   if (err instanceof ApiError) {
     if (err.code === "point_not_ocean") return "That spot has no ocean value. Tap on the water.";
     if (err.status === 429) return "The lasso is busy right now. Try again in a minute.";
     if (err.status === 503) return "The lasso is switched off at the moment.";
     if (err.status === 502) return "The selection service didn't answer. Please try again.";
+    if (err.status === 404) return "There is no map for that date and depth. Pick another date.";
+    // Name the code so a report from the site says what went wrong.
+    return `Couldn't select that area (${err.code || err.status}). Please try again.`;
   }
-  return "Couldn't select that area. Please try again.";
+  return "Couldn't reach the lasso service. Check your connection and try again.";
 }
 
 export function askAboutAreaPrompt(seg: SegmentResponse): string {

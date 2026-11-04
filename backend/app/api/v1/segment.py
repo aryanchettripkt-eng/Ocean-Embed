@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SAM_TIMEOUT_S = 10.0
+# Whole SAM call, well under the frontend's 20 s lasso abort (LASSO_TIMEOUT_MS), so a slow SAM
+# reply falls back to the threshold method and the browser still gets an answer.
+SAM_TIMEOUT_S = 6.0
 
 _limiter: FeatureLimiter | None = None
 # Identical inputs give identical answers, so repeated taps do not call SAM again (§4.12).
