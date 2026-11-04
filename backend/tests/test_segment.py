@@ -176,6 +176,34 @@ def test_threshold_fallback_is_used_and_reported(
     assert body["stats"]["n_valid"] > 1
 
 
+def test_slow_sam_falls_back_before_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SAM call that outlives SAM_TIMEOUT_S (slow network or slow mask decoding) must not
+    hold the request: the threshold answer comes back in time."""
+    import time as time_module
+
+    class SlowSam(FakeSam):
+        def segment(self, png: bytes, point_xy: tuple[int, int], *, timeout_s: float) -> np.ndarray:
+            time_module.sleep(1.5)
+            return super().segment(png, point_xy, timeout_s=timeout_s)
+
+    monkeypatch.setattr(segment_api, "SAM_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(client_module, "build_client", lambda: SlowSam(rectangle(3, 8, 30, 40)))
+    started = time_module.monotonic()
+    res = TestClient(app).post("/api/v1/segment", json=BODY)
+    assert time_module.monotonic() - started < 1.2
+    assert res.status_code == 200 and res.json()["method"] == "threshold"
+
+
+def test_unexpected_sam_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenSam(FakeSam):
+        def segment(self, png: bytes, point_xy: tuple[int, int], *, timeout_s: float) -> np.ndarray:
+            raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(client_module, "build_client", lambda: BrokenSam())
+    res = TestClient(app).post("/api/v1/segment", json=BODY)
+    assert res.status_code == 200 and res.json()["method"] == "threshold"
+
+
 def test_threshold_cap_holds() -> None:
     """Test 20: the 5,000-cell cap holds on a large uniform field."""
     values = np.full((120, 120), 20.0, dtype=np.float32)
