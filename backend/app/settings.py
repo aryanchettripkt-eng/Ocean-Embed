@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     META_API_KEY: str | None = None
     META_CHAT_MODEL: str | None = None
     META_CHAT_FALLBACK_MODEL: str | None = None
+    # Muse Spark always reasons; lower effort means faster, cheaper turns. Empty = model default.
+    META_CHAT_REASONING_EFFORT: Literal["", "minimal", "low", "medium", "high", "xhigh"] = "low"
     META_TRANSCRIBE_MODEL: str | None = None
     META_IMAGE_MODEL: str | None = None
     META_SEGMENT_MODEL: str | None = None

@@ -230,7 +230,14 @@ class HttpMetaModelClient:
         max_tokens: int,
         timeout_s: float,
     ) -> ChatTurn:
-        payload: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        # max_completion_tokens: max_tokens is a deprecated alias on the Meta Model API.
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+        }
+        if settings.META_CHAT_REASONING_EFFORT:
+            payload["reasoning_effort"] = settings.META_CHAT_REASONING_EFFORT
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

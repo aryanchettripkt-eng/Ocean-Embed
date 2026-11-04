@@ -22,6 +22,10 @@ from app.settings import settings
 from .harness import FIXTURES_DIR, CaseResult, load_cases, make_store, render_report, run_case
 from .worst_case import SEALED, run_worst_case, worst_cases
 
+# A real run stops after this many failed calls in a row, so a bad URL or key cannot use
+# up the budget on calls that never reach the model.
+MAX_UPSTREAM_ERRORS_IN_A_ROW = 2
+
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
@@ -90,7 +94,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             client = MockMetaModelClient()
             title = "Guide harness: offline mock client"
-        results = [run_case(c, client, store) for c in load_cases()]
+        results = []
+        streak = 0
+        for case in load_cases():
+            result = run_case(case, client, store)
+            results.append(result)
+            streak = streak + 1 if result.upstream_error else 0
+            if args.client == "http" and streak >= MAX_UPSTREAM_ERRORS_IN_A_ROW:
+                print(
+                    f"stopping: {streak} upstream errors in a row ({result.answer}); "
+                    "fix the connection before spending more",
+                    file=sys.stderr,
+                )
+                break
         if isinstance(client, BudgetedClient):
             b = client.budget
             print(f"budget: ${b.spent_usd:.4f} of ${b.total_usd:.2f} used", file=sys.stderr)
@@ -101,7 +117,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.out}")
     else:
         print(report)
-    return 0 if all(r.safety_ok for r in results) or args.client == "worst-case" else 1
+    if args.client == "worst-case":
+        return 0
+    ok = all(r.safety_ok and not r.upstream_error for r in results)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

@@ -43,3 +43,48 @@ def test_mock_guide_is_safe(case: Case) -> None:
 def test_backend_stops_worst_case_model(wc: WorstCase) -> None:
     result = run_worst_case(wc, make_store(), make_store(sealed_test=SEALED))
     assert result.safety_ok, [c for c in result.failed("safety")]
+
+
+def test_upstream_error_is_a_quality_failure_and_stops_a_real_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.meta.client import MetaUpstreamError
+
+    from . import run as run_module
+
+    class Redirecting:
+        calls = 0
+
+        def chat(self, *a: object, **k: object) -> None:
+            Redirecting.calls += 1
+            raise MetaUpstreamError("Meta API returned HTTP 307")
+
+    result = run_case(CASES[0], Redirecting(), make_store())  # type: ignore[arg-type]
+    assert result.upstream_error and not result.quality_ok
+
+    monkeypatch.setattr(run_module, "HttpMetaModelClient", lambda *a, **k: Redirecting())
+    monkeypatch.setattr(run_module, "prices_configured", lambda kind: True)
+    for key, value in {
+        "META_API_BASE_URL": "https://meta.invalid",
+        "META_API_KEY": "k",
+        "META_CHAT_MODEL": "m",
+    }.items():
+        monkeypatch.setattr(run_module.settings, key, value)
+    Redirecting.calls = 0
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        code = run_module.main(
+            [
+                "--client",
+                "http",
+                "--allow-real-meta-api",
+                "--ledger",
+                str(Path(d) / "l.json"),
+                "--out",
+                str(Path(d) / "r.md"),
+            ]
+        )
+    assert code == 1
+    assert Redirecting.calls == run_module.MAX_UPSTREAM_ERRORS_IN_A_ROW
