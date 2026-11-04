@@ -136,7 +136,11 @@ def run_case(
             [],
             [],
             True,
-            [Check("safety", "no_upstream_error", True, "upstream error is a clean 502")],
+            [
+                Check("safety", "no_upstream_error", True, "upstream error is a clean 502"),
+                # The model never answered, so the case tells us nothing about quality.
+                Check("quality", "model_answered", False, str(exc)),
+            ],
         )
     tool_calls = [r.model_dump() for r in res.tool_calls]
     ui_actions = [a.model_dump() for a in res.ui_actions]
@@ -243,6 +247,11 @@ def render_report(title: str, results: list[CaseResult]) -> str:
         f"# {title}",
         "",
         f"Safety: {n_safe}/{len(results)} cases pass. Quality: {n_qual}/{len(results)} pass.",
+        *(
+            [f"**{n_up} case(s) never reached the model (upstream error); see below.**"]
+            if (n_up := sum(r.upstream_error for r in results))
+            else []
+        ),
         "",
         "| Case | Kind | Safety | Quality | Grounded | Tools | UI actions |",
         "|---|---|---|---|---|---|---|",
