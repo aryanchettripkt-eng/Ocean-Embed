@@ -15,7 +15,7 @@ from oceanscope_ml.data.argo_inputs import ArgoInputs, enable_argo_input, expand
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.finetune import finetune_run, load_holdout
 from oceanscope_ml.inference.predict import load_checkpoint, predict_store
-from oceanscope_ml.train import build_model
+from oceanscope_ml.train import build_model, train_run
 from tests.test_finetune import HELD_OUT, setup  # noqa: F401  (fixture)
 
 DEPTHS = 3
@@ -137,3 +137,25 @@ def test_finetune_with_argo_inputs_and_predict(
     pred = xr.open_zarr(dest)
     assert np.isfinite(pred["temp_pred"].values).any()
     assert all(HELD_OUT not in s for s in seen)
+
+
+def test_train_from_scratch_with_argo_recency_and_year(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    config, store, _, files, holdout_path = setup
+    config.inputs.setdefault("argo_input", {})["min_year"] = 2000  # synthetic years
+    holdout = load_holdout(holdout_path)
+    result = train_run(
+        config, store, "scratch_ai", device_choice="cpu", epochs=1, argo_paths=files,
+        holdout=holdout, argo_lambda=1.0, recency=2.0, year_input=True,
+    )  # fmt: skip
+    assert result.epochs_completed == 1
+    names = channel_names(config)
+    assert names[-1] == "year" and "argo_mask" in names
+    best = Path(config.paths.checkpoints) / "scratch_ai" / "best.pt"
+    dest = predict_store(
+        config, store, best, out_dir=tmp_path / "o", device_choice="cpu",
+        argo_paths=files, holdout=holdout,
+    )  # fmt: skip
+    assert np.isfinite(xr.open_zarr(dest)["temp_pred"].values).any()

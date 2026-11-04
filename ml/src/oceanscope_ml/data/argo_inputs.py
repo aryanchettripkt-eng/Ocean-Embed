@@ -193,6 +193,13 @@ def enable_argo_input(config: ExperimentConfig) -> None:
     inputs["argo_input"] = argo_cfg
 
 
+def enable_year_input(config: ExperimentConfig) -> None:
+    """Add the optional ``year`` extra channel (last channel) to a loaded config."""
+    extra = list(config.inputs.get("extra", []))
+    if "year" not in extra:
+        config.inputs["extra"] = [*extra, "year"]
+
+
 def expand_input_weights(
     state: dict, base_names: list[str], new_names: list[str], key: str = "encoders.0.0.weight"
 ) -> dict:

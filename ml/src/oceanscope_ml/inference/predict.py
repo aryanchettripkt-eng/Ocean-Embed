@@ -33,7 +33,7 @@ import zarr
 from torch.utils.data import DataLoader, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
-from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input
+from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input, enable_year_input
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -59,6 +59,8 @@ def load_checkpoint(
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     if any(str(n).startswith("argo_") for n in ckpt["channel_names"]):
         enable_argo_input(config)  # a run fine-tuned with ARGO input channels (P4-6)
+    if "year" in ckpt["channel_names"] and "year" not in config.inputs.get("extra", []):
+        enable_year_input(config)
     channels = channel_names(config)
     if ckpt["channel_names"] != channels:
         raise ValueError(

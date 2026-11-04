@@ -29,6 +29,7 @@ from oceanscope_ml.data.transform import TestLeakageError, check_no_test_leakage
 logger = logging.getLogger("oceanscope_ml.data.dataset")
 
 TRAINABLE_SPLITS = ("train", "val")
+YEAR_CENTER, YEAR_SCALE = 2005.0, 10.0  # the optional "year" extra channel
 
 
 def _split_range(config: ExperimentConfig, split: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -419,6 +420,9 @@ class OceanScopeDataset(torch.utils.data.Dataset):
                 return np.broadcast_to(self._lon_scaled[None, :], shape).astype(np.float64)
             if channel.source == "ocean_mask":
                 return np.asarray(self._static["ocean_mask"], dtype=np.float64)
+            if channel.source == "year":
+                # Slow trends (warming of the thermocline): the calendar year, scaled.
+                return np.full(shape, (day.year + (doy - 1) / 366.0 - YEAR_CENTER) / YEAR_SCALE)
 
         raise NotImplementedError(f"Channel kind {kind!r} is not built yet")
 
