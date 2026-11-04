@@ -27,9 +27,35 @@ MAX_AUDIO_BYTES = 1_000_000
 # Allowance for multipart framing. The whole body stays under Starlette's 1 MiB in-memory spool
 # limit, so an accepted upload never rolls over to a temporary file on disk (PRD_BACKEND §4.13).
 MAX_BODY_BYTES = MAX_AUDIO_BYTES + 8_192
-ALLOWED_AUDIO_TYPES = frozenset({"audio/webm", "audio/mp4", "audio/ogg"})
+# Muse Voice Transcribe takes only mono 16-bit PCM WAV at 16 or 24 kHz, so the browser converts
+# its recording before upload (30 s at 16 kHz is 960 kB, inside the 1 MB cap).
+ALLOWED_AUDIO_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/wave"})
+WAV_RATES = frozenset({16_000, 24_000})
+WAV_MESSAGE = "Audio must be mono 16-bit PCM WAV at 16 or 24 kHz"
 _LANG_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$")
 TIMEOUT_S = 20.0
+
+
+def is_supported_wav(data: bytes) -> bool:
+    """True for a RIFF/WAVE file whose `fmt ` chunk is mono 16-bit PCM at 16 or 24 kHz."""
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return False
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk_id = data[pos : pos + 4]
+        size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+        if chunk_id == b"fmt ":
+            if size < 16 or pos + 8 + 16 > len(data):
+                return False
+            fmt = data[pos + 8 : pos + 24]
+            audio_format = int.from_bytes(fmt[0:2], "little")
+            channels = int.from_bytes(fmt[2:4], "little")
+            rate = int.from_bytes(fmt[4:8], "little")
+            bits = int.from_bytes(fmt[14:16], "little")
+            return audio_format == 1 and channels == 1 and bits == 16 and rate in WAV_RATES
+        pos += 8 + size + (size & 1)
+    return False
+
 
 _limiter: FeatureLimiter | None = None
 
@@ -75,7 +101,8 @@ router = APIRouter(route_class=_BoundedRoute)
     tags=["voice"],
     summary="Voice input (Muse Voice Transcribe)",
     description=(
-        "Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio "
+        "Transcribes one short clip (30 s or less, 1 MB or less; mono 16-bit PCM WAV at 16 or "
+        "24 kHz, which the browser converts its recording to). The audio "
         "is forwarded and discarded in memory; the browser shows the text so the user can edit it "
         "before it is sent to /chat."
     ),
@@ -87,7 +114,7 @@ def post_transcribe(
     """Turn one spoken question into text."""
     mime = (audio.content_type or "").split(";")[0].strip().lower()
     if mime not in ALLOWED_AUDIO_TYPES:
-        raise APIError(415, "unsupported_audio", "Audio must be WebM/Opus, MP4 or Ogg")
+        raise APIError(415, "unsupported_audio", WAV_MESSAGE)
     if not _LANG_RE.match(lang):
         raise APIError(422, "invalid_lang", "lang must be a BCP-47 tag such as en or hi-IN")
     data = audio.file.read(MAX_AUDIO_BYTES + 1)
@@ -95,6 +122,8 @@ def post_transcribe(
         raise APIError(413, "audio_too_large", "Audio must be 1 MB or less")
     if not data:
         raise APIError(422, "empty_audio", "The audio upload is empty")
+    if not is_supported_wav(data):
+        raise APIError(415, "unsupported_audio", WAV_MESSAGE)
 
     store_module.store._ensure_loaded()
     manifest = store_module.store.loader.manifest

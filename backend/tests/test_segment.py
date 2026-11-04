@@ -15,12 +15,13 @@ import numpy as np
 import pytest
 import xarray as xr
 from fastapi.testclient import TestClient
+from meta_sam_parser._mask_codec import _encode_raster
 
 import app.api.v1.segment as segment_api
 from app.main import app
 from app.meta import client as client_module
 from app.meta import segment as seg
-from app.meta.client import HttpMetaModelClient, MetaUpstreamError, encode_rle, png_size
+from app.meta.client import HttpMetaModelClient, MetaUpstreamError, png_size, sam_text_to_mask
 from app.schemas.caveats import SEGMENT_CAVEAT
 from app.settings import settings
 from tests.conftest import FIXTURES_DIR
@@ -175,6 +176,34 @@ def test_threshold_fallback_is_used_and_reported(
     assert body["stats"]["n_valid"] > 1
 
 
+def test_slow_sam_falls_back_before_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SAM call that outlives SAM_TIMEOUT_S (slow network or slow mask decoding) must not
+    hold the request: the threshold answer comes back in time."""
+    import time as time_module
+
+    class SlowSam(FakeSam):
+        def segment(self, png: bytes, point_xy: tuple[int, int], *, timeout_s: float) -> np.ndarray:
+            time_module.sleep(1.5)
+            return super().segment(png, point_xy, timeout_s=timeout_s)
+
+    monkeypatch.setattr(segment_api, "SAM_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(client_module, "build_client", lambda: SlowSam(rectangle(3, 8, 30, 40)))
+    started = time_module.monotonic()
+    res = TestClient(app).post("/api/v1/segment", json=BODY)
+    assert time_module.monotonic() - started < 1.2
+    assert res.status_code == 200 and res.json()["method"] == "threshold"
+
+
+def test_unexpected_sam_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenSam(FakeSam):
+        def segment(self, png: bytes, point_xy: tuple[int, int], *, timeout_s: float) -> np.ndarray:
+            raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(client_module, "build_client", lambda: BrokenSam())
+    res = TestClient(app).post("/api/v1/segment", json=BODY)
+    assert res.status_code == 200 and res.json()["method"] == "threshold"
+
+
 def test_threshold_cap_holds() -> None:
     """Test 20: the 5,000-cell cap holds on a large uniform field."""
     values = np.full((120, 120), 20.0, dtype=np.float32)
@@ -237,16 +266,48 @@ def use_http_client(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     monkeypatch.setattr(client_module, "build_client", lambda: real)
 
 
-def test_http_client_sends_rendered_png_and_decodes_rle(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[dict[str, Any]] = []
+def sam_record(mask: np.ndarray, object_id: int = 1, step: int = 1) -> str:
+    """One SAM 3.1 output record for `mask`: a box around it and its box-local raster, encoded
+    with Meta's own codec. `step` > 1 sends a coarser raster, as SAM may."""
+    height, width = mask.shape
+    rows, cols = np.nonzero(mask)
+    top, bottom, left, right = rows.min(), rows.max(), cols.min(), cols.max()
+    local = mask[top : bottom + 1 : step, left : right + 1 : step]
+    h, w = local.shape
+    payload = _encode_raster([int(v) for v in local.reshape(-1)], w, h)
+    return (
+        f"{object_id}<|box;x1={left};y1={top};x2={right};y2={bottom};w={width};h={height}|>"
+        f"<|mask;x=0;y=0;data={h},{w},{payload}|>"
+    )
+
+
+def sse(*events: dict[str, Any]) -> httpx.Response:
+    body = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+    return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
+def sam_stream(text: str, completed: bool = True) -> httpx.Response:
+    mid = len(text) // 2
+    events: list[dict[str, Any]] = [
+        {"type": "response.output_text.delta", "delta": text[:mid]},
+        {"type": "response.output_text.delta", "delta": text[mid:]},
+        {"type": "response.content_part.done", "part": {"type": "output_text", "text": text}},
+    ]
+    if completed:
+        events.append({"type": "response.completed", "response": {"status": "completed"}})
+    return sse(*events)
+
+
+def test_http_client_calls_sam_through_responses_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         payload = json.loads(request.read())
-        seen.append(payload)
-        assert request.headers["Authorization"] == f"Bearer {SENTINEL_KEY}"
-        png = base64.b64decode(payload["image"].split(",", 1)[1])
+        content = payload["input"][0]["content"]
+        png = base64.b64decode(content[1]["image_url"].split(",", 1)[1])
         mask = cells_to_pixels(rectangle(3, 8, 30, 40), png)
-        return httpx.Response(200, json={"masks": [encode_rle(mask)]})
+        return sam_stream("<0f>" + sam_record(mask) + "\n")
 
     use_http_client(monkeypatch, handler)
     res = TestClient(app).post("/api/v1/segment", json=BODY)
@@ -254,9 +315,79 @@ def test_http_client_sends_rendered_png_and_decodes_rle(monkeypatch: pytest.Monk
     body = res.json()
     assert body["method"] == "sam" and body["provider_label"] == "SAM 3.1 via Meta Model API"
     assert SENTINEL_KEY not in res.text
-    assert seen[0]["model"] == "sam-x" and seen[0]["point_labels"] == [1]
     ranges = body["mask"]["lat_index_ranges"]
     assert ranges[0] == [3, 30, 40] and ranges[-1] == [8, 30, 38]  # cols 39-40 are land
+
+    req = seen[0]
+    assert req.url.path == "/v1/responses"
+    assert req.headers["Authorization"] == f"Bearer {SENTINEL_KEY}"
+    assert req.headers["Accept"] == "text/event-stream"
+    payload = json.loads(req.read())
+    assert payload["model"] == "sam-x" and payload["stream"] is True
+    message = payload["input"][0]
+    assert message["type"] == "message" and message["role"] == "user"
+    text_part, image_part = message["content"]
+    assert text_part["type"] == "input_text" and image_part["type"] == "input_image"
+    png = base64.b64decode(image_part["image_url"].split(",", 1)[1])
+    width, height = png_size(png)
+    # The tapped cell's centre pixel, as one positive point for object 1 on frame 0.
+    assert text_part["text"].startswith("<0f>1<|point;x=")
+    assert text_part["text"].endswith(f";w={width};h={height}|>")
+
+
+def test_coarse_and_multiple_sam_masks_are_placed_in_their_boxes() -> None:
+    full = np.zeros((40, 60), dtype=bool)
+    full[4:20, 6:30] = True
+    other = np.zeros((40, 60), dtype=bool)
+    other[30:36, 40:50] = True
+    text = "<0f>" + sam_record(full, 1, step=2) + "," + sam_record(other, 2)
+    out = sam_text_to_mask(text, 60, 40)
+    assert out.shape == (40, 60)
+    assert (out == (full | other)).all()
+
+
+def test_sam_json_reply_and_nothing_found() -> None:
+    mask = np.zeros((20, 30), dtype=bool)
+    mask[5:9, 10:20] = True
+    body = {
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "<0f>" + sam_record(mask)}],
+            }
+        ],
+    }
+    client = HttpMetaModelClient(
+        "https://meta.invalid/v1",
+        SENTINEL_KEY,
+        "",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=body)),
+        segment_model="sam-x",
+    )
+    png = seg.render_grid_png(np.zeros((20, 30), np.float32), np.ones((20, 30), int), 0, 1).png
+    width, height = png_size(png)
+    out = client.segment(png, (1, 1), timeout_s=5)
+    assert out.shape == (height, width) and out.any()
+    assert not sam_text_to_mask("<0f>\n", width, height).any()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        sam_stream("<0f>", completed=False),  # stream ended without response.completed
+        sse({"type": "response.failed", "response": {"status": "failed"}}),
+        sse({"type": "error", "message": "bad prompt"}),
+        sam_stream("<0f>1<|box;x1=0;y1=0;x2=3;y2=3;w=8;h=8|><|mask;x=0;y=0;data=4,4,!@@|>\n"),
+        httpx.Response(200, json={"status": "incomplete", "output": []}),
+    ],
+)
+def test_bad_sam_replies_fall_back_to_threshold(
+    monkeypatch: pytest.MonkeyPatch, reply: httpx.Response
+) -> None:
+    use_http_client(monkeypatch, lambda r: reply)
+    res = TestClient(app).post("/api/v1/segment", json=BODY)
+    assert res.status_code == 200 and res.json()["method"] == "threshold"
 
 
 def test_upstream_failure_falls_back_without_leaks(
@@ -268,10 +399,3 @@ def test_upstream_failure_falls_back_without_leaks(
     assert res.status_code == 200 and res.json()["method"] == "threshold"
     for leaked in (SENTINEL_KEY, "SECRET-BODY"):
         assert leaked not in res.text and leaked not in caplog.text
-
-
-def test_rle_round_trip() -> None:
-    rng = np.random.default_rng(0)
-    mask = rng.random((7, 11)) > 0.5
-    decoded = client_module.decode_rle(*encode_rle(mask).values())
-    assert (decoded == mask).all()

@@ -33,6 +33,13 @@ export interface paths {
      */
     get: operations["get_events_api_v1_events_get"];
   };
+  "/api/v1/glasses/ask": {
+    /**
+     * Glasses ocean guide: temperature where the user is looking
+     * @description Takes a spoken question (mono 16-bit PCM WAV at 16 or 24 kHz, 1 MB or less) or typed text, plus the phone's location and compass heading. Finds the first ocean cell along the heading that has water at the asked depth (as GET /nearest-ocean with min_depth_m), reads its profile on the latest available date, blends linearly between the two model levels around the asked depth, and returns a short spoken answer. No chat model is called; the location is not stored or logged.
+     */
+    post: operations["post_glasses_ask_api_v1_glasses_ask_post"];
+  };
   "/api/v1/headline": {
     /**
      * Pre-registered primary success criterion table
@@ -71,7 +78,7 @@ export interface paths {
   "/api/v1/nearest-ocean": {
     /**
      * First ocean cell in view from the user's location (beach mode)
-     * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.
+     * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. With min_depth_m, only cells with a predicted value at that depth count. The location is not stored or logged.
      */
     get: operations["get_nearest_ocean_api_v1_nearest_ocean_get"];
   };
@@ -127,7 +134,7 @@ export interface paths {
   "/api/v1/transcribe": {
     /**
      * Voice input (Muse Voice Transcribe)
-     * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+     * @description Transcribes one short clip (30 s or less, 1 MB or less; mono 16-bit PCM WAV at 16 or 24 kHz, which the browser converts its recording to). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
      */
     post: operations["post_transcribe_api_v1_transcribe_post"];
   };
@@ -230,6 +237,51 @@ export interface components {
        * @description Start date YYYY-MM-DD
        */
       start: string;
+    };
+    /** Body_post_glasses_ask_api_v1_glasses_ask_post */
+    Body_post_glasses_ask_api_v1_glasses_ask_post: {
+      /**
+       * Audio
+       * @description Spoken question, 30 s or less
+       */
+      audio?: string | null;
+      /**
+       * Bearing Deg
+       * @description Compass heading, true north, clockwise
+       */
+      bearing_deg?: number | null;
+      /**
+       * Heading Accuracy Deg
+       * @description Compass accuracy reported by the phone, if known
+       */
+      heading_accuracy_deg?: number | null;
+      /**
+       * Lang
+       * @description BCP-47 language tag for transcription
+       * @default en
+       */
+      lang?: string;
+      /**
+       * Lat
+       * @description User latitude
+       */
+      lat: number;
+      /**
+       * Lon
+       * @description User longitude
+       */
+      lon: number;
+      /**
+       * Max Km
+       * @description How far to look
+       * @default 300
+       */
+      max_km?: number;
+      /**
+       * Text
+       * @description Typed question (used when no audio is sent)
+       */
+      text?: string | null;
     };
     /** Body_post_transcribe_api_v1_transcribe_post */
     Body_post_transcribe_api_v1_transcribe_post: {
@@ -347,6 +399,22 @@ export interface components {
       vmin: number;
     };
     /**
+     * DateRange
+     * @description A run of consecutive days present in the served prediction store.
+     */
+    DateRange: {
+      /**
+       * End
+       * @description Last day YYYY-MM-DD
+       */
+      end: string;
+      /**
+       * Start
+       * @description First day YYYY-MM-DD
+       */
+      start: string;
+    };
+    /**
      * ErrorRange
      * @description Fixed color scale bounds for reconstruction error fields.
      */
@@ -433,6 +501,75 @@ export interface components {
       segment_method: "sam" | "threshold";
       /** Voice */
       voice: boolean;
+    };
+    /**
+     * GlassesAskResponse
+     * @description Response model for POST /glasses/ask (glasses ocean guide, §4.18).
+     */
+    GlassesAskResponse: {
+      /**
+       * Answer Text
+       * @description Short spoken answer for text-to-speech
+       */
+      answer_text: string;
+      /** Bearing Deg */
+      bearing_deg: number;
+      /** Caveats */
+      caveats: string[];
+      /** Date */
+      date: string;
+      /**
+       * Depth Asked M
+       * @description Depth heard in the question, if any
+       */
+      depth_asked_m?: number | null;
+      /**
+       * Depth Used M
+       * @description Depth the temperature is for
+       */
+      depth_used_m: number;
+      /**
+       * Direction
+       * @description 16-point compass word from the user to the cell
+       */
+      direction: string;
+      /** Distance Km */
+      distance_km: number;
+      /**
+       * Interpolated
+       * @description True when blended between two levels
+       */
+      interpolated: boolean;
+      /** Lat */
+      lat: number;
+      /**
+       * Levels M
+       * @description Model levels used (two when blended)
+       */
+      levels_m: number[];
+      /** Lon */
+      lon: number;
+      /**
+       * Question
+       * @description The question as typed or transcribed
+       */
+      question: string;
+      /** Run Id */
+      run_id: string;
+      /** Split */
+      split?: string | null;
+      /** Synthetic */
+      synthetic: boolean;
+      /**
+       * Temperature C
+       * @description Model prediction, rounded to 0.1 °C
+       */
+      temperature_c: number;
+      /**
+       * Too Shallow
+       * @description True when no water that deep was found, so the deepest level was used
+       */
+      too_shallow: boolean;
     };
     /**
      * GridShape
@@ -570,6 +707,11 @@ export interface components {
       color_ranges: components["schemas"]["ColorRange"][];
       /** Dataset Version */
       dataset_version: string;
+      /**
+       * Date Ranges
+       * @description Runs of consecutive days the store holds, oldest first. Live mode appends recent days after the historical ones, leaving a gap inside available_dates; dates in a gap return 404 date_unavailable.
+       */
+      date_ranges?: components["schemas"]["DateRange"][] | null;
       /** Depths M */
       depths_m: number[];
       error_range: components["schemas"]["ErrorRange"];
@@ -1128,6 +1270,31 @@ export interface operations {
     };
   };
   /**
+   * Glasses ocean guide: temperature where the user is looking
+   * @description Takes a spoken question (mono 16-bit PCM WAV at 16 or 24 kHz, 1 MB or less) or typed text, plus the phone's location and compass heading. Finds the first ocean cell along the heading that has water at the asked depth (as GET /nearest-ocean with min_depth_m), reads its profile on the latest available date, blends linearly between the two model levels around the asked depth, and returns a short spoken answer. No chat model is called; the location is not stored or logged.
+   */
+  post_glasses_ask_api_v1_glasses_ask_post: {
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["Body_post_glasses_ask_api_v1_glasses_ask_post"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        content: {
+          "application/json": components["schemas"]["GlassesAskResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  /**
    * Pre-registered primary success criterion table
    * @description Returns the pre-registered headline comparison in the Bay of Bengal 50-300m with float-bootstrap CIs.
    */
@@ -1231,7 +1398,7 @@ export interface operations {
   };
   /**
    * First ocean cell in view from the user's location (beach mode)
-   * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. The location is not stored or logged.
+   * @description With a compass bearing, returns the first valid ocean cell at least 5 km away along that bearing, up to max_km; without one, the nearest such cell. Uses coverage on the latest available date. With min_depth_m, only cells with a predicted value at that depth count. The location is not stored or logged.
    */
   get_nearest_ocean_api_v1_nearest_ocean_get: {
     parameters: {
@@ -1244,6 +1411,8 @@ export interface operations {
         bearing_deg?: number | null;
         /** @description How far to look */
         max_km?: number;
+        /** @description Only cells with a predicted value at this depth (water at least this deep); must not be deeper than the deepest model level */
+        min_depth_m?: number | null;
       };
     };
     responses: {
@@ -1478,7 +1647,7 @@ export interface operations {
   };
   /**
    * Voice input (Muse Voice Transcribe)
-   * @description Transcribes one short clip (30 s or less, 1 MB or less; WebM/Opus, MP4 or Ogg). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
+   * @description Transcribes one short clip (30 s or less, 1 MB or less; mono 16-bit PCM WAV at 16 or 24 kHz, which the browser converts its recording to). The audio is forwarded and discarded in memory; the browser shows the text so the user can edit it before it is sent to /chat.
    */
   post_transcribe_api_v1_transcribe_post: {
     requestBody: {

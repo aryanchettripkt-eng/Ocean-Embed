@@ -144,7 +144,7 @@ Meta's models are how people move through the data: you ask, and the ocean moves
 - Handles 429/503/502 with friendly messages; input disabled while waiting; 25 s client timeout.
 
 **b) Voice dive (`features.voice`)**
-- A hold-to-talk mic button in the guide's input (tap-to-toggle for accessibility). Records with `MediaRecorder` (Opus/WebM; MP4/AAC on Safari), max 30 s with a visible countdown, then posts to `/transcribe`.
+- A hold-to-talk mic button in the guide's input (tap-to-toggle for accessibility). Records with `MediaRecorder` (Opus/WebM; MP4/AAC on Safari), max 30 s with a visible countdown, converts the clip to 16 kHz mono WAV in memory, then posts to `/transcribe`.
 - The transcript appears in the input for 1.5 s (editable; any key cancels auto-send) and is then sent to `/chat` as text.
 - Microphone permission is requested only on the first press, with a one-line explanation first; if denied, the mic button explains how to re-enable it and typing still works. Audio is never stored or sent anywhere but our backend.
 
@@ -162,7 +162,7 @@ Meta's models are how people move through the data: you ask, and the ocean moves
 **e) Lasso (`features.segment`)**
 - A "Lasso" tool in the map toolbar: tap a point on the 2D map or the 3D top face → `/segment` → draw the returned `outline` as an ink-style line with a soft fill; a panel shows the stats (mean/min/max/std, area) with the source label, the method ("Selected by SAM 3.1" or "Selected by similar temperature (±0.5 °C)") and `SEGMENT_CAVEAT`.
 - "Ask about this area" sends the selection's bbox and stats as context to the guide.
-- While the request runs (≤ 10 s), show a pulsing outline at the tapped point; on error, a one-line message and no stats.
+- While the request runs (≤ 20 s; the backend gives SAM 6 s before it falls back), show a pulsing outline at the tapped point; on error, a one-line message and no stats.
 
 **f) Beach mode (`features.beach`, phones only)**
 - A "Beach mode" entry in the mobile menu opens `/beach`: one big "Point at the sea" button. On tap: request geolocation (and on iOS `DeviceOrientationEvent.requestPermission()`), read the compass heading, call `/nearest-ocean`, then show that cell's `/profile` as a big vertical temperature strip with the distance and direction ("62 km east of you"), plus the mic button to ask the guide about it.

@@ -137,6 +137,8 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:7860/api/v1 pnpm dev   # http://localh
 
 To run the frontend with no backend at all, set `NEXT_PUBLIC_USE_MOCKS=true`.
 
+Working on the frontend? Start with [`frontend/README.md`](frontend/README.md): Node and pnpm versions, `.env.local` setup (deployed backend, mocks or local fixtures), checks, the Meta feature flags, and the branch and PR flow.
+
 ### 2. Build the data store (Kaggle or Colab)
 
 Set the secrets `COPERNICUSMARINE_SERVICE_USERNAME`, `COPERNICUSMARINE_SERVICE_PASSWORD`, `EARTHDATA_USERNAME`, `EARTHDATA_PASSWORD` and `CDSAPI_KEY`, then from `ml/`:

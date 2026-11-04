@@ -226,6 +226,13 @@ def test_http_client_sends_template_prompt(monkeypatch: pytest.MonkeyPatch) -> N
     payload = json.loads(req.read())
     assert payload["model"] == "image-x"
     assert payload["prompt"].endswith("No text, no numbers, no logos, no people.")
+    # Fields and values from Meta's CreateImageRequest schema.
+    assert payload["n"] == 1 and payload["response_format"] == "b64_json"
+    assert payload["output_format"] == "webp" and payload["reasoning_strength"] == "low"
+
+
+def test_backend_gives_up_before_the_browser() -> None:
+    assert postcard_api.TIMEOUT_S < 45.0  # frontend POSTCARD_TIMEOUT_MS is 45 s
 
 
 @pytest.mark.parametrize(

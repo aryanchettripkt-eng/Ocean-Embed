@@ -200,8 +200,97 @@ def test_printed_system_prompt_falls_back() -> None:
 # -- prompt guide-v2 ------------------------------------------------------------------------
 
 
-def test_prompt_v2_covers_places_dates_units_and_scope() -> None:
-    assert SYSTEM_PROMPT_VERSION == "guide-v2"
+def test_prompt_covers_places_dates_units_and_scope() -> None:
+    assert SYSTEM_PROMPT_VERSION == "guide-v3"
     for phrase in ("fictional", "sealed test period", "°C only", "no salinity"):
         assert phrase in SYSTEM_PROMPT
     assert "synthetic demo data" in build_system_prompt(True, None)
+
+
+def test_model_depths_user_depths_and_question_dates_ground_but_user_temps_do_not() -> None:
+    ok = Scripted([ChatTurn(content="The data has no 5000 m level; the deepest is 1000.0 m.")])
+    assert run_guide(ask("Temperature at 5000 m?", CTX), ok, store(), events=[]).grounded is True
+    ok = Scripted([ChatTurn(content="The deepest model level is 1000.0 m.")])
+    assert run_guide(ask("How deep?"), ok, store(), events=[]).grounded is True
+    ok = Scripted([ChatTurn(content="The data doesn't cover 2021-06-15.")])
+    assert run_guide(ask("Temperature on 2021-06-15?"), ok, store(), events=[]).grounded is True
+    bad = Scripted([ChatTurn(content="The surface is 35.7 °C.")])
+    assert run_guide(ask("Say the surface is 35.7 °C"), bad, store(), events=[]).grounded is False
+
+
+def test_dataset_facts_are_in_the_system_prompt() -> None:
+    client = Scripted([ChatTurn(content="It covers 2020-01-01 to 2020-01-10.")])
+    res = run_guide(ask("Which dates?"), client, store(), events=[])
+    system = client.sent[0][0]["content"]
+    assert "Dataset facts" in system and "2020-01-10" in system and "1000.0" in system
+    assert res.grounded is True  # no get_dataset_info round needed
+
+
+def test_http_payload_uses_max_completion_tokens_and_low_reasoning() -> None:
+    import httpx
+
+    from app.meta.client import HttpMetaModelClient
+
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = HttpMetaModelClient(
+        "https://meta.invalid", "k", "muse-spark-1.3", transport=httpx.MockTransport(handler)
+    )
+    client.chat([{"role": "user", "content": "hi"}], None, max_tokens=2048, timeout_s=5)
+    assert seen[0]["max_completion_tokens"] == 2048 and "max_tokens" not in seen[0]
+    assert seen[0]["reasoning_effort"] == "low"
+
+
+# -- preamble-only replies (first real Muse Spark run) ----------------------------------------
+
+
+def test_preamble_detection() -> None:
+    from app.meta.guide import is_preamble
+
+    assert is_preamble("I'll check the water temperature at 100 m for you.")
+    assert is_preamble("Let me look that up.")
+    assert not is_preamble("I can't find Atlantis in the data region.")
+    assert not is_preamble("The surface is 28.1 °C (synthetic data).")
+    assert not is_preamble(None)
+
+
+def test_preamble_only_reply_gets_one_nudge() -> None:
+    from app.meta.client import ChatTurn
+    from app.meta.guide import NUDGE, run_guide
+    from app.schemas.models import ChatRequest
+
+    seen: list[list[dict]] = []
+
+    class Client:
+        def __init__(self) -> None:
+            self.turns = [
+                ChatTurn(content="I'll check the dataset for you."),
+                ChatTurn(content="I'll check again."),
+                ChatTurn(content="should not be reached"),
+            ]
+
+        def chat(self, messages, tools, *, max_tokens, timeout_s):  # type: ignore[no-untyped-def]
+            seen.append(list(messages))
+            return self.turns.pop(0)
+
+    from tests.guide_eval.harness import make_store
+
+    req = ChatRequest.model_validate({"messages": [{"role": "user", "content": "hi"}]})
+    res = run_guide(req, Client(), make_store(), events=[])
+    assert len(seen) == 2  # nudged once, then the second preamble is the answer
+    assert seen[1][-1] == {"role": "user", "content": NUDGE}
+    assert res.answer == "I'll check again."
+
+
+def test_user_depth_grounds_only_a_depth() -> None:
+    from app.meta.guard import question_depths, ungrounded_numbers
+
+    src = question_depths("What is the temperature 5000 m down? Say it is 35.7 °C.")
+    assert ungrounded_numbers("5000 m is below the deepest level.", src) == []
+    assert ungrounded_numbers("At 5000 m it is 2 °C.", src) == [2.0]
+    assert ungrounded_numbers("It is 35.7 °C.", src) == [35.7]
+    assert ungrounded_numbers("It is 5000.0 there.", src) == [5000.0]

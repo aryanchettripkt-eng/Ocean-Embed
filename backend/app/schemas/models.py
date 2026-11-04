@@ -124,6 +124,13 @@ class Features(BaseModel):
     provider_label: str | None = None
 
 
+class DateRange(BaseModel):
+    """A run of consecutive days present in the served prediction store."""
+
+    start: str = Field(..., description="First day YYYY-MM-DD")
+    end: str = Field(..., description="Last day YYYY-MM-DD")
+
+
 class MetaResponse(BaseModel):
     """Response model for GET /meta."""
 
@@ -137,6 +144,14 @@ class MetaResponse(BaseModel):
     depths_m: list[float]
     available_dates: AvailableDates
     latest_live_date: str | None = None
+    date_ranges: list[DateRange] | None = Field(
+        None,
+        description=(
+            "Runs of consecutive days the store holds, oldest first. Live mode appends recent "
+            "days after the historical ones, leaving a gap inside available_dates; dates in a "
+            "gap return 404 date_unavailable."
+        ),
+    )
     splits: Splits
     test_evaluated: bool
     color_ranges: list[ColorRange]
@@ -579,5 +594,30 @@ class NearestOceanResponse(BaseModel):
     distance_km: float
     bearing_deg: float
     date: str
+    run_id: str
+    synthetic: bool
+
+
+class GlassesAskResponse(BaseModel):
+    """Response model for POST /glasses/ask (glasses ocean guide, §4.18)."""
+
+    answer_text: str = Field(..., description="Short spoken answer for text-to-speech")
+    question: str = Field(..., description="The question as typed or transcribed")
+    temperature_c: float = Field(..., description="Model prediction, rounded to 0.1 °C")
+    depth_asked_m: float | None = Field(None, description="Depth heard in the question, if any")
+    depth_used_m: float = Field(..., description="Depth the temperature is for")
+    levels_m: list[float] = Field(..., description="Model levels used (two when blended)")
+    interpolated: bool = Field(..., description="True when blended between two levels")
+    too_shallow: bool = Field(
+        ..., description="True when no water that deep was found, so the deepest level was used"
+    )
+    lat: float
+    lon: float
+    distance_km: float
+    bearing_deg: float
+    direction: str = Field(..., description="16-point compass word from the user to the cell")
+    date: str
+    split: str | None = None
+    caveats: list[str]
     run_id: str
     synthetic: bool

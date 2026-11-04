@@ -234,7 +234,7 @@ export const apiClient = {
   /** Speech to text for the voice dive (PRD_BACKEND §4.13). */
   postTranscribe(audio: Blob, lang = "en", signal?: AbortSignal): Promise<TranscribeResponse> {
     const form = new FormData();
-    form.append("audio", audio, "clip");
+    form.append("audio", audio, "clip.wav");
     form.append("lang", lang);
     return fetchApi<TranscribeResponse>("/transcribe", { method: "POST", body: form, signal });
   },

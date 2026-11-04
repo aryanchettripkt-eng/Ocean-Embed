@@ -18,6 +18,7 @@ import {
 } from "../../../lib/guide/ui-actions";
 import type { GuidePrompt, NavigateResult } from "../../../components/guide/GuideDrawer";
 import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
+import { ServedDays } from "../../../lib/date-ranges";
 import { DatePicker } from "../../../components/controls/DatePicker";
 import { DepthSelector } from "../../../components/controls/DepthSelector";
 import { FieldToggle, type FieldType } from "../../../components/controls/FieldToggle";
@@ -49,6 +50,9 @@ const DetailsPanel = dynamic(
 );
 
 // Meta features (PRD_FRONTEND §3.4) load only on first open, outside the initial bundle
+// Lasso request abort. The backend gives SAM 6 s, then falls back to the threshold method.
+const LASSO_TIMEOUT_MS = 20_000;
+
 const GuideDrawer = dynamic(
   () => import("../../../components/guide/GuideDrawer").then((mod) => mod.GuideDrawer),
   { ssr: false }
@@ -237,17 +241,21 @@ function ExplorerContent() {
   const handlePrefetchAhead = useCallback(
     (currentDate: string) => {
       if (!meta) return;
-      const currentDays = Math.floor(new Date(currentDate + "T00:00:00Z").getTime() / 86400000);
-      const endDays = Math.floor(new Date(meta.available_dates.end + "T00:00:00Z").getTime() / 86400000);
+      const served = new ServedDays(
+        meta.available_dates.start,
+        meta.available_dates.end,
+        meta.date_ranges
+      );
+      let nextDate: string | null = currentDate;
       for (let offset = 1; offset <= 3; offset++) {
-        const nextDays = currentDays + offset;
-        if (nextDays <= endDays) {
-          const nextDate = new Date(nextDays * 86400000).toISOString().slice(0, 10);
+        nextDate = nextDate ? served.step(nextDate, 1) : null;
+        if (nextDate) {
+          const day = nextDate;
           queryClient.prefetchQuery({
-            queryKey: ["map", nextDate, state.depth, undefined, state.field],
+            queryKey: ["map", day, state.depth, undefined, state.field],
             queryFn: () =>
               apiClient.getMap({
-                date: nextDate,
+                date: day,
                 depth_m: state.depth,
                 field: state.field,
               }),
@@ -278,7 +286,7 @@ function ExplorerContent() {
     lassoAbortRef.current?.abort();
     const controller = new AbortController();
     lassoAbortRef.current = controller;
-    const timer = setTimeout(() => controller.abort(), 10_000);
+    const timer = setTimeout(() => controller.abort(), LASSO_TIMEOUT_MS);
     const s = stateRef.current;
     setLassoPending({ lat, lon });
     setLassoError(null);
@@ -291,7 +299,7 @@ function ExplorerContent() {
       setLassoResult(res);
     } catch (err) {
       const { segmentErrorMessage } = await import("../../../components/lasso/LassoPanel");
-      setLassoError(segmentErrorMessage(err));
+      setLassoError(segmentErrorMessage(err, controller.signal.aborted));
     } finally {
       clearTimeout(timer);
       if (lassoAbortRef.current === controller) {
@@ -752,6 +760,7 @@ function ExplorerContent() {
             endDate={meta.available_dates.end}
             currentSplit={mapData?.split}
             latestLiveDate={meta.latest_live_date}
+            dateRanges={meta.date_ranges}
             splits={meta.splits}
             onChange={handleDateChange}
             prefetchAhead={handlePrefetchAhead}

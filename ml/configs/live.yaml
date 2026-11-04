@@ -2,11 +2,11 @@
 # experiment.yaml feeds compute_config_hash, and train.py refuses to resume a run whose
 # config hash changed. Live settings must be editable without touching training runs.
 live:                     # PRD §12, PHASES P9. Used by `python -m oceanscope_ml.live`.
-  kit_repo: ""            # [CONFIRM] private HF model repo holding the live kit (best.pt, stats, static)
+  kit_repo: "zenzone3/oceanscope-live-kit"   # private HF model repo holding the live kit (best.pt, stats, static)
   max_lag_days: 10        # look for the newest complete day this far back; none found = failed run
   window_days: 365        # rolling window of live days kept in the prediction store
   trim_slack_days: 30     # trim only past window + slack, so the rewrite runs about monthly
-  era5_min_lag_days: 5    # newest ERA5T day asked of CDS is today - this
+  era5_min_lag_days: 5    # newest ERA5T day asked for is today - this
   sources:                # near-real-time products. [CONFIRM] every dataset_id with `copernicusmarine describe`
     sla_adt:
       service: copernicusmarine
@@ -23,9 +23,10 @@ live:                     # PRD §12, PHASES P9. Used by `python -m oceanscope_m
     currents:
       service: earthdata
       dataset_id: OSCAR_L4_OC_NRT_V2.0
-    era5:
-      service: cds
-      dataset_id: derived-era5-single-levels-daily-statistics                # ERA5T for recent days
+    era5:                 # Google's ARCO ERA5 copy holds ERA5T too (same ~5-6 day lag as CDS)
+      service: arco       # without the CDS queue (2,000+ requests deep on 4 Nov 2026).
+      dataset_id: arco-era5:full_37-1h-0p25deg-chunk-1
+      # CDS fallback: service: cds, dataset_id: derived-era5-single-levels-daily-statistics
 
 live_check:               # P9-1: the same month with reprocessed inputs (the products the store used)
   reprocessed:
@@ -45,9 +46,9 @@ live_check:               # P9-1: the same month with reprocessed inputs (the pr
     currents:
       service: earthdata
       dataset_id: OSCAR_L4_OC_FINAL_V2.0
-    era5:
-      service: cds
-      dataset_id: derived-era5-single-levels-daily-statistics
+    era5:                 # the training store read ERA5 from ARCO too
+      service: arco
+      dataset_id: arco-era5:full_37-1h-0p25deg-chunk-1
   glorys:
     service: copernicusmarine
     dataset_id: cmems_mod_glo_phy_my_0.083deg_P1D-m   # use the myint dataset for months after mid-2021

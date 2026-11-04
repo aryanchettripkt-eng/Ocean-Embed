@@ -11,6 +11,8 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 
 import numpy as np
 from cachetools import TTLCache
@@ -22,7 +24,6 @@ from app.data.store import area_weighted_stats
 from app.errors import APIError
 from app.meta import client as client_module
 from app.meta import segment as seg
-from app.meta.client import MetaUpstreamError
 from app.meta.config import sam_configured, segment_available, segment_provider_label
 from app.meta.limits import FeatureLimiter, client_ip
 from app.schemas.caveats import SEGMENT_CAVEAT
@@ -33,9 +34,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SAM_TIMEOUT_S = 10.0
+# Whole SAM call, well under the frontend's 20 s lasso abort (LASSO_TIMEOUT_MS), so a slow SAM
+# reply falls back to the threshold method and the browser still gets an answer.
+SAM_TIMEOUT_S = 6.0
 
 _limiter: FeatureLimiter | None = None
+# SAM runs here so the request can stop waiting after SAM_TIMEOUT_S whatever SAM is doing
+# (network, or decoding a large mask on a slow CPU); a late call finishes in the background.
+_sam_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sam")
 # Identical inputs give identical answers, so repeated taps do not call SAM again (§4.12).
 _cache: TTLCache[tuple[object, ...], SegmentResponse] = TTLCache(maxsize=256, ttl=3600)
 _cache_lock = threading.Lock()
@@ -173,13 +179,37 @@ def _try_sam(
     else:
         vmin, vmax = float(np.nanmin(grid.values)), float(np.nanmax(grid.values))
     rendered = seg.render_grid_png(grid.values, grid.coverage, vmin, vmax)
+    started = time.monotonic()
+    future = _sam_pool.submit(
+        client_module.build_client().segment,
+        rendered.png,
+        rendered.pixel_of(*seed),
+        timeout_s=SAM_TIMEOUT_S,
+    )
     try:
-        mask = client_module.build_client().segment(
-            rendered.png, rendered.pixel_of(*seed), timeout_s=SAM_TIMEOUT_S
+        mask = future.result(timeout=SAM_TIMEOUT_S)
+    except FutureTimeout:
+        logger.warning(
+            "feature=segment sam=timeout sam_ms=%d fallback=threshold request_id=%s",
+            (time.monotonic() - started) * 1000,
+            request_id,
         )
-    except MetaUpstreamError:
-        logger.warning("feature=segment sam=failed fallback=threshold request_id=%s", request_id)
         return None
+    except Exception as exc:  # any SAM failure falls back; never a 500 from the optional path
+        logger.warning(
+            "feature=segment sam=failed error=%s sam_ms=%d fallback=threshold request_id=%s",
+            type(exc).__name__,
+            (time.monotonic() - started) * 1000,
+            request_id,
+        )
+        return None
+    logger.info(
+        "feature=segment sam=ok sam_ms=%d png=%dx%d request_id=%s",
+        (time.monotonic() - started) * 1000,
+        rendered.n_lon * rendered.scale,
+        rendered.n_lat * rendered.scale,
+        request_id,
+    )
     cells: np.ndarray = rendered.mask_to_cells(np.asarray(mask, dtype=bool)) & valid
     if not cells.any():
         logger.info("feature=segment sam=empty fallback=threshold request_id=%s", request_id)

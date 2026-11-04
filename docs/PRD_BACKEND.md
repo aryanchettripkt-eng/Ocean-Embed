@@ -68,7 +68,8 @@ A small, fast, public, read-only HTTP API that lets the Next.js frontend (and th
 | `META_IMAGE_MODEL` | if postcards | – | Muse Image id `muse-image-1.0` (confirmed 2026-11-03) |
 | `META_SEGMENT_MODEL` | if segment=sam | – | SAM 3.1 id **[CONFIRM]** |
 | `PROVIDER_LABEL` | no | `Muse Spark via Meta Model API` | Display name returned to the UI |
-| `CHAT_ENABLED` / `VOICE_ENABLED` / `POSTCARD_ENABLED` / `SEGMENT_ENABLED` / `BEACH_ENABLED` | no | `false` | Feature flags (§4.12) |
+| `CHAT_ENABLED` / `VOICE_ENABLED` / `POSTCARD_ENABLED` / `SEGMENT_ENABLED` / `BEACH_ENABLED` / `GLASSES_ENABLED` | no | `false` | Feature flags (§4.12, §4.18) |
+| `GLASSES_RATE_LIMIT` / `GLASSES_IP_DAILY_CAP` / `GLASSES_DAILY_CAP` | no | `4/minute` / `30` / `150` | Limits for `/glasses/ask` (§4.18) |
 | `SEGMENT_PROVIDER` | no | `sam` | `sam` or `threshold` (§4.16) |
 | `SEGMENT_THRESHOLD_C` | no | `0.5` | Fallback lasso tolerance |
 | `CHAT_RATE_LIMIT` / `VOICE_RATE_LIMIT` / `POSTCARD_RATE_LIMIT` / `SEGMENT_RATE_LIMIT` | no | `10/minute` / `6/minute` / `3/minute` / `10/minute` | Per IP |
@@ -191,7 +192,7 @@ Endpoints 4.10 and 4.13–4.17 call Meta's hosted models through the Meta Model 
 - `Cache-Control: no-store` for 4.10, 4.13, 4.15; 4.14 and 4.16 are cacheable as data endpoints when their inputs are identical (see each).
 
 ### 4.13 `POST /transcribe` (Muse Voice Transcribe)
-Request: `multipart/form-data` with `audio` (≤ 30 s, ≤ 1 MB; `audio/webm;codecs=opus`, `audio/mp4` or `audio/ogg`) and optional `lang` (BCP-47, default `en`). Response `{"text": "...", "duration_s": 4.2, "provider_label": "...", ...}`. 413 `audio_too_large`, 415 `unsupported_audio`. The audio is forwarded and discarded in memory; never written to disk. The transcript is returned to the browser, which then sends it to `/chat` like typed text (so the user can see and edit it first).
+Request: `multipart/form-data` with `audio` (≤ 30 s, ≤ 1 MB; mono 16-bit PCM WAV at 16 or 24 kHz, `audio/wav`, which the browser converts its recording to; DECISIONS 2026-11-04) and optional `lang` (BCP-47, default `en`). Response `{"text": "...", "duration_s": 4.2, "provider_label": "...", ...}`. 413 `audio_too_large`, 415 `unsupported_audio`. The audio is forwarded and discarded in memory; never written to disk. The transcript is returned to the browser, which then sends it to `/chat` like typed text (so the user can see and edit it first).
 
 ### 4.14 `GET /events` (event time machine)
 Returns the curated list in `app/data/events.json` (committed; edited only by people, never generated at runtime):
@@ -214,10 +215,13 @@ Request `{"date","depth_m","field":"pred|glorys","lat","lon"}` (the tapped point
  "stats":{"mean":..,"min":..,"max":..,"std":..,"n_valid":..,"area_km2":..},
  "outline":[[lon,lat], ...]}                       // simplified polygon for drawing
 ```
-Fallback (`method: "threshold"`): if `SEGMENT_PROVIDER=threshold`, SAM is unavailable, times out (10 s) or returns an empty mask, select the 4-connected region of valid cells whose value is within ±0.5 °C (`SEGMENT_THRESHOLD_C`) of the tapped cell, capped at 5,000 cells. The response always says which method was used; the frontend shows it. SAM shapes are a visual aid: the caveat `SEGMENT_CAVEAT` (Section 7) is returned with every response.
+Fallback (`method: "threshold"`): if `SEGMENT_PROVIDER=threshold`, SAM is unavailable, times out (6 s, under the frontend's 20 s abort) or returns an empty mask, select the 4-connected region of valid cells whose value is within ±0.5 °C (`SEGMENT_THRESHOLD_C`) of the tapped cell, capped at 5,000 cells. The response always says which method was used; the frontend shows it. SAM shapes are a visual aid: the caveat `SEGMENT_CAVEAT` (Section 7) is returned with every response.
 
-### 4.17 `GET /nearest-ocean?lat=&lon=&bearing_deg=&max_km=` (beach mode)
-From a user's location (and optional compass bearing), returns the first valid ocean cell (`coverage = 1` on the latest available date) at least 5 km offshore along the bearing ray, up to `max_km` (default 300, max 500); without `bearing_deg`, the nearest such cell. Response `{"lat","lon","distance_km","bearing_deg","date"}` (snapped cell centre). 404 `no_ocean_in_view` if none; 422 `out_of_region` if the user is more than 500 km outside the region bbox. Location is used only for this request: not logged beyond 1° precision, not stored.
+### 4.17 `GET /nearest-ocean?lat=&lon=&bearing_deg=&max_km=&min_depth_m=` (beach mode)
+From a user's location (and optional compass bearing), returns the first valid ocean cell (`coverage = 1` on the latest available date) at least 5 km offshore along the bearing ray, up to `max_km` (default 300, max 500); without `bearing_deg`, the nearest such cell. Response `{"lat","lon","distance_km","bearing_deg","date"}` (snapped cell centre). 404 `no_ocean_in_view` if none; 422 `out_of_region` if the user is more than 500 km outside the region bbox. Location is used only for this request: not logged beyond 1° precision, not stored. Optional `min_depth_m` (added 2026-11-04 for §4.18) keeps only cells with a predicted value at the first model level at or below that depth, i.e. water at least that deep; 422 `depth_out_of_range` if it is deeper than the deepest model level.
+
+### 4.18 `POST /glasses/ask` (glasses ocean guide, added 2026-11-04)
+Multipart form from the Android glasses app (`android/glasses-guide/`): `lat`, `lon`, optional `bearing_deg` (true north), optional `heading_accuracy_deg`, `max_km` (default 300), and the question as `audio` (same format and limits as `/transcribe`, sent to Muse Voice Transcribe and discarded) or `text`. The backend reads the asked depth from the question (a number with a metre unit; numbers followed by "from", "away", "offshore" are distances and are skipped; "surface" = top level; none = top level plus a hint to ask for a depth). It then finds the cell as `/nearest-ocean` with `min_depth_m` = that depth (capped at the deepest level); if none is in range, it falls back to the first ocean cell and answers at its deepest valid level (`too_shallow: true`). The value comes from that cell's `/profile` on the latest available date: exact on a model level, linear between the two levels around the asked depth (`interpolated: true`, `levels_m`), rounded to 0.1 °C. Response: `answer_text` (two to four sentences for text-to-speech, units in words, always distance, direction and date; says when it blended, when water isn't that deep, when the compass accuracy is worse than 30°, and when data is synthetic), `question`, `temperature_c`, `depth_asked_m`, `depth_used_m`, `levels_m`, `interpolated`, `too_shallow`, `lat`, `lon`, `distance_km`, `bearing_deg`, `direction`, `date`, `split`, `caveats`, `run_id`, `synthetic`. No chat model is called, so every number is exact and costs nothing beyond transcription. Errors: 503 `glasses_disabled` (flag), 503 `voice_disabled` (audio sent while voice is off), 422 `empty_question`, plus the `/transcribe` and `/nearest-ocean` errors. The location is never stored or logged.
 
 OpenAPI: FastAPI's schema exported to `backend/openapi.json` by `python -m app.export_openapi`; CI fails if it is stale. The frontend generates its TypeScript types from this file.
 
@@ -354,6 +358,7 @@ Returned by `/meta` (`caveats` object) and used by the chat prompt. The frontend
 19. `/postcard`: the prompt is built only from the template (no user text reaches it); identical requests hit the cache; the response carries `POSTCARD_CAVEAT`.
 20. `/segment`: with SAM mocked, stats equal `/region-summary` over the same cells; with SAM failing or `SEGMENT_PROVIDER=threshold`, the threshold method is used and reported; the mask never includes coverage ≠ 1 cells; the 5,000-cell cap holds.
 21. `/nearest-ocean`: a coastal point with a seaward bearing returns an ocean cell ≥ 5 km away; a landward bearing within `max_km` returns 404 `no_ocean_in_view`; no location is logged at better than 1°.
+22. `/glasses/ask`: the temperature equals the `/profile` value at a level and the linear blend between levels; a depth deeper than the model uses the deepest level; no deep water in view sets `too_shallow`; depth parsing skips distances; audio goes through transcription; no location is logged.
 
 ---
 
