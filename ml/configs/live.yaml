@@ -2,7 +2,7 @@
 # experiment.yaml feeds compute_config_hash, and train.py refuses to resume a run whose
 # config hash changed. Live settings must be editable without touching training runs.
 live:                     # PRD §12, PHASES P9. Used by `python -m oceanscope_ml.live`.
-  kit_repo: ""            # [CONFIRM] private HF model repo holding the live kit (best.pt, stats, static)
+  kit_repo: "zenzone3/oceanscope-live-kit"   # private HF model repo holding the live kit (best.pt, stats, static)
   max_lag_days: 10        # look for the newest complete day this far back; none found = failed run
   window_days: 365        # rolling window of live days kept in the prediction store
   trim_slack_days: 30     # trim only past window + slack, so the rewrite runs about monthly

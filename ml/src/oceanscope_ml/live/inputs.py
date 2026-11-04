@@ -50,6 +50,8 @@ PRODUCT_VARS: dict[str, tuple[str, ...]] = {
     "era5": ("u_wind", "v_wind", "wind_stress_curl", "net_heat_flux", "precip"),
 }
 SERVICES = ("copernicusmarine", "earthdata", "cds")
+# Newest ERA5T days to give up on, one at a time, when CDS refuses a request.
+CDS_MAX_DROPPED_DAYS = 3
 
 # fetch(product, spec, start, end) -> raw dataset, or None when the source has no data then.
 Fetcher = Callable[[str, dict[str, Any], pd.Timestamp, pd.Timestamp], "xr.Dataset | None"]
@@ -350,27 +352,47 @@ def _fetch_cds_daily(
 ) -> xr.Dataset | None:
     import cdsapi
 
-    from oceanscope_ml.data.build_store import ERA5_DAILY_VARIABLES, _open_cds_download
+    from oceanscope_ml.data.build_store import ERA5_DAILY_VARIABLES
 
     out_dir.mkdir(parents=True, exist_ok=True)
     client = cdsapi.Client()
-    parts = []
-    for request in cds_requests(start, end, bbox):
-        y, m, d = request["year"], request["month"], request["day"]
-        target = out_dir / f"era5_{y}_{m}_{d[0]}-{d[-1]}.nc"
-        if not (target.exists() and target.stat().st_size > 0):
-            logger.info(
-                "CDS request %s-%s days %s", request["year"], request["month"], request["day"]
-            )
-            client.retrieve(
-                spec["dataset_id"], {**request, "variable": ERA5_DAILY_VARIABLES}, str(target)
-            )
-        parts.append(_open_cds_download(target))
+    # ERA5T's newest day is not always out at the expected lag: CDS refuses the whole request
+    # when one day is missing. Drop the newest day and ask again, a few times, before failing.
+    parts: list[xr.Dataset] = []
+    for drop in range(CDS_MAX_DROPPED_DAYS + 1):
+        last = end - pd.Timedelta(days=drop)
+        if last < start:
+            break
+        try:
+            parts = [
+                _cds_retrieve(client, spec, request, out_dir, ERA5_DAILY_VARIABLES)
+                for request in cds_requests(start, last, bbox)
+            ]
+            break
+        except Exception as e:
+            if drop == CDS_MAX_DROPPED_DAYS or last - pd.Timedelta(days=1) < start:
+                raise
+            logger.warning("CDS refused days up to %s (%s); trying a day earlier", last.date(), e)
+    if not parts:
+        return None
     time_dim = "valid_time" if "valid_time" in parts[0].dims else "time"
     ds = xr.concat(parts, dim=time_dim) if len(parts) > 1 else parts[0]
     ds.attrs["daily_statistic"] = "daily_mean"
     ds.attrs["is_daily_mean"] = True
     return ds
+
+
+def _cds_retrieve(
+    client: Any, spec: dict[str, Any], request: dict[str, Any], out_dir: Path, variables: list
+) -> xr.Dataset:
+    from oceanscope_ml.data.build_store import _open_cds_download
+
+    y, m, d = request["year"], request["month"], request["day"]
+    target = out_dir / f"era5_{y}_{m}_{d[0]}-{d[-1]}.nc"
+    if not (target.exists() and target.stat().st_size > 0):
+        logger.info("CDS request %s-%s days %s", y, m, d)
+        client.retrieve(spec["dataset_id"], {**request, "variable": variables}, str(target))
+    return _open_cds_download(target)
 
 
 def cds_requests(

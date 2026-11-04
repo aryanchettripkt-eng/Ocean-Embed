@@ -414,3 +414,48 @@ def test_live_config_sources_are_all_known_services() -> None:
     for _group, _product, spec in sources.specs_to_check(cfg, include_check=True):
         assert spec["service"] in sources.REAL_PROBES
         assert spec["dataset_id"]
+
+
+def test_cds_fetch_drops_newest_days_cds_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CDS refuses a whole request when its newest ERA5T day is not out yet."""
+    import sys
+    import types
+
+    from oceanscope_ml.data import build_store
+
+    asked: list[list[str]] = []
+
+    class FakeClient:
+        def retrieve(self, dataset: str, request: dict[str, Any], target: str) -> None:
+            asked.append(list(request["day"]))
+            if request["month"] == "10" and "30" in request["day"]:
+                raise RuntimeError("HTTPError: day not available")
+            Path(target).write_text(",".join(request["day"]))
+
+    def fake_open(path: Path) -> xr.Dataset:
+        days = Path(path).read_text().split(",")
+        return xr.Dataset(coords={"valid_time": np.arange(len(days))})
+
+    monkeypatch.setitem(sys.modules, "cdsapi", types.SimpleNamespace(Client=FakeClient))
+    monkeypatch.setattr(build_store, "_open_cds_download", fake_open)
+    ds = live_inputs._fetch_cds_daily(
+        {"dataset_id": "era5"},
+        pd.Timestamp("2026-10-20"),
+        pd.Timestamp("2026-10-31"),
+        (80.0, 95.0, 5.0, 22.0),
+        tmp_path,
+    )
+    assert ds is not None and ds.sizes["valid_time"] == 10  # 20..29
+    assert asked[-1][-1] == "29"
+
+    monkeypatch.setattr(live_inputs, "CDS_MAX_DROPPED_DAYS", 0)
+    with pytest.raises(RuntimeError, match="not available"):
+        live_inputs._fetch_cds_daily(
+            {"dataset_id": "era5"},
+            pd.Timestamp("2026-10-20"),
+            pd.Timestamp("2026-10-31"),
+            (80.0, 95.0, 5.0, 22.0),
+            tmp_path / "again",
+        )
