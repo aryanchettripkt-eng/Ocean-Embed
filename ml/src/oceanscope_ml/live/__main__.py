@@ -7,6 +7,11 @@ Usage (from ml/):
         --stats <stats.zarr> --static-store <part.zarr> --out kit/ [--run-id <published name>] \
         [--upload]
 
+    # An ensemble: one --member per run, and the published name
+    python -m oceanscope_ml.live kit --member main2_ai=<best.pt> --member main2_ft=<best.pt> \
+        --member main3=<best.pt> --run-id ens3 --stats <stats.zarr> --static-store <part.zarr> \
+        --out kit/ [--upload]
+
     # Before P9-1: check every dataset ID in configs/live.yaml and its newest day
     python -m oceanscope_ml.live sources [--all]
 
@@ -14,7 +19,8 @@ Usage (from ml/):
     python -m oceanscope_ml.live run [--kit-dir kit/] [--dry-run] [--log outputs/live/log.json]
 
 ``run`` needs COPERNICUSMARINE_SERVICE_USERNAME/PASSWORD, EARTHDATA_USERNAME/PASSWORD, a CDS key
-(CDSAPI_URL + CDSAPI_KEY) and HF_TOKEN in the environment. Any error exits non-zero.
+(CDSAPI_URL + CDSAPI_KEY, only when ERA5 comes from CDS) and HF_TOKEN in the environment. Kits
+with ARGO input members also read the Argo ERDDAP (no account). Any error exits non-zero.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from oceanscope_ml.live.run import (
     DEFAULT_LIVE_CONFIG,
     LiveSettings,
     RunLog,
+    default_argo_fetch,
     default_fetch,
     load_live_config,
     resolve_kit,
@@ -54,7 +61,19 @@ def build_cli() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     kit = sub.add_parser("kit", help="Pack (and upload) the live kit for a trained run")
-    kit.add_argument("--checkpoint", required=True)
+    kit.add_argument("--checkpoint", default=None, help="One run's best.pt")
+    kit.add_argument(
+        "--member",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="An ensemble member's best.pt (repeat for each member; needs --run-id)",
+    )
+    kit.add_argument(
+        "--holdout",
+        default="configs/argo_eval_floats.json",
+        help="Held-out ARGO floats, packed when a member has ARGO input channels",
+    )
     kit.add_argument("--stats", required=True, help="Stats store (clim + norm_stats)")
     kit.add_argument("--static-store", required=True, help="Any part store with static fields")
     kit.add_argument("--out", required=True)
@@ -81,6 +100,18 @@ def build_cli() -> argparse.ArgumentParser:
     src.add_argument("--today", default=None, help="YYYY-MM-DD; default: today in UTC")
     src.add_argument("--log", default="outputs/live/sources_check.json")
     return parser
+
+
+def parse_members(items: list[str]) -> dict[str, Path]:
+    members: dict[str, Path] = {}
+    for item in items:
+        name, sep, path = item.partition("=")
+        if not sep or not name.strip() or not path.strip():
+            raise SystemExit(f"--member needs NAME=PATH, not {item!r}")
+        if name.strip() in members:
+            raise SystemExit(f"Member {name.strip()} given twice")
+        members[name.strip()] = Path(path.strip())
+    return members
 
 
 def run_sources(args: argparse.Namespace, config: Any) -> int:
@@ -114,13 +145,19 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
 
     if args.command == "kit":
+        if bool(args.checkpoint) == bool(args.member):
+            raise SystemExit("Pass either --checkpoint or one --member per ensemble member")
+        checkpoint: Path | dict[str, Path] = (
+            Path(args.checkpoint) if args.checkpoint else parse_members(args.member)
+        )
         kit = build_kit(
             config,
-            Path(args.checkpoint),
+            checkpoint,
             Path(args.stats),
             Path(args.static_store),
             Path(args.out),
             run_id=args.run_id,
+            holdout=Path(args.holdout),
         )
         if args.upload:
             repo = LiveSettings.from_dict(load_live_config(args.live_config)).kit_repo
@@ -156,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             settings,
             dry_run=args.dry_run,
             log=log,
+            argo_fetch=default_argo_fetch(config, kit_obj, work / "argo"),
         )
     except Exception as e:
         log.status = "failed"
