@@ -7,8 +7,9 @@ Two implementations share one interface, so the real key drops in without code c
 
 The HTTP client assumes an OpenAI-compatible `/chat/completions` surface with `tools`. This is
 [CONFIRM] against the Meta Model API docs (OPEN_QUESTIONS 2026-10-24, PHASES P7-0). Model ids
-come only from env vars; none are guessed here. `chat()` and `transcribe()` exist; image and
-segment arrive with P7-B5 and B6.
+come only from env vars; none are guessed here. Transcription and image generation follow the
+Meta docs (2026-11-04); `segment()` is still a guess, because SAM 3.1 runs through the Responses
+API with its own streamed mask format (DECISIONS 2026-11-04).
 """
 
 from __future__ import annotations
@@ -131,13 +132,16 @@ class HttpMetaModelClient:
         """Generate one postcard image (WebP) from a template-built prompt."""
         if not self._image_model:
             raise MetaUpstreamError("Image model is not configured")
-        # [CONFIRM] OpenAI-style image generation route and fields; see OPEN_QUESTIONS.
+        # Route and fields per dev.meta.ai/docs/api-reference/images (CreateImageRequest).
         payload = {
             "model": self._image_model,
             "prompt": prompt,
             "n": 1,
             "response_format": "b64_json",
             "output_format": "webp",
+            # Muse Image reasons before it renders (default "high"); "low" keeps a postcard
+            # well inside the request timeout. Price is per image either way.
+            "reasoning_strength": "low",
         }
         body = self._post_json("/images/generations", payload, timeout_s)
         try:
@@ -176,17 +180,32 @@ class HttpMetaModelClient:
             raise MetaUpstreamError("Meta API returned an unreadable mask") from None
 
     def transcribe(self, audio: bytes, mime: str, lang: str, *, timeout_s: float) -> Transcript:
-        """Send one clip to the transcription model. The audio is held in memory only."""
+        """Send one WAV clip to Muse Voice Transcribe. The audio is held in memory only.
+
+        Meta's file endpoint is `POST /asr/transcribe` with two multipart parts: `request`
+        (JSON settings) and `audio` (mono 16-bit PCM WAV at 16 or 24 kHz; other containers are
+        refused upstream). It answers `{sessionId, transcript, audioDurationMs, turns}`
+        (dev.meta.ai/docs/speech-to-text).
+        """
         if not self._transcribe_model:
             raise MetaUpstreamError("Voice model is not configured")
-        # [CONFIRM] OpenAI-compatible transcription route and fields; see OPEN_QUESTIONS.
-        url = self._base + "/audio/transcriptions"
-        files = {"file": ("clip", audio, mime)}
-        data = {"model": self._transcribe_model, "language": lang}
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        url = self._base + "/asr/transcribe"
+        request: dict[str, Any] = {
+            "model": self._transcribe_model,
+            "mode": "PUSH_TO_TALK",
+            "audioEncoding": "WAV",
+        }
+        bias = language_bias(lang)
+        if bias:
+            request["languageBias"] = bias
+        files: dict[str, tuple[str | None, bytes | str, str]] = {
+            "request": (None, json.dumps(request), "application/json"),
+            "audio": ("clip.wav", audio, "audio/wav"),
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}", "Accept": "application/json"}
         try:
             with httpx.Client(timeout=timeout_s, transport=self._transport) as client:
-                resp = client.post(url, data=data, files=files, headers=headers)
+                resp = client.post(url, files=files, headers=headers)
         except httpx.TimeoutException:
             raise MetaUpstreamError("Meta API request timed out") from None
         except httpx.HTTPError as exc:
@@ -195,11 +214,15 @@ class HttpMetaModelClient:
             raise MetaUpstreamError(f"Meta API returned HTTP {resp.status_code}")
         try:
             body = resp.json()
-            text = body["text"]
+            text = body["transcript"]
             if not isinstance(text, str):
                 raise TypeError
-            duration = body.get("duration")
-            duration_s = float(duration) if isinstance(duration, int | float) else None
+            duration_ms = body.get("audioDurationMs")
+            duration_s = (
+                float(duration_ms) / 1000.0
+                if isinstance(duration_ms, int | float) and not isinstance(duration_ms, bool)
+                else None
+            )
             return Transcript(text=text.strip(), duration_s=duration_s)
         except (ValueError, KeyError, TypeError):
             raise MetaUpstreamError("Meta API returned an unreadable response") from None
@@ -273,6 +296,17 @@ class HttpMetaModelClient:
             )
         except (ValueError, KeyError, IndexError, TypeError):
             raise MetaUpstreamError("Meta API returned an unreadable response") from None
+
+
+# BCP-47 primary subtag -> Muse Voice Transcribe `languageBias` name. Only languages named in
+# Meta's speech-to-text guide; anything else is left to the model's own detection.
+_LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "ar": "Arabic", "vi": "Vietnamese"}
+
+
+def language_bias(lang: str) -> list[str] | None:
+    """`languageBias` hint for a BCP-47 tag, or None to let the model detect the language."""
+    name = _LANGUAGE_NAMES.get(lang.split("-")[0].lower())
+    return [name] if name else None
 
 
 def _read_usage(usage: Any) -> tuple[int, int] | None:

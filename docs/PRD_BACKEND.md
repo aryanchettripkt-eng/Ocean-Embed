@@ -191,7 +191,7 @@ Endpoints 4.10 and 4.13–4.17 call Meta's hosted models through the Meta Model 
 - `Cache-Control: no-store` for 4.10, 4.13, 4.15; 4.14 and 4.16 are cacheable as data endpoints when their inputs are identical (see each).
 
 ### 4.13 `POST /transcribe` (Muse Voice Transcribe)
-Request: `multipart/form-data` with `audio` (≤ 30 s, ≤ 1 MB; `audio/webm;codecs=opus`, `audio/mp4` or `audio/ogg`) and optional `lang` (BCP-47, default `en`). Response `{"text": "...", "duration_s": 4.2, "provider_label": "...", ...}`. 413 `audio_too_large`, 415 `unsupported_audio`. The audio is forwarded and discarded in memory; never written to disk. The transcript is returned to the browser, which then sends it to `/chat` like typed text (so the user can see and edit it first).
+Request: `multipart/form-data` with `audio` (≤ 30 s, ≤ 1 MB; mono 16-bit PCM WAV at 16 or 24 kHz, `audio/wav`, which the browser converts its recording to; DECISIONS 2026-11-04) and optional `lang` (BCP-47, default `en`). Response `{"text": "...", "duration_s": 4.2, "provider_label": "...", ...}`. 413 `audio_too_large`, 415 `unsupported_audio`. The audio is forwarded and discarded in memory; never written to disk. The transcript is returned to the browser, which then sends it to `/chat` like typed text (so the user can see and edit it first).
 
 ### 4.14 `GET /events` (event time machine)
 Returns the curated list in `app/data/events.json` (committed; edited only by people, never generated at runtime):

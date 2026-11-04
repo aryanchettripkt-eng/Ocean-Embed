@@ -144,7 +144,7 @@ Meta's models are how people move through the data: you ask, and the ocean moves
 - Handles 429/503/502 with friendly messages; input disabled while waiting; 25 s client timeout.
 
 **b) Voice dive (`features.voice`)**
-- A hold-to-talk mic button in the guide's input (tap-to-toggle for accessibility). Records with `MediaRecorder` (Opus/WebM; MP4/AAC on Safari), max 30 s with a visible countdown, then posts to `/transcribe`.
+- A hold-to-talk mic button in the guide's input (tap-to-toggle for accessibility). Records with `MediaRecorder` (Opus/WebM; MP4/AAC on Safari), max 30 s with a visible countdown, converts the clip to 16 kHz mono WAV in memory, then posts to `/transcribe`.
 - The transcript appears in the input for 1.5 s (editable; any key cancels auto-send) and is then sent to `/chat` as text.
 - Microphone permission is requested only on the first press, with a one-line explanation first; if denied, the mic button explains how to re-enable it and typing still works. Audio is never stored or sent anywhere but our backend.
 

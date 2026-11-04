@@ -22,8 +22,33 @@ from app.meta.client import MOCK_TRANSCRIPT, HttpMetaModelClient
 from app.settings import settings
 
 SENTINEL_KEY = "sk-SENTINEL-voice-key-0123456789"
-WEBM = "audio/webm;codecs=opus"
-CLIP = b"\x1a\x45\xdf\xa3" + b"\x00" * 900_000  # about 900 kB; the bytes are not decoded here
+WAV = "audio/wav"
+
+
+def make_wav(
+    seconds: float = 28.0, rate: int = 16_000, channels: int = 1, bits: int = 16, fmt: int = 1
+) -> bytes:
+    """A silent RIFF/WAVE clip with the given format (the samples are never decoded here)."""
+    data_len = int(seconds * rate) * channels * bits // 8
+    block = channels * bits // 8
+    header = (
+        b"RIFF"
+        + (36 + data_len).to_bytes(4, "little")
+        + b"WAVEfmt "
+        + (16).to_bytes(4, "little")
+        + fmt.to_bytes(2, "little")
+        + channels.to_bytes(2, "little")
+        + rate.to_bytes(4, "little")
+        + (rate * block).to_bytes(4, "little")
+        + block.to_bytes(2, "little")
+        + bits.to_bytes(2, "little")
+        + b"data"
+        + data_len.to_bytes(4, "little")
+    )
+    return header + b"\x00" * data_len
+
+
+CLIP = make_wav()  # 28 s at 16 kHz: about 900 kB
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +64,7 @@ def voice_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def upload(
-    client: TestClient, clip: bytes = CLIP, mime: str = WEBM, lang: str | None = None
+    client: TestClient, clip: bytes = CLIP, mime: str = WAV, lang: str | None = None
 ) -> httpx.Response:
     data = {"lang": lang} if lang is not None else {}
     return client.post("/api/v1/transcribe", files={"audio": ("clip", clip, mime)}, data=data)
@@ -106,6 +131,29 @@ def test_size_type_and_language_limits() -> None:
     assert empty.status_code == 422 and empty.json()["error"]["code"] == "empty_audio"
 
 
+@pytest.mark.parametrize(
+    ("clip", "mime"),
+    [
+        (CLIP, "audio/webm;codecs=opus"),  # Meta's file endpoint takes WAV only
+        (b"\x1a\x45\xdf\xa3" + b"\x00" * 1000, WAV),  # WebM bytes labelled as WAV
+        (make_wav(1, channels=2), WAV),
+        (make_wav(1, rate=44_100), WAV),
+        (make_wav(1, bits=8), WAV),
+        (make_wav(1, fmt=3), WAV),  # float samples
+        (CLIP[:30], WAV),  # header cut short
+    ],
+)
+def test_only_mono_16bit_pcm_wav_is_accepted(clip: bytes, mime: str) -> None:
+    res = upload(TestClient(app), clip=clip, mime=mime)
+    assert res.status_code == 415 and res.json()["error"]["code"] == "unsupported_audio"
+
+
+def test_wav_at_24khz_and_x_wav_type_are_accepted() -> None:
+    client = TestClient(app)
+    assert upload(client, clip=make_wav(2, rate=24_000)).status_code == 200
+    assert upload(client, clip=make_wav(2), mime="audio/x-wav").status_code == 200
+
+
 def test_upload_without_content_length_is_refused() -> None:
     def body() -> Iterator[bytes]:
         yield b"--x\r\n"
@@ -133,23 +181,49 @@ def test_http_client_sends_clip_and_keeps_key_in_header(monkeypatch: pytest.Monk
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"text": "  hello there  ", "duration": 4.2})
+        return httpx.Response(
+            200,
+            json={"sessionId": "s1", "transcript": "  hello there  ", "audioDurationMs": 4200},
+        )
 
     use_http_client(monkeypatch, handler)
     client = TestClient(app)
-    res = upload(client, lang="hi-IN")
+    res = upload(client, lang="en-IN")
     assert res.status_code == 200
     assert res.json()["text"] == "hello there"
     assert res.json()["duration_s"] == 4.2
     assert SENTINEL_KEY not in res.text
 
     req = seen[0]
-    assert req.url.path.endswith("/audio/transcriptions")
+    assert req.url.path == "/v1/asr/transcribe"
     assert req.headers["Authorization"] == f"Bearer {SENTINEL_KEY}"
     body = req.read()
-    assert b'name="model"' in body and b"voice-x" in body
-    assert b'name="language"' in body and b"hi-IN" in body
-    assert CLIP[:4] in body
+    # Two parts, as in Meta's docs: `request` (JSON settings) and `audio` (the WAV file).
+    assert b'name="request"' in body and b"application/json" in body
+    for field in (b'"model": "voice-x"', b'"mode": "PUSH_TO_TALK"', b'"audioEncoding": "WAV"'):
+        assert field in body
+    assert b'"languageBias": ["English"]' in body
+    assert b'name="audio"; filename="clip.wav"' in body and CLIP[:12] in body
+
+
+def test_unlisted_language_is_left_to_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"transcript": "namaste"})
+
+    use_http_client(monkeypatch, handler)
+    res = upload(TestClient(app), lang="hi-IN")
+    assert res.status_code == 200 and res.json()["duration_s"] is None
+    assert b"languageBias" not in seen[0].read()
+
+
+def test_unreadable_transcript_is_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The old OpenAI-style shape ({"text": ...}) is not what Meta returns.
+    use_http_client(monkeypatch, lambda request: httpx.Response(200, json={"text": "hi"}))
+    res = upload(TestClient(app))
+    assert res.status_code == 502 and res.json()["error"]["code"] == "upstream_error"
 
 
 def test_upstream_failure_is_502_without_leaks(
@@ -170,5 +244,5 @@ def test_upstream_failure_is_502_without_leaks(
 def test_rate_limit_per_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "VOICE_RATE_LIMIT", "2/minute")
     client = TestClient(app)
-    codes = [upload(client, clip=b"small").status_code for _ in range(3)]
+    codes = [upload(client, clip=make_wav(1)).status_code for _ in range(3)]
     assert codes == [200, 200, 429]
