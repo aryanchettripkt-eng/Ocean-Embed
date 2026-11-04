@@ -89,6 +89,12 @@ def beach_available() -> bool:
     return settings.BEACH_ENABLED
 
 
+def glasses_available() -> bool:
+    """The glasses guide answers from the data alone (PRD_BACKEND §4.18); only its flag gates
+    it. Spoken (audio) questions also need voice input to be available."""
+    return settings.GLASSES_ENABLED
+
+
 def provider_label() -> str:
     """Display name of the model behind the guide, returned to the UI."""
     if settings.META_CLIENT == "mock":

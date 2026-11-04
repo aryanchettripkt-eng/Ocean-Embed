@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     POSTCARD_ENABLED: bool = False
     SEGMENT_ENABLED: bool = False
     BEACH_ENABLED: bool = False
+    # Glasses ocean guide (§4.18): spoken questions from the Android glasses app.
+    GLASSES_ENABLED: bool = False
     SEGMENT_PROVIDER: Literal["sam", "threshold"] = "sam"
     SEGMENT_THRESHOLD_C: float = 0.5
     # Request limits per feature: per IP (sliding window), per IP per UTC day, and global per
@@ -53,6 +55,9 @@ class Settings(BaseSettings):
     SEGMENT_RATE_LIMIT: str = "3/minute"
     SEGMENT_IP_DAILY_CAP: int = 20
     SEGMENT_DAILY_CAP: int = 60
+    GLASSES_RATE_LIMIT: str = "4/minute"
+    GLASSES_IP_DAILY_CAP: int = 30
+    GLASSES_DAILY_CAP: int = 150
     # Credit budget for real Meta calls (app/meta/budget.py). Fail closed: with META_CLIENT=http
     # nothing is called until the budget, the prices and a durable ledger are all set.
     META_BUDGET_USD: float = 0.0
