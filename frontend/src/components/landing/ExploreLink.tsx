@@ -65,7 +65,7 @@ export function ExploreLink({
     import("maplibre-gl").catch(() => {});
   }, [router, targetHref]);
 
-  // 3. On click: check reduced-motion / startViewTransition
+  // 3. On click: play the GSAP arrival (any browser) unless the user prefers reduced motion
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     // Only intercept normal left clicks without modifiers
     if (e.button !== 0 || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) {
@@ -79,15 +79,12 @@ export function ExploreLink({
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const hasViewTransition =
-      typeof document !== "undefined" && "startViewTransition" in document;
-
-    if (prefersReducedMotion || !hasViewTransition) {
+    if (prefersReducedMotion) {
       router.push(targetHref);
       return;
     }
 
-    // Trigger dive overlay animation
+    // Rise out of the ocean into the Explorer (DiveOverlay + ArrivalOverlay)
     window.dispatchEvent(
       new CustomEvent("oceanscope:dive", { detail: { href: targetHref } })
     );

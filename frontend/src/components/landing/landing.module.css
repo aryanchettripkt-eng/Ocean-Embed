@@ -387,22 +387,6 @@
   margin-top: 14px !important;
   font-size: 10px;
 }
-.diveOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  pointer-events: none;
-  background: radial-gradient(ellipse at 55% 0%, #11616b, #03191f 75%);
-  animation: dive-in 350ms ease-out both;
-}
-@keyframes dive-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
 /* Legacy standalone components retain their accessible component-test selectors. */
 .depthRuler,
 .calloutWrapper {

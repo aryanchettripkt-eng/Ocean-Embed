@@ -51,6 +51,16 @@ interface MapViewProps {
   outline?: number[][] | null;
   /** Tapped point while /segment runs, shown as a pulsing ring. */
   pendingPoint?: { lat: number; lon: number } | null;
+
+  /**
+   * Landing → Explorer arrival (src/lib/arrival.ts). When true at mount, the map starts zoomed in
+   * on open water with the grid hidden; once the slice has drawn it calls onIntroReady, zooms out
+   * to the basin and flies into the region (onIntroFlyIn as it turns inward), then onIntroDone.
+   */
+  intro?: boolean;
+  onIntroReady?: () => void;
+  onIntroFlyIn?: () => void;
+  onIntroDone?: () => void;
 }
 
 interface HoverInfo {
@@ -111,22 +121,27 @@ function canEditStyle(map: MapLibreMap): boolean {
 }
 
 /** Frame the model region, leaving room for the floating controls card on wide screens. */
-function fitRegion(map: MapLibreMap, rgn: RegionBounds, animate: boolean) {
-  const w = map.getContainer().clientWidth;
-  const wide = w >= 1024;
-  map.fitBounds(
-    [
-      [rgn.lon_min, rgn.lat_min],
-      [rgn.lon_max, rgn.lat_max],
-    ],
-    {
-      padding: wide
-        ? { top: 32, bottom: 96, left: 388, right: 48 }
-        : { top: 24, bottom: 120, left: 16, right: 16 },
-      duration: animate ? 600 : 0,
-    }
-  );
+function regionPadding(map: MapLibreMap) {
+  return map.getContainer().clientWidth >= 1024
+    ? { top: 32, bottom: 96, left: 388, right: 48 }
+    : { top: 24, bottom: 120, left: 16, right: 16 };
 }
+
+function regionBounds(rgn: RegionBounds): [[number, number], [number, number]] {
+  return [
+    [rgn.lon_min, rgn.lat_min],
+    [rgn.lon_max, rgn.lat_max],
+  ];
+}
+
+function fitRegion(map: MapLibreMap, rgn: RegionBounds, animate: boolean) {
+  map.fitBounds(regionBounds(rgn), { padding: regionPadding(map), duration: animate ? 600 : 0 });
+}
+
+/** Arrival: start this far in, on open water at the region's centre (a flat water-coloured screen). */
+const INTRO_ZOOM = 9;
+/** Arrival: how far below the region's framing zoom the camera pulls back (shows the basin). */
+const INTRO_ZOOM_OUT = 1.7;
 
 /**
  * Find the nearest index in an array of sorted coordinate values.
@@ -170,6 +185,10 @@ export function MapView({
   focus = null,
   outline = null,
   pendingPoint = null,
+  intro = false,
+  onIntroReady,
+  onIntroFlyIn,
+  onIntroDone,
 }: MapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<MapLibreMap | null>(null);
@@ -187,6 +206,10 @@ export function MapView({
 
   const activeRegion = region ?? DEFAULT_REGION;
   const regionRef = useRef<RegionBounds>(activeRegion);
+  // Arrival state: whether this mount plays the intro, and the grid opacity it drives (null = normal)
+  const introAtMountRef = useRef(intro);
+  const gridOpacityRef = useRef<number | null>(intro ? 0 : null);
+  const introStartedRef = useRef(false);
   useEffect(() => {
     regionRef.current = activeRegion;
   }, [activeRegion]);
@@ -265,7 +288,7 @@ export function MapView({
 
     const coordinates = getCoordinates(regionRef.current);
     const resampling = gridStyle === "dots" ? "linear" : "nearest";
-    const opacity = gridStyle === "dots" ? 0.96 : 0.9;
+    const opacity = gridOpacityRef.current ?? (gridStyle === "dots" ? 0.96 : 0.9);
     const existingSource = map.getSource(sourceId) as CanvasSource | undefined;
     const existingLayer = map.getLayer(layerId);
     const sizeChanged =
@@ -427,7 +450,7 @@ export function MapView({
       container: mapContainerRef.current,
       style: initialStyle,
       center: [centerLon, centerLat],
-      zoom: 4,
+      zoom: introAtMountRef.current ? INTRO_ZOOM : 4,
       minZoom: 2,
       maxZoom: 10,
       pitch: view === "3d" ? 50 : 0,
@@ -453,7 +476,7 @@ export function MapView({
     map.on("load", () => {
       setMapLoaded(true);
       handleStyleReady();
-      fitRegion(map, rgn, false);
+      if (!introAtMountRef.current) fitRegion(map, rgn, false);
     });
     map.on("style.load", () => {
       setMapLoaded(true);
@@ -484,6 +507,130 @@ export function MapView({
     if (!map || !mapLoaded || !canEditStyle(map)) return;
     applyLabelDensity(map, gridStyle);
   }, [gridStyle, mapLoaded]);
+
+  // Arrival intro: once the slice has drawn under the overlay, zoom out to the basin and fly into
+  // the region, fading the grid in on the way down. Any drag, wheel or tap skips to the end.
+  const introCallbacksRef = useRef({ onIntroReady, onIntroFlyIn, onIntroDone });
+  introCallbacksRef.current = { onIntroReady, onIntroFlyIn, onIntroDone };
+  const introCleanupRef = useRef<(() => void) | null>(null);
+  const hasSlice = !!mapData?.values?.length;
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!introAtMountRef.current || introStartedRef.current || !map || !mapLoaded) return;
+
+    const normalOpacity = () => (gridStyleRef.current === "dots" ? 0.96 : 0.9);
+    const setGridOpacity = (v: number | null) => {
+      gridOpacityRef.current = v;
+      if (map.getLayer(layerId)) map.setPaintProperty(layerId, "raster-opacity", v ?? normalOpacity());
+    };
+
+    // The page gave up on the intro (e.g. the slice failed): just frame the region
+    if (!intro) {
+      introStartedRef.current = true;
+      setGridOpacity(null);
+      fitRegion(map, regionRef.current, true);
+      return;
+    }
+    if (!hasSlice) return;
+    introStartedRef.current = true;
+
+    let timeline: gsap.core.Timeline | null = null;
+    let started = false;
+    let cancelled = false;
+    const skip = () => timeline?.progress(1);
+    const waitIdle = () =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 2500);
+        map.once("idle", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        map.triggerRepaint();
+      });
+    const finish = () => {
+      setGridOpacity(null);
+      introCallbacksRef.current.onIntroDone?.();
+    };
+
+    const start = async () => {
+      if (started) return;
+      started = true;
+      clearTimeout(fallback);
+
+      const framed = map.cameraForBounds(regionBounds(regionRef.current), { padding: regionPadding(map) });
+      const targetZoom = framed?.zoom ?? 4;
+      const target = framed?.center ? maplibregl.LngLat.convert(framed.center) : map.getCenter();
+      const outZoom = Math.max(map.getMinZoom(), targetZoom - INTRO_ZOOM_OUT);
+
+      // Still under the overlay: visit the pulled-back and final views so their tiles are cached,
+      // then return. Otherwise the zoom-out reveals empty background while tiles stream in.
+      if (!prefersReducedMotion()) {
+        const home = { center: map.getCenter(), zoom: map.getZoom() };
+        map.jumpTo({ center: home.center, zoom: outZoom });
+        await waitIdle();
+        if (cancelled) return;
+        map.jumpTo({ center: target, zoom: targetZoom });
+        await waitIdle();
+        if (cancelled) return;
+        map.jumpTo(home);
+        await waitIdle();
+        if (cancelled) return;
+      }
+
+      introCallbacksRef.current.onIntroReady?.();
+
+      if (prefersReducedMotion()) {
+        map.jumpTo({ center: target, zoom: targetZoom });
+        introCallbacksRef.current.onIntroFlyIn?.();
+        finish();
+        return;
+      }
+
+      const from = map.getCenter();
+      const cam = { lng: from.lng, lat: from.lat, zoom: map.getZoom() };
+      const grid = { v: 0 };
+      timeline = gsap.timeline({
+        delay: 0.3, // the overlay starts fading first
+        onUpdate: () => map.jumpTo({ center: [cam.lng, cam.lat], zoom: cam.zoom }),
+        onComplete: finish,
+      });
+      timeline
+        // Pull back from open water until the basin and its coasts are in view…
+        .to(cam, { zoom: outZoom, duration: 1.15, ease: "power2.inOut" })
+        .call(() => introCallbacksRef.current.onIntroFlyIn?.())
+        // …then dive back in onto the model region
+        .to(cam, { lng: target.lng, lat: target.lat, zoom: targetZoom, duration: 1.35, ease: "power3.inOut" }, ">-0.15")
+        .to(
+          grid,
+          { v: normalOpacity(), duration: 0.7, ease: "power1.out", onUpdate: () => setGridOpacity(grid.v) },
+          "<0.55"
+        );
+
+      map.on("mousedown", skip);
+      map.on("wheel", skip);
+      map.on("touchstart", skip);
+    };
+
+    // Ready = the basemap and the (hidden) grid have rendered; repaint so `idle` fires even if the
+    // map is already idle. Fall back after 6 s if tiles never settle.
+    const fallback = setTimeout(() => void start(), 6000);
+    const onIdle = () => void start();
+    map.once("idle", onIdle);
+    map.triggerRepaint();
+
+    introCleanupRef.current = () => {
+      cancelled = true;
+      clearTimeout(fallback);
+      map.off("idle", onIdle);
+      map.off("mousedown", skip);
+      map.off("wheel", skip);
+      map.off("touchstart", skip);
+      timeline?.kill();
+    };
+  }, [intro, mapLoaded, hasSlice]);
+
+  useEffect(() => () => introCleanupRef.current?.(), []);
 
   // Guide / time machine camera moves: one short animation (≤ 1.2 s), none under reduced motion
   const lastFocusIdRef = useRef<number | null>(null);

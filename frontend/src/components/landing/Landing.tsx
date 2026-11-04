@@ -67,6 +67,7 @@ export function Landing() {
   return (
     <div
       ref={root}
+      data-landing
       className={`${styles.landing} ${manrope.variable}`}
       style={{ "--banner-h": `${bannerH}px` } as React.CSSProperties}
     >
@@ -76,7 +77,7 @@ export function Landing() {
       <main>
         <section className={styles.heroSection} aria-label="Hero Introduction">
           <HeroScene paused={paused || reduced} theme={theme} />
-          <header className={styles.heroHeader}>
+          <header className={styles.heroHeader} data-landing-exit>
             <Link
               prefetch={false}
               href="/"
@@ -158,10 +159,10 @@ export function Landing() {
               </button>
             </div>
           </header>
-          <div className={styles.heroText}>
+          <div className={styles.heroText} data-landing-exit>
             <HeroText />
           </div>
-          <div className={styles.topicLabels}>
+          <div className={styles.topicLabels} data-landing-exit>
             <span>Ocean observation</span>
             <i aria-hidden="true">•</i>
             <span>Temperature insights</span>

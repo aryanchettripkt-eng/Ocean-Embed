@@ -45,6 +45,8 @@ import { getWallColorRange } from "../../../components/map3d/depthScale";
 import { ToolbarDivider, ViewSwitch } from "../../../components/map3d/ViewSwitch";
 import { DepthRail } from "../../../components/map3d/DepthRail";
 import { Collapse, FlipIcon, Presence, Pulse } from "../../../components/common/Motion";
+import { arrivalMapReady, finishArrival, isArrivalPending } from "../../../lib/arrival";
+import { EASE_OUT, gsap } from "../../../lib/motion";
 
 // MapView is statically included so MapLibre is counted directly in the bundle budget (PRD_FRONTEND §4)
 import { MapView } from "../../../components/map/MapView";
@@ -93,6 +95,9 @@ function ExplorerContent() {
   );
 
   const [hasMounted, setHasMounted] = useState(false);
+  // Arriving from the landing CTA (src/lib/arrival.ts): the map plays its zoom-out/zoom-in intro
+  // in 2D, then switches to the requested view; the HUD slides in as the camera turns inward.
+  const [introActive, setIntroActive] = useState(() => isArrivalPending());
   useEffect(() => setHasMounted(true), []);
 
   const [showControls, setShowControls] = useState(true);
@@ -256,6 +261,39 @@ function ExplorerContent() {
   }, [mapData?.split, state.field]);
 
   const queryClient = useQueryClient();
+
+  // Header from the top, controls from the left, toolbar from the bottom, map controls from the
+  // right. The from-states hide them inline before the page-level CSS hide is lifted.
+  const playHudEntrance = useCallback(() => {
+    const pick = (selector: string) => document.querySelector<HTMLElement>(selector);
+    const items: [HTMLElement | null, gsap.TweenVars, number][] = [
+      [pick('[data-hud="header"]'), { yPercent: -100 }, 0],
+      [pick('[data-hud="controls"]'), { x: -64 }, 0.1],
+      [pick('[data-hud="toolbar"]'), { y: 64 }, 0.18],
+      [pick(".maplibregl-ctrl-bottom-right"), { x: 48 }, 0.26],
+    ];
+    const tl = gsap.timeline({ defaults: { duration: 0.75, ease: EASE_OUT } });
+    for (const [el, from, at] of items) {
+      if (!el) continue;
+      tl.fromTo(
+        el,
+        { ...from, autoAlpha: 0 },
+        { x: 0, y: 0, yPercent: 0, autoAlpha: 1, clearProps: "transform,opacity,visibility" },
+        at
+      );
+    }
+    finishArrival();
+  }, []);
+
+  const handleIntroDone = useCallback(() => setIntroActive(false), []);
+
+  // If the slice can't load, don't keep the HUD hidden waiting for the intro
+  useEffect(() => {
+    if (!introActive || !mapError) return;
+    arrivalMapReady();
+    playHudEntrance();
+    setIntroActive(false);
+  }, [introActive, mapError, playHudEntrance]);
 
   const handlePrefetchAhead = useCallback(
     (currentDate: string) => {
@@ -518,7 +556,7 @@ function ExplorerContent() {
             showArgo={showArgo}
             argoProfiles={argoData?.profiles ?? []}
             gridStyle={activeGridStyle}
-            view={state.view}
+            view={introActive ? "map" : state.view}
             depth_m={state.depth}
             availableDepths={meta.depths_m}
             colorRanges={meta.color_ranges}
@@ -531,6 +569,10 @@ function ExplorerContent() {
             focus={focus}
             outline={lassoActive ? lassoResult?.outline ?? null : null}
             pendingPoint={lassoPending}
+            intro={introActive}
+            onIntroReady={arrivalMapReady}
+            onIntroFlyIn={playHudEntrance}
+            onIntroDone={handleIntroDone}
           />
         </ErrorBoundary>
       </div>
@@ -568,6 +610,7 @@ function ExplorerContent() {
       {/* Controls card */}
       <aside
         aria-label="Explorer controls"
+        data-hud="controls"
         className={`hud-glass absolute inset-x-3 bottom-[60px] z-20 flex flex-col overflow-hidden rounded-[20px] md:inset-x-auto md:bottom-auto md:left-4 md:top-4 md:w-[340px] ${
           showControls ? "max-h-[55%] md:max-h-[calc(100%-6.5rem)]" : ""
         }`}
@@ -697,9 +740,9 @@ function ExplorerContent() {
       </div>
 
       {/* Bottom toolbar: view, grid style, layers and tools in one pill */}
-      <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center md:bottom-5">
+      <div data-hud="toolbar" className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center md:bottom-5">
         <ViewSwitch
-          view={state.view}
+          view={introActive ? "map" : state.view}
           onChangeView={handleViewChange}
           gridStyle={activeGridStyle}
           onChangeGridStyle={handleGridStyleChange}
@@ -790,7 +833,7 @@ function ExplorerContent() {
 
       {/* 3D depth rail on the right edge */}
       <Presence
-        show={state.view === "3d" && !!meta.depths_m}
+        show={!introActive && state.view === "3d" && !!meta.depths_m}
         from="right"
         className={`pointer-events-auto absolute top-4 z-20 ${railRight}`}
       >

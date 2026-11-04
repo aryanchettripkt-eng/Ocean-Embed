@@ -53,6 +53,20 @@
   }
 }
 
+/* Landing → Explorer arrival (src/lib/arrival.ts): the HUD stays hidden until its entrance */
+html[data-arrival="pending"] [data-hud],
+html[data-arrival="pending"] .maplibregl-ctrl-bottom-right {
+  visibility: hidden;
+}
+/* …and the page behind the hidden header is the map's water colour (src/lib/arrival.ts MAP_WATER),
+   so the overlay fades into one continuous surface */
+html[data-arrival="pending"] body {
+  background-color: rgb(194, 200, 202);
+}
+html.dark[data-arrival="pending"] body {
+  background-color: rgb(27, 27, 29);
+}
+
 /* Thin HUD range slider; the filled part is driven by the --fill custom property (0%–100%) */
 .hud-range {
   -webkit-appearance: none;

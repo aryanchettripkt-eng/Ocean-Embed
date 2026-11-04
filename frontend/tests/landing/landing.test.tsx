@@ -268,7 +268,7 @@ describe("Landing Page Component Suite (§10)", () => {
     );
   });
 
-  it("ExploreLink skips the overlay when startViewTransition is missing", () => {
+  it("ExploreLink plays the arrival even without the View Transitions API (GSAP, any browser)", () => {
     // prefers-reduced-motion is false
     window.matchMedia = vi.fn().mockImplementation(() => ({
       matches: false,
@@ -281,20 +281,20 @@ describe("Landing Page Component Suite (§10)", () => {
       dispatchEvent: vi.fn(),
     }));
 
-    // delete startViewTransition from document
+    // Browsers such as Firefox have no startViewTransition
     delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
 
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
-    renderWithClient(<ExploreLink href="/" />);
+    renderWithClient(<ExploreLink href="/explore" />);
     const cta = screen.getByRole("link", { name: /EXPLORE THE OCEAN/i });
     fireEvent.click(cta);
 
-    // Should push directly without overlay
-    expect(mockPush).toHaveBeenCalledWith("/");
-    expect(dispatchSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "oceanscope:dive" })
+    // The dive event starts the transition; DiveOverlay navigates once the screen is covered
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "oceanscope:dive", detail: { href: "/explore" } })
     );
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("HowItWorks renders 3 step cards without numbers typed in copy", () => {

@@ -22,7 +22,7 @@ export function Header() {
   ];
 
   return (
-    <header className="hud-divider sticky top-0 z-40 w-full border-b bg-white/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-[#0a0c0d]/80">
+    <header data-hud="header" className="hud-divider sticky top-0 z-40 w-full border-b bg-white/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-[#0a0c0d]/80">
       <Banner type="synthetic" />
       <div className="flex h-14 items-center justify-between gap-3 px-3 sm:px-5">
         {/* Brand + navigation */}

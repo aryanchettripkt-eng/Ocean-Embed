@@ -84,7 +84,7 @@ export function HeroScene({
     controller.current?.setTheme(theme);
   }, [theme]);
   return (
-    <div className={styles.sceneViewport} aria-hidden="true">
+    <div className={styles.sceneViewport} aria-hidden="true" data-landing-scene>
       <div className={styles.stage} ref={host} data-scene-ready={ready}>
         {/* Native responsive images are also the no-JS / renderer-failure fallback. */}
         <picture>
