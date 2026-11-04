@@ -23,18 +23,22 @@ export function DepthSelector({
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
       <div className="flex items-center justify-between">
-        <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <ArrowDownCircle className="h-3.5 w-3.5 text-cyan-400" />
+        <label
+          htmlFor="explorer-depth-slider"
+          className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5"
+        >
+          <ArrowDownCircle aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
           <span>Depth</span>
         </label>
-        <span className="text-xs font-mono font-medium text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded">
-          {formatDepth(selectedDepth)} (Level {activeIdx + 1}/15)
+        <span className="text-[11px] font-mono font-medium text-cyan-700 dark:text-cyan-300 bg-cyan-500/12 border border-cyan-500/30 px-2 py-0.5 rounded-full">
+          {formatDepth(selectedDepth)} ({activeIdx + 1}/{depths.length})
         </span>
       </div>
 
       {/* Slider selector for smooth scrubbing */}
-      <div className="px-1">
+      <div className="px-0.5">
         <input
+          id="explorer-depth-slider"
           type="range"
           min={0}
           max={depths.length - 1}
@@ -46,7 +50,7 @@ export function DepthSelector({
               onChange(depths[idx]);
             }
           }}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:accent-cyan-300 transition-all"
+          className="w-full h-1.5 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer accent-cyan-500 dark:accent-cyan-400 transition-all"
         />
       </div>
 
@@ -58,11 +62,12 @@ export function DepthSelector({
             <button
               key={d}
               type="button"
+              aria-pressed={isSelected}
               onClick={() => onChange(d)}
-              className={`shrink-0 px-2 py-1 rounded text-[11px] font-mono transition-all ${
+              className={`shrink-0 px-2 py-1 rounded-full text-[11px] font-mono transition-all ${
                 isSelected
-                  ? "bg-cyan-500 text-slate-950 font-bold shadow-sm shadow-cyan-500/20"
-                  : "bg-slate-900/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800/80"
+                  ? "bg-cyan-500 text-slate-950 font-bold shadow-sm shadow-cyan-500/25"
+                  : "bg-slate-100 dark:bg-white/[0.04] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-white/10 border border-slate-200/80 dark:border-white/10"
               }`}
             >
               {formatDepth(d)}

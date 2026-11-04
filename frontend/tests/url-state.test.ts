@@ -78,4 +78,22 @@ describe("url-state.ts explorer query sync", () => {
     const valid3d = parseExplorerParams(new URLSearchParams({ view: "3d" }), mockMeta);
     expect(valid3d.view).toBe("3d");
   });
+
+  it("defaults gridStyle to dots and round-trips style=solid", () => {
+    const defaultParsed = parseExplorerParams(new URLSearchParams(), mockMeta);
+    expect(defaultParsed.gridStyle).toBe("dots");
+    expect(buildExplorerSearchParams(defaultParsed).get("style")).toBeNull();
+
+    const solidParams = buildExplorerSearchParams({
+      ...defaultParsed,
+      gridStyle: "solid",
+    });
+    expect(solidParams.get("style")).toBe("solid");
+
+    const reparsed = parseExplorerParams(solidParams, mockMeta);
+    expect(reparsed.gridStyle).toBe("solid");
+
+    const invalidStyle = parseExplorerParams(new URLSearchParams({ style: "unknown" }), mockMeta);
+    expect(invalidStyle.gridStyle).toBe("dots");
+  });
 });

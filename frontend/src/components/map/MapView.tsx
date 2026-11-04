@@ -5,6 +5,7 @@ import maplibregl, { type CanvasSource, type Map as MapLibreMap } from "maplibre
 import { formatCoord, formatDepth, formatTemp } from "../../lib/format";
 import { renderGridToCanvas } from "./GridCanvas";
 import type { ArgoProfileMatch, MapResponse, SectionResponse } from "../../lib/api/client";
+import type { GridStyle } from "../../lib/url-state";
 import type { WallId } from "../map3d/depthScale";
 import type { CutawayLayer } from "../map3d/CutawayLayer";
 import type { CameraFocus } from "../../lib/guide/ui-actions";
@@ -29,7 +30,8 @@ interface MapViewProps {
   argoProfiles?: ArgoProfileMatch[];
   className?: string;
 
-  // 3D Explorer props (PRD_FRONTEND §3.1b)
+  // 3D Explorer & grid rendering props (PRD_FRONTEND §3.1, §3.1b)
+  gridStyle?: GridStyle;
   view?: "map" | "3d";
   depth_m?: number;
   availableDepths?: number[];
@@ -106,6 +108,7 @@ export function MapView({
   showArgo = false,
   argoProfiles = [],
   className = "",
+  gridStyle = "dots",
   view = "map",
   depth_m = 100.0,
   availableDepths,
@@ -151,6 +154,7 @@ export function MapView({
 
   // Canvas source reference to avoid PNG dataURL encoding on main thread
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastCanvasSizeRef = useRef<{ w: number; h: number } | null>(null);
   const sourceId = "ocean-grid-source";
   const layerId = "ocean-grid-layer";
 
@@ -211,12 +215,19 @@ export function MapView({
     }
 
     const coordinates = getCoordinates(regionRef.current);
+    const resampling = gridStyle === "dots" ? "linear" : "nearest";
+    const opacity = gridStyle === "dots" ? 0.96 : 0.9;
     const existingSource = map.getSource(sourceId) as CanvasSource | undefined;
     const existingLayer = map.getLayer(layerId);
+    const sizeChanged =
+      lastCanvasSizeRef.current !== null &&
+      (lastCanvasSizeRef.current.w !== canvas.width || lastCanvasSizeRef.current.h !== canvas.height);
 
-    if (existingSource && existingLayer) {
+    if (existingSource && existingLayer && !sizeChanged) {
       existingSource.setCoordinates(coordinates);
       map.setLayoutProperty(layerId, "visibility", "visible");
+      map.setPaintProperty(layerId, "raster-resampling", resampling);
+      map.setPaintProperty(layerId, "raster-opacity", opacity);
       existingSource.play();
       requestAnimationFrame(() => {
         existingSource.pause();
@@ -225,6 +236,8 @@ export function MapView({
       if (existingLayer) map.removeLayer(layerId);
       if (existingSource) map.removeSource(sourceId);
 
+      lastCanvasSizeRef.current = { w: canvas.width, h: canvas.height };
+
       map.addSource(sourceId, {
         type: "canvas",
         canvas,
@@ -232,16 +245,24 @@ export function MapView({
         animate: false,
       });
 
-      map.addLayer({
-        id: layerId,
-        type: "raster",
-        source: sourceId,
-        paint: {
-          "raster-opacity": 0.9,
-          "raster-fade-duration": 0,
-          "raster-resampling": "nearest",
+      // Place grid layer beneath vector symbol labels so sea/country names stay legible
+      const firstSymbolId = map
+        .getStyle?.()
+        ?.layers?.find((l) => l.type === "symbol" && l.id !== `${LASSO_SOURCE}-line`)?.id;
+
+      map.addLayer(
+        {
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          paint: {
+            "raster-opacity": opacity,
+            "raster-fade-duration": 0,
+            "raster-resampling": resampling,
+          },
         },
-      });
+        firstSymbolId
+      );
 
       const newSource = map.getSource(sourceId) as CanvasSource | undefined;
       if (newSource) {
@@ -251,7 +272,7 @@ export function MapView({
         });
       }
     }
-  }, [getCoordinates, view]);
+  }, [getCoordinates, gridStyle, view]);
 
   // Lazy-load and attach 3D cutaway layer when view is "3d"
   const sync3DLayer = useCallback(async () => {
@@ -267,6 +288,7 @@ export function MapView({
           availableDepths: availableDepths ?? [0.5, 10, 20, 50, 100, 200, 500, 1000],
           colorRanges,
           isDark: !isLightMode,
+          dotMode: gridStyle === "dots",
         });
 
         if (!map.getLayer(layer.id)) {
@@ -280,6 +302,7 @@ export function MapView({
       const layer = cutawayLayerRef.current;
       if (layer) {
         layer.setIsDark(!isLightMode);
+        layer.setDotMode(gridStyle === "dots");
         layer.setSmoothed(isSmoothed);
         layer.setExploded(isExploded);
         layer.setShowContours(showContours);
@@ -310,6 +333,7 @@ export function MapView({
     }
   }, [
     view,
+    gridStyle,
     availableDepths,
     colorRanges,
     isLightMode,
@@ -355,7 +379,7 @@ export function MapView({
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
 
     const handleStyleReady = () => {
       if (map.isStyleLoaded()) {
@@ -538,14 +562,19 @@ export function MapView({
     }
 
     const colormap = mapData.field === "error" ? "balance" : "thermal";
-    renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap, 4, canvasRef.current);
+    const scale = gridStyle === "dots" ? 8 : 4;
+    renderGridToCanvas(mapData.values, mapData.coverage, vmin, vmax, colormap, scale, canvasRef.current, {
+      gridStyle,
+      isDark: !isLightMode,
+    });
     syncGridLayer();
 
     if (view === "3d" && cutawayLayerRef.current) {
+      cutawayLayerRef.current.setDotMode(gridStyle === "dots");
       cutawayLayerRef.current.setMapData(mapData, vmin, vmax);
       mapInstanceRef.current?.triggerRepaint();
     }
-  }, [mapData, vmin, vmax, syncGridLayer, view]);
+  }, [mapData, vmin, vmax, gridStyle, isLightMode, syncGridLayer, view]);
 
   // Throttled hover handler and single click path
   const hoverRafRef = useRef<number | null>(null);
@@ -785,7 +814,7 @@ export function MapView({
       .addTo(map);
   }, [mapLoaded, pendingPoint]);
 
-  // Update selection marker
+  // Update selection marker (HUD status badge pin)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded) return;
@@ -795,8 +824,10 @@ export function MapView({
         const el = document.createElement("div");
         el.className = "relative flex items-center justify-center cursor-pointer";
         el.innerHTML = `
-          <span class="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-cyan-400 opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-400 border-2 border-white shadow-md"></span>
+          <span class="animate-ping motion-reduce:animate-none absolute inline-flex h-7 w-7 rounded-full bg-cyan-400/50"></span>
+          <span class="relative inline-flex items-center justify-center rounded-full h-6 w-6 bg-[#0b1116]/90 border border-cyan-400/70 shadow-lg">
+            <span class="h-2.5 w-2.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-300"></span>
+          </span>
         `;
         selectionMarkerRef.current = new maplibregl.Marker({ element: el })
           .setLngLat([selectedLon, selectedLat])
@@ -810,7 +841,7 @@ export function MapView({
     }
   }, [mapLoaded, selectedLat, selectedLon]);
 
-  // Update ARGO markers
+  // Update ARGO markers (HUD circular sensor pins)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !mapLoaded) return;
@@ -823,16 +854,18 @@ export function MapView({
         const el = document.createElement("div");
         el.className = "group relative cursor-pointer";
         el.innerHTML = `
-          <div class="h-3 w-3 rounded-full bg-amber-400 border border-slate-900 shadow-sm transition-transform group-hover:scale-125"></div>
+          <div class="h-5 w-5 rounded-full bg-[#0b1116]/90 border border-amber-400/60 shadow-md flex items-center justify-center transition-transform group-hover:scale-125">
+            <span class="h-2 w-2 rounded-full bg-amber-400"></span>
+          </div>
         `;
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([p.lon, p.lat])
           .setPopup(
-            new maplibregl.Popup({ offset: 10, closeButton: false }).setHTML(`
-              <div class="text-xs p-1 text-slate-900">
+            new maplibregl.Popup({ offset: 12, closeButton: false }).setHTML(`
+              <div class="text-xs p-1 text-slate-900 dark:text-slate-100">
                 <p class="font-bold">ARGO Float ${p.platform_number}</p>
                 <p>Cycle: ${p.cycle} (${p.n_obs} obs)</p>
-                <p class="text-[10px] text-slate-500">${p.time.slice(0, 10)}</p>
+                <p class="text-[10px] text-slate-500 dark:text-slate-400">${p.time.slice(0, 10)}</p>
               </div>
             `)
           )
@@ -852,15 +885,27 @@ export function MapView({
 
   return (
     <div
-      className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-slate-950 transition-colors ${className}`}
+      className={`relative w-full h-full min-h-[400px] overflow-hidden select-none bg-slate-100 dark:bg-[#070d12] transition-colors ${className}`}
       style={{ viewTransitionName: view === "3d" ? "ocean-section" : undefined }}
     >
       <div ref={mapContainerRef} className="w-full h-full min-h-[400px]" />
 
+      {/* Subtle edge vignette in dark dot-matrix mode so the ocean matrix blends into the HUD frame */}
+      {!isLightMode && gridStyle === "dots" && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10"
+          style={{
+            background:
+              "radial-gradient(ellipse at 54% 48%, transparent 55%, rgba(7, 13, 18, 0.58) 100%)",
+          }}
+        />
+      )}
+
       {/* Hover tooltip */}
       {hoverInfo && (
         <div
-          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-slate-950/90 backdrop-blur-md border border-slate-300 dark:border-slate-700/80 rounded-lg px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
+          className="pointer-events-none absolute z-30 transform -translate-x-1/2 -translate-y-full mb-2 bg-white/95 dark:bg-[#0b1116]/92 backdrop-blur-xl border border-slate-300 dark:border-white/15 rounded-xl px-2.5 py-1.5 shadow-2xl text-xs text-slate-800 dark:text-slate-200"
           style={{ left: hoverInfo.x, top: hoverInfo.y - 12 }}
         >
           <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">

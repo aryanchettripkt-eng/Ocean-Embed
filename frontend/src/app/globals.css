@@ -5,13 +5,48 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 
 :root {
+  color-scheme: light dark;
   --background: #f8fafc;
   --foreground: #020617;
 }
 
+.light {
+  color-scheme: light;
+}
+
 .dark {
+  color-scheme: dark;
   --background: #020617;
   --foreground: #f8fafc;
+}
+
+/* Dark glass MapLibre popups and attribution controls on Explorer */
+.dark .maplibregl-popup-content {
+  background: rgba(11, 17, 22, 0.94);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+}
+
+.dark .maplibregl-popup-tip {
+  border-top-color: rgba(11, 17, 22, 0.94) !important;
+  border-bottom-color: rgba(11, 17, 22, 0.94) !important;
+}
+
+.dark .maplibregl-ctrl-group {
+  background: rgba(11, 17, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.dark .maplibregl-ctrl-group button + button {
+  border-top-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(0.9) hue-rotate(180deg);
 }
 
 /* Shared Element Cross-Route View Transitions */

@@ -12,10 +12,21 @@ test.describe("OceanScope AI Explorer Flow (PRD_FRONTEND §7, PLAN_LANDING §8)"
     // 2. Main title / header
     await expect(page.locator("header")).toContainText(/OceanScope AI/i);
 
-    // 3. Controls panel presence
+    // 3. Controls panel & dot-matrix default presence
     await expect(page.locator("text=Field")).toBeVisible();
     await expect(page.locator("label").filter({ hasText: /Depth/i })).toBeVisible();
     await expect(page.getByRole("button", { name: "Model prediction" })).toBeVisible();
+
+    // 4. Dot-matrix mode is active by default and toggleable back to Classic solid mode
+    const dotsBtn = page.getByRole("button", { name: "Dots", exact: true });
+    const classicBtn = page.getByRole("button", { name: "Classic", exact: true });
+    await expect(dotsBtn).toHaveAttribute("aria-pressed", "true");
+    await classicBtn.click();
+    await expect(page).toHaveURL(/style=solid/);
+    await expect(classicBtn).toHaveAttribute("aria-pressed", "true");
+    await dotsBtn.click();
+    await expect(page).not.toHaveURL(/style=solid/);
+    await expect(dotsBtn).toHaveAttribute("aria-pressed", "true");
   });
 
   test("redirects legacy root links with explorer params to /explore (PLAN_LANDING §8)", async ({ page }) => {

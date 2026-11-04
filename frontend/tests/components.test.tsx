@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Banner } from "../src/components/common/Banner";
 import { Header } from "../src/components/common/Header";
 import { FieldToggle } from "../src/components/controls/FieldToggle";
+import { CoverageLegend } from "../src/components/map/CoverageLegend";
+import { ViewSwitch } from "../src/components/map3d/ViewSwitch";
 import { HeadlineCard } from "../src/components/validation/HeadlineCard";
 
 vi.mock("next/navigation", () => ({
@@ -233,6 +235,42 @@ describe("Frontend Component Verification (A7)", () => {
       fireEvent.click(btn);
       expect(document.documentElement.classList.contains("dark")).toBe(true);
       expect(document.documentElement.classList.contains("light")).toBe(false);
+    });
+  });
+
+  describe("Dot-matrix vs Classic grid mode toggle and legend", () => {
+    it("renders Dots active by default in ViewSwitch and toggles to Classic (solid)", () => {
+      const onChangeView = vi.fn();
+      const onChangeGridStyle = vi.fn();
+      render(
+        <ViewSwitch
+          view="map"
+          onChangeView={onChangeView}
+          gridStyle="dots"
+          onChangeGridStyle={onChangeGridStyle}
+        />
+      );
+
+      const dotsBtn = screen.getByRole("button", { name: "Dots" });
+      const classicBtn = screen.getByRole("button", { name: "Classic" });
+
+      expect(dotsBtn).toHaveAttribute("aria-pressed", "true");
+      expect(classicBtn).toHaveAttribute("aria-pressed", "false");
+
+      fireEvent.click(classicBtn);
+      expect(onChangeGridStyle).toHaveBeenCalledWith("solid");
+    });
+
+    it("switches CoverageLegend indicators between dot/ring symbols and classic hatch/block swatches", () => {
+      const { rerender } = render(<CoverageLegend gridStyle="dots" />);
+      expect(screen.getByTestId("legend-ocean-dot")).toBeInTheDocument();
+      expect(screen.getByTestId("legend-insufficient-ring")).toBeInTheDocument();
+      expect(screen.getByTestId("legend-land-dot")).toBeInTheDocument();
+
+      rerender(<CoverageLegend gridStyle="solid" />);
+      expect(screen.getByTestId("legend-ocean-solid")).toBeInTheDocument();
+      expect(screen.getByTestId("legend-insufficient-hatch")).toBeInTheDocument();
+      expect(screen.getByTestId("legend-land-solid")).toBeInTheDocument();
     });
   });
 });

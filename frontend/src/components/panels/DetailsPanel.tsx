@@ -109,10 +109,10 @@ export function DetailsPanel({
 
   return (
     <div
-      className={`flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-30 transition-all ${className}`}
+      className={`flex flex-col bg-[#0b1116]/94 backdrop-blur-xl border border-white/12 rounded-2xl shadow-2xl overflow-hidden z-30 transition-all ${className}`}
     >
       {/* Panel Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 bg-slate-900/60">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.03]">
         <div className="flex items-center gap-2.5">
           <div>
             <div className="flex items-center gap-2">

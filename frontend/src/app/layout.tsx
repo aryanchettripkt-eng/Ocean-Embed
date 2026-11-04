@@ -1,10 +1,14 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "OceanScope AI — Subsurface Ocean Temperature Reconstruction",
   description: "AI-powered daily subsurface ocean temperature mapping in the North Indian Ocean",
+};
+
+export const viewport: Viewport = {
+  colorScheme: "dark light",
 };
 
 export default function RootLayout({

@@ -57,22 +57,24 @@ Accounts, saving user data, uploads, editing, offline mode, 3D globe rendering, 
 
 ## 3. Pages and features
 
-### 3.1 `/` Explorer (main page)
-Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 1024 px, bottom sheet on mobile); a details panel (right on desktop, sheet on mobile) when a point is selected.
+### 3.1 `/explore` Explorer (main map page)
+Layout: map fills the viewport; a floating glass control card (`Ocean Controls`, top-left on desktop ≥ 768 px, collapsible bottom card on mobile); a floating bottom-center glass pill toolbar for view/grid-style switching, ARGO floats and active Meta tools; a details panel (right on desktop, sheet on mobile) when a point is selected.
 
 **Controls**
 - **Date:** date picker plus a slider with step buttons (±1 day), limited to `meta.available_dates`. Shows the split badge of the date (`Validation` / `Test` / `Training (in-sample)` / `Live`). A "Latest" button jumps to `meta.latest_live_date` when it is not null.
 - **Depth:** a 15-step selector listing `meta.depths_m` as "0.5 m, 10 m, …" (formatted, not hardcoded).
-- **Field:** segmented control: *Model prediction* | *GLORYS reanalysis* | *Difference (model − GLORYS)*. On `Live` dates the last two are disabled with the tooltip "No GLORYS reference yet for live dates", and `LIVE_CAVEAT` is shown under the map.
+- **Field:** segmented control: *Model prediction* | *GLORYS reanalysis* | *Difference (model − GLORYS)*. On `Live` dates the last two are disabled with the tooltip "No GLORYS reference yet for live dates", and `LIVE_CAVEAT` is shown in the control card.
 - **Play:** optional animation over dates at 2 frames/s, prefetching the next 3 days.
 
 **Map**
-- Grid overlay with the colormap; colour range from `meta.color_ranges` for the selected depth (fixed across dates so animation is comparable); `meta.error_range` for the difference field.
-- Land / unsupported cells (coverage 0): transparent. Insufficient inputs (coverage 2): diagonal hatch pattern in grey.
-- Colorbar legend with units (°C) and a coverage legend (valid / insufficient inputs / land).
+- Grid overlay with the colormap (`cmocean thermal` for temperature, `balance` for difference); colour range from `meta.color_ranges` for the selected depth (fixed across dates so animation is comparable); `meta.error_range` for the difference field.
+- **Grid style (`Dots` default | `Classic` toggle):** defaults to a 1-dot-per-0.25°-cell dot-matrix (`style=dots`) with a pill toggle back to continuous cells (`style=solid`).
+  - In **Dots** mode: valid ocean cells (`coverage = 1`) are filled colormap dots, insufficient inputs (`coverage = 2`) are hollow slate rings, and land / unmodelled cells (`coverage = 0`) are smaller muted stipple dots over a dark obsidian (or light paper) backing.
+  - In **Classic** mode: land / unmodelled cells (`coverage = 0`) are transparent and insufficient inputs (`coverage = 2`) use a grey diagonal hatch pattern.
+- Colorbar legend with units (°C) and a coverage legend whose swatches match the active grid style (dot / hollow ring / land dot vs solid / hatch / land).
 - Hover tooltip: lat, lon, value with source label, or "No prediction (insufficient input data)".
-- Click selects the cell (marker) and opens the details panel.
-- Toggle: show ARGO profile locations for the date (`/argo/profiles`), as small markers.
+- Click selects the cell (circular HUD badge marker) and opens the details panel.
+- Toggle: show ARGO profile locations for the date (`/argo/profiles`), as circular HUD badge markers.
 
 **Details panel (selected cell)**
 - Header: snapped lat/lon, date, split badge.
@@ -80,9 +82,9 @@ Layout: map fills the viewport; a control panel (left sidebar on desktop ≥ 102
 - **Time series chart** at the selected depth: ±90 days around the date (`/timeseries`), both lines, vertical marker at the selected date.
 - Short "How accurate is this depth?" line: val RMSE and bias at the selected depth from `/metrics`, linking to `/validation`.
 
-**URL state:** `?date=&depth=&field=&lat=&lon=` kept in sync (shareable links; back/forward works). Invalid params fall back to defaults with no crash.
+**URL state:** `?date=&depth=&field=&lat=&lon=&view=&style=` kept in sync (`style=solid` written when in Classic mode; omitted on the `dots` default so shareable links stay compact; back/forward works). Invalid params fall back to defaults with no crash.
 
-**Defaults:** latest available validation date, depth closest to 100 m, field = prediction, no selection.
+**Defaults:** latest available validation date, depth closest to 100 m, field = prediction, grid style = `dots`, no selection.
 
 ### 3.1b 3D cutaway view (Explorer, desktop and tablet)
 The Explorer gains a **View** switch: *Map* (the 2D map above, unchanged) | *3D* (a rotatable block of ocean). Reference mockup: the "OceanScope 3D map concept" artifact (illustrative data only; it shows the look and the interactions, not the code).
@@ -91,8 +93,8 @@ The Explorer gains a **View** switch: *Map* (the 2D map above, unchanged) | *3D*
 - The map tilts (pitch 50°, bearing −20°) and the region becomes a solid block hanging below the basemap. The **top face** shows the selected depth; the **side walls** show temperature from that depth down to the deepest level, along the region's edges.
 - **Diving:** changing the depth (depth rail, slider, scroll over the rail, or `PageUp`/`PageDown` while the rail has focus) eases the top face down to the new depth over ~300 ms and slices the water above it away. A faint dashed outline marks the sea surface above the cut.
 - **Contours** every 2 °C on the top face and the walls, and the **20 °C isotherm** drawn as a bright line labelled "20 °C isotherm (thermocline marker)". Both are drawn from the API values only; they are a way of drawing the field, not new data.
-- **Same colour scale** as 2D: `meta.color_ranges` per depth and the `thermal` LUT for the top face. The walls span many depths, so they use one fixed range for the whole column: `vmin` = min of all `color_ranges[].vmin`, `vmax` = max of all `color_ranges[].vmax`. The colorbar shows both ranges ("Top face" / "Walls") when they differ.
-- **Lighting:** walls shaded by angle to the camera, darkening slightly with depth, a soft shadow under the block and a thin light edge on the top face. Land cells (coverage 0) on the top face are drawn in the basemap land colour so the sunk face does not show the basemap through it.
+- **Same colour scale** as 2D: `meta.color_ranges` per depth (`meta.error_range` for `error`) and the `thermal` / `balance` LUTs for the top face. The walls span many depths, so they use one fixed range for the whole column: `vmin` = min of all `color_ranges[].vmin`, `vmax` = max of all `color_ranges[].vmax` (`meta.error_range` when `field = error`). The colorbar shows both ranges ("Top face" / "Walls") when they differ.
+- **Lighting & grid style:** walls shaded by angle to the camera, darkening slightly with depth, a soft shadow under the block and a thin light edge on the top face. In `Dots` mode, the top face renders circular cell dots / hollow insufficient-input rings / stippled land dots and the walls render column stripes; in `Classic` mode, land cells (`coverage = 0`) on the top face are drawn in the basemap land colour so the sunk face does not show the basemap through it, and `coverage = 2` uses diagonal hatching.
 - **Exploded layers** (secondary mode, toggle inside *3D*): 4 depths (0.5 m, ~100 m, ~300 m, deepest; picked as the nearest levels in `meta.depths_m`, plus the selected depth) floating as stacked sheets; the selected one is opaque and outlined, the rest at 60% opacity.
 - Hover and click work as in 2D on the top face: tooltip with lat, lon, depth, value and source label; click selects the cell and opens the details panel. Values always come from the snapped grid cell, even when the drawing is smoothed.
 - Pan, zoom and rotate as usual; the **vertical exaggeration** is fixed so the block is about one third as tall as it is wide.
@@ -180,7 +182,7 @@ Meta's models are how people move through the data: you ask, and the ocean moves
 | Caching | React Query `staleTime: Infinity` for map/profile/timeseries keyed by `run_id` + params; prefetch adjacent dates and depths on idle |
 | Errors | Every fetch has loading, empty and error states; no blank screens; an error boundary per panel |
 | Responsive | Usable at 360 px width; touch: tap = select cell; controls reachable with one thumb on mobile |
-| Accessibility | Keyboard-operable controls; visible focus; colorbar has text min/max; charts have accessible summaries; colour is never the only signal (hatch pattern for coverage) |
+| Accessibility | Keyboard-operable controls; visible focus; colorbar has text min/max; charts have accessible summaries; colour is never the only signal (hollow ring vs filled dot vs stipple in `Dots` mode; diagonal hatch pattern in `Classic` mode) |
 | Theming | Light and dark mode (system default + toggle), basemap switches accordingly |
 | Units/formatting | °C with 1 decimal on the map and tooltips, 2 decimals in tables; depths "123 m" (≥ 10 m rounded to the nearest metre, < 10 m one decimal); coordinates "12.375°N, 65.125°E" |
 | Security | No `dangerouslySetInnerHTML` except sanitized MDX; chat text rendered as plain text/markdown with HTML disabled |

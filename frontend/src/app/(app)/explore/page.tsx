@@ -4,7 +4,19 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { MapPin, SlidersHorizontal, Eye, EyeOff, AlertTriangle, CalendarRange, MessageCircle, Image as ImageIcon, Lasso } from "lucide-react";
+import {
+  MapPin,
+  SlidersHorizontal,
+  Eye,
+  EyeOff,
+  AlertTriangle,
+  CalendarRange,
+  MessageCircle,
+  Image as ImageIcon,
+  Lasso,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 
 import { useArgoProfiles, useEvents, useMap, useMeta, useSection } from "../../../lib/api/hooks";
 import { apiClient, type ChatResponse, type EventItem, type SegmentResponse } from "../../../lib/api/client";
@@ -17,7 +29,12 @@ import {
   type EventPhase,
 } from "../../../lib/guide/ui-actions";
 import type { GuidePrompt, NavigateResult } from "../../../components/guide/GuideDrawer";
-import { parseExplorerParams, type ExplorerState, buildExplorerSearchParams } from "../../../lib/url-state";
+import {
+  parseExplorerParams,
+  type ExplorerState,
+  type GridStyle,
+  buildExplorerSearchParams,
+} from "../../../lib/url-state";
 import { DatePicker } from "../../../components/controls/DatePicker";
 import { DepthSelector } from "../../../components/controls/DepthSelector";
 import { FieldToggle, type FieldType } from "../../../components/controls/FieldToggle";
@@ -330,6 +347,10 @@ function ExplorerContent() {
     }
   }, []);
 
+  const handleGridStyleChange = useCallback((newStyle: GridStyle) => {
+    setState((prev) => ({ ...prev, gridStyle: newStyle }));
+  }, []);
+
   const chatEnabled = !!meta?.features?.chat;
   const {
     data: eventsData,
@@ -453,15 +474,18 @@ function ExplorerContent() {
     );
   }
 
+  const activeGridStyle: GridStyle = state.gridStyle ?? "dots";
+  const hasSelection = state.lat !== null && state.lon !== null;
+
   return (
-    <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden flex flex-col md:flex-row bg-slate-100 dark:bg-slate-950 transition-colors">
+    <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden bg-slate-100 dark:bg-[#070d12] transition-colors">
       {/* Main Accessible Heading for Focus Management (PLAN_LANDING §6 item 5) */}
       <h1 id="explorer-heading" tabIndex={-1} className="sr-only">
         OceanScope AI Subsurface Temperature Explorer
       </h1>
 
-      {/* Map Viewport */}
-      <div className="relative flex-1 w-full h-[calc(100vh-3.5rem)] min-h-[400px]">
+      {/* Full-bleed Map Viewport */}
+      <div className="relative w-full h-full min-h-[400px]">
         <ErrorBoundary name="Interactive Map">
           <MapView
             mapData={mapData}
@@ -474,6 +498,7 @@ function ExplorerContent() {
             onSelectPoint={handleSelectPoint}
             showArgo={showArgo}
             argoProfiles={argoData?.profiles ?? []}
+            gridStyle={activeGridStyle}
             view={state.view}
             depth_m={state.depth}
             availableDepths={meta.depths_m}
@@ -490,11 +515,186 @@ function ExplorerContent() {
           />
         </ErrorBoundary>
 
-        {/* View Switch: 2D Map | 3D Cutaway */}
-        <div className="absolute top-4 left-4 z-20">
+        {/* Top-center status pills (loading, error, side-wall fallback) */}
+        <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2">
+          {isMapLoading && (
+            <div className="bg-white/90 dark:bg-[#0b1116]/88 backdrop-blur-xl border border-slate-300 dark:border-white/12 rounded-full px-4 py-1.5 shadow-2xl flex items-center gap-2 text-xs text-cyan-700 dark:text-cyan-300 font-medium animate-pulse motion-reduce:animate-none">
+              <span className="h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
+              <span>Fetching temperature slice...</span>
+            </div>
+          )}
+
+          {mapError && (
+            <div className="pointer-events-auto bg-white/95 dark:bg-[#0b1116]/92 backdrop-blur-xl border border-red-500/50 rounded-full px-4 py-1.5 shadow-2xl flex items-center gap-3 text-xs text-red-600 dark:text-red-200">
+              <span>Failed to load slice.</span>
+              <button
+                type="button"
+                onClick={() => refetchMap()}
+                className="text-cyan-600 dark:text-cyan-400 underline font-semibold"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {wallsUnavailable && (
+            <div className="bg-amber-500/95 text-slate-950 font-medium text-xs px-3.5 py-1.5 rounded-full shadow-lg flex items-center gap-1.5 backdrop-blur-md">
+              <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+              <span>Side walls unavailable for this date</span>
+            </div>
+          )}
+        </div>
+
+        {/* Floating Left Glass HUD Panel (Controls + Colorbar + Coverage Legend) */}
+        <aside
+          aria-label="Explorer controls"
+          className={`absolute inset-x-3 bottom-16 md:inset-x-auto md:bottom-auto md:top-4 md:left-4 md:w-[348px] z-20 rounded-2xl border border-slate-200/90 dark:border-white/12 bg-white/90 dark:bg-[#0b1116]/88 backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200 ${
+            showControls
+              ? "max-h-[54vh] md:max-h-[calc(100vh-5.5rem)]"
+              : "max-h-11"
+          }`}
+        >
+          {/* Compact HUD card header */}
+          <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-slate-200/70 dark:border-white/10 shrink-0">
+            <div className="flex items-center gap-2 text-xs font-semibold tracking-wide text-slate-800 dark:text-slate-100">
+              <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+              <span>Ocean Controls</span>
+            </div>
+            <button
+              type="button"
+              aria-expanded={showControls}
+              onClick={() => setShowControls(!showControls)}
+              className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium px-2 py-0.5 rounded-full hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
+            >
+              <span>{showControls ? "Hide" : "Show"}</span>
+              {showControls ? (
+                <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+
+          {/* Scrollable controls & scale body */}
+          <div className={`p-3.5 space-y-4 overflow-y-auto ${!showControls ? "hidden" : ""}`}>
+            {/* Selected Point Status */}
+            {state.lat !== null && state.lon !== null ? (
+              <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2.5 text-xs flex items-center justify-between">
+                <div className="flex items-center gap-2 text-cyan-950 dark:text-cyan-100">
+                  <MapPin aria-hidden="true" className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                  <div>
+                    <p className="font-semibold font-mono">{formatCoord(state.lat, state.lon)}</p>
+                    <p className="text-[11px] text-cyan-700 dark:text-cyan-400/80">Selected cell centre</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
+                  className="text-[11px] text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white bg-white/80 dark:bg-white/[0.06] border border-slate-200 dark:border-white/12 px-2.5 py-1 rounded-full transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+            ) : (
+              <div className="bg-slate-100/80 dark:bg-white/[0.03] border border-slate-200/80 dark:border-white/10 rounded-xl p-2.5 text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                <MapPin aria-hidden="true" className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                <span>Click any ocean dot to inspect vertical profile &amp; time series.</span>
+              </div>
+            )}
+
+            {/* Date Picker */}
+            <DatePicker
+              date={state.date}
+              startDate={meta.available_dates.start}
+              endDate={meta.available_dates.end}
+              currentSplit={mapData?.split}
+              latestLiveDate={meta.latest_live_date}
+              splits={meta.splits}
+              onChange={handleDateChange}
+              prefetchAhead={handlePrefetchAhead}
+            />
+
+            {/* Depth Selector */}
+            <DepthSelector
+              depths={meta.depths_m}
+              selectedDepth={state.depth}
+              onChange={handleDepthChange}
+            />
+
+            {/* Field Toggle */}
+            <FieldToggle
+              value={state.field}
+              onChange={handleFieldChange}
+              isLive={isLive}
+            />
+
+            {/* Live caveat when on live dates */}
+            {isLive && <Banner type="live" />}
+
+            {/* Scale & Coverage Legend */}
+            <div className="pt-2 border-t border-slate-200/80 dark:border-white/10 space-y-2">
+              <Colorbar
+                field={state.field}
+                vmin={colorRange.vmin}
+                vmax={colorRange.vmax}
+                wallRange={wallRange}
+              />
+              <CoverageLegend gridStyle={activeGridStyle} />
+            </div>
+          </div>
+        </aside>
+
+        {/* Contextual Meta Feature Cards (Lasso, Postcard, Events Time Machine) */}
+        {(eventsOpen || (meta.features.segment && lassoActive) || (meta.features.postcards && postcard)) && (
+          <div className="absolute top-4 left-3 right-3 sm:right-auto md:left-[376px] z-30 flex flex-col items-start gap-2 pointer-events-auto max-w-[calc(100%-1.5rem)]">
+            {meta.features.segment && lassoActive && (
+              <LassoPanel
+                pending={!!lassoPending}
+                error={lassoError}
+                result={lassoResult}
+                onAsk={chatEnabled ? handleAskAboutArea : undefined}
+                onClose={closeLasso}
+              />
+            )}
+            {meta.features.postcards && postcard && (
+              <PostcardPanel
+                key={postcard.nonce}
+                date={postcard.date}
+                depth={postcard.depth}
+                eventId={postcard.eventId}
+                eventTitle={postcard.eventTitle}
+                caveat={meta.caveats.postcard}
+                onClose={() => setPostcard(null)}
+              />
+            )}
+            {eventsOpen && (
+              <TimeMachine
+                meta={meta}
+                events={events}
+                isLoading={isEventsLoading}
+                isError={isEventsError}
+                active={activeEvent}
+                currentDate={state.date}
+                onOpen={openEventPhase}
+                onSetDate={handleDateChange}
+                onBack={() => setActiveEvent(null)}
+                onClose={() => {
+                  setEventsOpen(false);
+                  setActiveEvent(null);
+                }}
+                onExplain={chatEnabled ? handleExplainEvent : undefined}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Bottom-Center Floating Glass Pill Toolbar (functional tools only) */}
+        <div className="pointer-events-none absolute bottom-3 inset-x-3 md:inset-x-auto md:bottom-5 md:left-[calc(50%+96px)] lg:left-1/2 md:-translate-x-1/2 z-20 flex flex-wrap items-end justify-center gap-2">
           <ViewSwitch
             view={state.view}
             onChangeView={handleViewChange}
+            gridStyle={activeGridStyle}
+            onChangeGridStyle={handleGridStyleChange}
             isTouring={isTouring}
             onToggleTour={() => setIsTouring(!isTouring)}
             isExploded={isExploded}
@@ -504,166 +704,90 @@ function ExplorerContent() {
             showContours={showContours}
             onToggleContours={() => setShowContours(!showContours)}
           />
+
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1 p-1 rounded-full bg-white/90 dark:bg-[#0b1116]/90 backdrop-blur-xl border border-slate-300/80 dark:border-white/12 shadow-2xl">
+            <button
+              type="button"
+              aria-pressed={showArgo}
+              onClick={() => setShowArgo(!showArgo)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+                showArgo
+                  ? "bg-amber-500 text-slate-950 font-semibold shadow-sm"
+                  : "text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10"
+              }`}
+            >
+              {showArgo ? (
+                <Eye aria-hidden="true" className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff aria-hidden="true" className="h-3.5 w-3.5 text-slate-400" />
+              )}
+              <span>ARGO Floats {argoData?.profiles ? `(${argoData.profiles.length})` : ""}</span>
+            </button>
+
+            {events.length > 0 && !eventsOpen && (
+              <button
+                type="button"
+                onClick={() => setEventsOpen(true)}
+                className="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 inline-flex items-center gap-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+              >
+                <CalendarRange aria-hidden="true" className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                <span>Events</span>
+              </button>
+            )}
+
+            {meta.features.postcards && !postcard && (
+              <button
+                type="button"
+                onClick={() => openPostcard(activeEvent?.event)}
+                className="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 inline-flex items-center gap-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+              >
+                <ImageIcon aria-hidden="true" className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                <span>Make a postcard</span>
+              </button>
+            )}
+
+            {meta.features.segment && (
+              <button
+                type="button"
+                aria-pressed={lassoActive}
+                onClick={() => (lassoActive ? closeLasso() : setLassoActive(true))}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium inline-flex items-center gap-1.5 transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+                  lassoActive
+                    ? "bg-slate-900 text-white dark:bg-white dark:text-slate-950 font-semibold shadow-sm"
+                    : "text-slate-700 dark:text-slate-200 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10"
+                }`}
+              >
+                <Lasso aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>Lasso</span>
+              </button>
+            )}
+
+            {chatEnabled && !guideOpen && (
+              <button
+                type="button"
+                onClick={() => setGuideOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold px-3.5 py-1.5 shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300"
+              >
+                <MessageCircle aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>Ask the ocean</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 3D Depth Rail overlay on right edge */}
         {state.view === "3d" && meta.depths_m && (
-          <div className="absolute top-20 right-4 z-20 pointer-events-auto animate-in fade-in duration-300">
+          <div
+            className={`absolute top-4 z-20 pointer-events-auto animate-in fade-in duration-300 ${
+              hasSelection ? "right-4 lg:right-[452px]" : "right-4"
+            }`}
+          >
             <DepthRail
               availableDepths={meta.depths_m}
               selectedDepth={state.depth}
               onChangeDepth={handleDepthChange}
             />
           </div>
-        )}
-
-        {/* Fallback badge when side walls are unavailable (PRD_FRONTEND §3.1b) */}
-        {wallsUnavailable && (
-          <div className="absolute top-16 left-4 z-20 bg-amber-500/90 text-slate-950 font-medium text-xs px-3 py-1.5 rounded-lg shadow-lg flex items-center gap-1.5 backdrop-blur-md">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            <span>Side walls unavailable for this date</span>
-          </div>
-        )}
-
-        {/* Map Loading overlay */}
-        {isMapLoading && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border border-slate-300 dark:border-slate-700/80 rounded-full px-4 py-1.5 shadow-2xl flex items-center gap-2 text-xs text-cyan-600 dark:text-cyan-300 font-medium animate-pulse">
-            <span className="h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400" />
-            <span>Fetching temperature slice...</span>
-          </div>
-        )}
-
-        {/* Error overlay on map */}
-        {mapError && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 bg-white/95 dark:bg-slate-950/90 border border-red-500/50 rounded-lg px-4 py-2 shadow-2xl flex items-center gap-3 text-xs text-red-600 dark:text-red-200">
-            <span>Failed to load slice.</span>
-            <button
-              onClick={() => refetchMap()}
-              className="text-cyan-600 dark:text-cyan-400 underline font-semibold"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        {/* Bottom overlays: Colorbar, Legend, and ARGO toggle */}
-        <div className="absolute bottom-6 left-4 right-4 z-20 flex flex-col sm:flex-row items-end sm:items-end justify-between gap-3 pointer-events-none">
-          <div className="pointer-events-auto flex flex-col gap-2 max-w-xs sm:max-w-sm w-full">
-            <Colorbar
-              field={state.field}
-              vmin={colorRange.vmin}
-              vmax={colorRange.vmax}
-              wallRange={wallRange}
-            />
-          </div>
-
-          <div className="pointer-events-auto flex flex-col sm:flex-row items-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowArgo(!showArgo)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md transition-all flex items-center gap-2 ${
-                showArgo
-                  ? "bg-amber-500 text-slate-950 border-amber-400 font-semibold"
-                  : "bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-800 hover:text-slate-950 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-900"
-              }`}
-            >
-              {showArgo ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-slate-400" />}
-              <span>ARGO Floats {argoData?.profiles ? `(${argoData.profiles.length})` : ""}</span>
-            </button>
-            <CoverageLegend />
-          </div>
-        </div>
-
-        {/* Meta features: Events and Ask the ocean (each hidden when unavailable, PRD_FRONTEND §3.4) */}
-        <div className="absolute top-16 left-4 z-20 flex flex-col items-start gap-2 pointer-events-auto max-w-[calc(100%-2rem)]">
-          {events.length > 0 && !eventsOpen && (
-            <button
-              type="button"
-              onClick={() => setEventsOpen(true)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900 inline-flex items-center gap-1.5"
-            >
-              <CalendarRange className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-              Events
-            </button>
-          )}
-          {(meta.features.postcards || meta.features.segment) && (
-            <div className="flex gap-2">
-              {meta.features.postcards && !postcard && (
-                <button
-                  type="button"
-                  onClick={() => openPostcard(activeEvent?.event)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900 inline-flex items-center gap-1.5"
-                >
-                  <ImageIcon className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                  Make a postcard
-                </button>
-              )}
-              {meta.features.segment && (
-                <button
-                  type="button"
-                  aria-pressed={lassoActive}
-                  onClick={() => (lassoActive ? closeLasso() : setLassoActive(true))}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border shadow-lg backdrop-blur-md inline-flex items-center gap-1.5 ${
-                    lassoActive
-                      ? "bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900"
-                      : "bg-white/85 dark:bg-slate-950/85 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-800 hover:bg-white dark:hover:bg-slate-900"
-                  }`}
-                >
-                  <Lasso className="h-3.5 w-3.5" />
-                  Lasso
-                </button>
-              )}
-            </div>
-          )}
-          {meta.features.segment && lassoActive && (
-            <LassoPanel
-              pending={!!lassoPending}
-              error={lassoError}
-              result={lassoResult}
-              onAsk={chatEnabled ? handleAskAboutArea : undefined}
-              onClose={closeLasso}
-            />
-          )}
-          {meta.features.postcards && postcard && (
-            <PostcardPanel
-              key={postcard.nonce}
-              date={postcard.date}
-              depth={postcard.depth}
-              eventId={postcard.eventId}
-              eventTitle={postcard.eventTitle}
-              caveat={meta.caveats.postcard}
-              onClose={() => setPostcard(null)}
-            />
-          )}
-          {eventsOpen && (
-            <TimeMachine
-              meta={meta}
-              events={events}
-              isLoading={isEventsLoading}
-              isError={isEventsError}
-              active={activeEvent}
-              currentDate={state.date}
-              onOpen={openEventPhase}
-              onSetDate={handleDateChange}
-              onBack={() => setActiveEvent(null)}
-              onClose={() => {
-                setEventsOpen(false);
-                setActiveEvent(null);
-              }}
-              onExplain={chatEnabled ? handleExplainEvent : undefined}
-            />
-          )}
-        </div>
-
-        {chatEnabled && !guideOpen && (
-          <button
-            type="button"
-            onClick={() => setGuideOpen(true)}
-            className="absolute bottom-24 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold px-4 py-2.5 shadow-2xl"
-          >
-            <MessageCircle className="h-4 w-4" />
-            Ask the ocean
-          </button>
         )}
 
         {chatEnabled && guideOpen && (
@@ -698,85 +822,6 @@ function ExplorerContent() {
             </ErrorBoundary>
           </div>
         )}
-      </div>
-
-      {/* Control Panel (Sidebar on desktop, bottom sheet / drawer on mobile) */}
-      <div
-        className={`z-30 transition-all duration-300 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800/80 bg-white/95 dark:bg-slate-950/90 backdrop-blur-xl flex flex-col shadow-2xl md:w-96 w-full ${
-          showControls ? "max-h-[60vh] md:max-h-full" : "max-h-12 md:max-h-full"
-        }`}
-      >
-        {/* Toggle header on mobile */}
-        <div className="flex md:hidden items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800/60">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
-            <SlidersHorizontal className="h-4 w-4 text-cyan-500 dark:text-cyan-400" />
-            <span>Controls</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowControls(!showControls)}
-            className="text-xs text-cyan-600 dark:text-cyan-400 font-medium"
-          >
-            {showControls ? "Hide" : "Show Controls"}
-          </button>
-        </div>
-
-        {/* Scrollable controls body */}
-        <div className={`p-4 space-y-5 overflow-y-auto ${!showControls ? "hidden md:block" : ""}`}>
-          {/* Selected Point Status */}
-          {state.lat !== null && state.lon !== null ? (
-            <div className="bg-cyan-50 dark:bg-cyan-950/40 border border-cyan-200 dark:border-cyan-800/50 rounded-lg p-3 text-xs flex items-center justify-between">
-              <div className="flex items-center gap-2 text-cyan-900 dark:text-cyan-200">
-                <MapPin className="h-4 w-4 text-cyan-500 dark:text-cyan-400 shrink-0" />
-                <div>
-                  <p className="font-semibold">{formatCoord(state.lat, state.lon)}</p>
-                  <p className="text-[11px] text-cyan-600 dark:text-cyan-400/80">Selected cell centre</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setState((prev) => ({ ...prev, lat: null, lon: null }))}
-                className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700/60 px-2 py-1 rounded transition-colors"
-              >
-                Clear
-              </button>
-            </div>
-          ) : (
-            <div className="bg-slate-100/70 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800/60 rounded-lg p-2.5 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-slate-400 dark:text-slate-500 shrink-0" />
-              <span>Click any point on the map to inspect vertical profiles & time series.</span>
-            </div>
-          )}
-
-          {/* Date Picker */}
-          <DatePicker
-            date={state.date}
-            startDate={meta.available_dates.start}
-            endDate={meta.available_dates.end}
-            currentSplit={mapData?.split}
-            latestLiveDate={meta.latest_live_date}
-            splits={meta.splits}
-            onChange={handleDateChange}
-            prefetchAhead={handlePrefetchAhead}
-          />
-
-          {/* Depth Selector */}
-          <DepthSelector
-            depths={meta.depths_m}
-            selectedDepth={state.depth}
-            onChange={handleDepthChange}
-          />
-
-          {/* Field Toggle */}
-          <FieldToggle
-            value={state.field}
-            onChange={handleFieldChange}
-            isLive={isLive}
-          />
-
-          {/* Live caveat when on live dates */}
-          {isLive && <Banner type="live" />}
-        </div>
       </div>
     </div>
   );

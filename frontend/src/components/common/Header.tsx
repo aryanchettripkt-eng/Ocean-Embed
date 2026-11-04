@@ -7,13 +7,35 @@ import { Waves, BarChart3, Info, ExternalLink, Sun, Moon, Compass } from "lucide
 import { useMeta } from "../../lib/api/hooks";
 import { Banner } from "./Banner";
 
+function readStoredTheme(): "dark" | "light" | null {
+  try {
+    if (typeof window !== "undefined" && typeof window.localStorage?.getItem === "function") {
+      const val = window.localStorage.getItem("theme");
+      return val === "dark" || val === "light" ? val : null;
+    }
+  } catch {
+    // Ignore storage unavailability
+  }
+  return null;
+}
+
+function writeStoredTheme(next: "dark" | "light"): void {
+  try {
+    if (typeof window !== "undefined" && typeof window.localStorage?.setItem === "function") {
+      window.localStorage.setItem("theme", next);
+    }
+  } catch {
+    // Ignore storage unavailability
+  }
+}
+
 export function Header() {
   const pathname = usePathname();
   const { data: meta } = useMeta();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   useEffect(() => {
-    const saved = typeof window !== "undefined" ? (localStorage.getItem("theme") as "dark" | "light" | null) : null;
+    const saved = readStoredTheme();
     const initial = saved ?? "dark";
     setTheme(initial);
     if (initial === "dark") {
@@ -23,12 +45,14 @@ export function Header() {
       document.documentElement.classList.remove("dark");
       document.documentElement.classList.add("light");
     }
+    const metaScheme = document.querySelector('meta[name="color-scheme"]');
+    if (metaScheme) metaScheme.setAttribute("content", initial);
   }, []);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    localStorage.setItem("theme", next);
+    writeStoredTheme(next);
     if (next === "dark") {
       document.documentElement.classList.add("dark");
       document.documentElement.classList.remove("light");
@@ -36,6 +60,8 @@ export function Header() {
       document.documentElement.classList.remove("dark");
       document.documentElement.classList.add("light");
     }
+    const metaScheme = document.querySelector('meta[name="color-scheme"]');
+    if (metaScheme) metaScheme.setAttribute("content", next);
   };
 
   const navLinks = [
