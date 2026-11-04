@@ -33,14 +33,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
+from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input, enable_year_input
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
+from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.preprocess import compute_config_hash
-from oceanscope_ml.models.loss import depth_weight_vector, total_loss
+from oceanscope_ml.models.loss import depth_weight_vector, masked_weighted_mse, total_loss
 from oceanscope_ml.models.unet import UNet
 
 logger = logging.getLogger("oceanscope_ml.train")
@@ -160,12 +163,19 @@ def epoch_loader(
     epoch: int,
     config: ExperimentConfig,
     device: torch.device,
+    sample_weights: np.ndarray | None = None,
 ) -> DataLoader[dict[str, torch.Tensor]]:
     """Shuffled loader whose order depends only on (seed, epoch), so a resumed run sees the
-    same batches as an uninterrupted one."""
+    same batches as an uninterrupted one. With ``sample_weights`` the epoch draws the same number
+    of samples with replacement, in proportion to the weights (recency weighting)."""
     train_cfg = config.train
     generator = torch.Generator().manual_seed(int(train_cfg.get("seed", 42)) + epoch)
-    order = torch.randperm(len(dataset), generator=generator).tolist()
+    if sample_weights is not None:
+        weights = torch.as_tensor(sample_weights, dtype=torch.float64)
+        drawn = torch.multinomial(weights, len(dataset), replacement=True, generator=generator)
+        order: list[int] = drawn.tolist()
+    else:
+        order = torch.randperm(len(dataset), generator=generator).tolist()
     return DataLoader(
         Subset(dataset, order),
         batch_size=int(train_cfg.get("batch_size", 8)),
@@ -198,6 +208,7 @@ def train_one_epoch(
     use_amp: bool,
     depth_weights: torch.Tensor,
     aux_weight: float,
+    argo_lambda: float = 0.0,
 ) -> float:
     model.train()
     total = 0.0
@@ -217,6 +228,10 @@ def train_one_epoch(
             depth_weights,
             aux_weight,
         )
+        if argo_lambda > 0 and "argo_y" in batch:  # profiles hidden from the ARGO inputs
+            loss = loss + argo_lambda * masked_weighted_mse(
+                pred.float(), batch["argo_y"], batch["argo_mask"], depth_weights
+            )
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -306,8 +321,29 @@ def train_run(
     epochs: int | None = None,
     stats_path: str | Path | None = None,
     cache_dir: str | Path | None = None,
+    argo_paths: list[Path] | None = None,
+    holdout: set[str] | None = None,
+    argo_lambda: float = 0.0,
+    recency: float = 1.0,
+    year_input: bool = False,
 ) -> TrainResult:
-    """Train or resume one run, up to ``epochs`` completed epochs (default: max_epochs)."""
+    """Train or resume one run, up to ``epochs`` completed epochs (default: max_epochs).
+
+    Options (all off by default, so main1/main2 behaviour is unchanged):
+    - ``argo_paths`` + ``holdout``: ARGO input channels (P4-6, ``data.argo_inputs``); training
+      hides 30% of the window's profiles and, with ``argo_lambda`` > 0, adds
+      ``argo_lambda * L_argo`` on the hidden day-t profiles. Validation uses every non-held-out
+      profile as input, as at inference.
+    - ``recency``: training days are drawn with weight rising linearly from 1 (first training
+      year) to ``recency`` (last), so recent years count more (the thermocline drift, §5.8.2).
+    - ``year_input``: adds the ``year`` extra channel.
+    """
+    if argo_paths:
+        if not holdout:
+            raise ValueError("ARGO input channels need the held-out float list")
+        enable_argo_input(config)
+    if year_input:
+        enable_year_input(config)
     train_cfg = config.train
     max_epochs = int(train_cfg.get("max_epochs", 80))
     stop_epoch = min(max_epochs, epochs) if epochs is not None else max_epochs
@@ -361,6 +397,28 @@ def train_run(
     )
     if train_ds.n_channels != len(channels):
         raise ValueError("Dataset channel count does not match channel_list")
+    argo = None
+    if argo_paths:
+        assert holdout is not None
+        with open_parts(
+            [Path(p) for p in (store_path if isinstance(store_path, list) else [store_path])],
+            Path(stats_path) if stats_path else None,
+        ) as ds_argo:
+            argo = argo_inputs_for(
+                config, argo_paths, holdout, ds_argo, train_ds.sigma_d, list(config.depths_m)
+            )
+        train_ds.set_argo(argo, "train")
+        val_ds.set_argo(argo, "predict")
+    sample_weights = None
+    if recency != 1.0:
+        with open_parts(
+            [Path(p) for p in (store_path if isinstance(store_path, list) else [store_path])],
+            Path(stats_path) if stats_path else None,
+        ) as ds_t:
+            years = pd.DatetimeIndex(ds_t["time"].values)[np.asarray(train_ds._positions)].year
+        span = max(int(years.max() - years.min()), 1)
+        sample_weights = 1.0 + (recency - 1.0) * (years.to_numpy() - years.min()) / span
+        logger.info("Recency weighting: %s (first year 1, last year %g)", run_id, recency)
     sigma_d = torch.tensor(train_ds.sigma_d, dtype=torch.float32, device=device)
     val_loader = DataLoader(
         val_ds,
@@ -381,10 +439,13 @@ def train_run(
 
     while state.epoch < stop_epoch:
         epoch_start = time.perf_counter()
-        loader = epoch_loader(train_ds, state.epoch, config, device)
+        if argo is not None:
+            argo.epoch = state.epoch  # a new draw of hidden profiles each epoch
+        loader = epoch_loader(train_ds, state.epoch, config, device, sample_weights)
         train_loss = train_one_epoch(
-            model, loader, optimizer, scaler, device, use_amp, depth_weights, aux_weight
-        )
+            model, loader, optimizer, scaler, device, use_amp, depth_weights, aux_weight,
+            argo_lambda=argo_lambda if argo is not None else 0.0,
+        )  # fmt: skip
         val_rmse, val_mae = validate(model, val_loader, device, sigma_d)
         scheduler.step()
         state.epoch += 1
@@ -506,6 +567,11 @@ def build_cli() -> argparse.ArgumentParser:
         default=None,
         help="Stop once this many epochs are complete (default: train.max_epochs)",
     )
+    parser.add_argument("--argo", nargs="+", default=None, help="ARGO files: input channels on")
+    parser.add_argument("--holdout", default=None, help="argo_eval_floats.json (with --argo)")
+    parser.add_argument("--argo-lambda", type=float, default=0.0, help="Weight of L_argo")
+    parser.add_argument("--recency", type=float, default=1.0, help="Last/first year weight")
+    parser.add_argument("--year-input", action="store_true", help="Add the year channel")
     return parser
 
 
@@ -527,6 +593,11 @@ def main() -> None:
         epochs=args.epochs,
         stats_path=args.stats,
         cache_dir=args.cache_dir,
+        argo_paths=[Path(p) for p in args.argo] if args.argo else None,
+        holdout=_load_holdout(Path(args.holdout)) if args.holdout else None,
+        argo_lambda=args.argo_lambda,
+        recency=args.recency,
+        year_input=args.year_input,
     )
     logger.info(
         "Run %s: %d epochs complete, best epoch %d (val RMSE %.3f C), finished=%s",
@@ -536,6 +607,15 @@ def main() -> None:
         result.best_val_rmse_c,
         result.finished,
     )
+
+
+def _load_holdout(path: Path) -> set[str]:
+    import json
+
+    floats = json.loads(Path(path).read_text(encoding="utf-8")).get("held_out_floats") or []
+    if not floats:
+        raise ValueError(f"{path} lists no held-out floats (PRD_AI_ML §7)")
+    return {str(f).strip() for f in floats}
 
 
 if __name__ == "__main__":

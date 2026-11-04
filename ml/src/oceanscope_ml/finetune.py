@@ -42,6 +42,12 @@ from torch.utils.data import DataLoader, Dataset, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.argo import profile_levels, read_levels
+from oceanscope_ml.data.argo_inputs import (
+    ArgoInputs,
+    argo_inputs_for,
+    enable_argo_input,
+    expand_input_weights,
+)
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -272,8 +278,16 @@ def finetune_run(
     device_choice: str = "auto",
     epochs: int | None = None,
     patience: int = 3,
+    argo_input: bool = False,
 ) -> FineTuneResult:
-    """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch."""
+    """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
+
+    With ``argo_input`` the ARGO input channels (P4-6) are turned on: the base model's first
+    layer is widened with zero weights for them, and the ARGO targets are the profiles hidden
+    from the inputs (``oceanscope_ml.data.argo_inputs``), never the ones the sample sees.
+    """
+    if argo_input:
+        enable_argo_input(config)
     ft_cfg = config.finetune_argo
     max_epochs = int(epochs if epochs is not None else ft_cfg.get("epochs", 10))
     lr = float(ft_cfg.get("lr", 1e-4))
@@ -286,17 +300,28 @@ def finetune_run(
     last_path, best_path = ckpt_dir / "last_ft.pt", ckpt_dir / "best_ft.pt"
 
     base = torch.load(base_checkpoint, map_location=device, weights_only=False)
-    if base["channel_names"] != channels:
+    base_state = base["model"]
+    if argo_input and base["channel_names"] != channels:
+        if base["channel_names"] != [c for c in channels if not c.startswith("argo_")]:
+            raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO channels")
+        base_state = expand_input_weights(base_state, base["channel_names"], channels)
+    elif base["channel_names"] != channels:
         raise ValueError(f"{base_checkpoint} was trained with a different channel list")
     if base.get("config_hash") != config_hash:
         logger.warning("Base checkpoint config hash differs from the current config")
 
     set_seed(int(config.train.get("seed", 42)))
     model = build_model(config, len(channels)).to(device)
-    model.load_state_dict(base["model"])
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=lr, weight_decay=float(config.train.get("weight_decay", 1e-4))
-    )
+    model.load_state_dict(base_state)
+    weight_decay = float(config.train.get("weight_decay", 1e-4))
+    if argo_input:
+        # The new ARGO weights start at zero; the first layer learns 10x faster to pick them up.
+        first = [p for n, p in model.named_parameters() if n.startswith("encoders.0.0.")]
+        rest = [p for n, p in model.named_parameters() if not n.startswith("encoders.0.0.")]
+        groups = [{"params": first, "lr": 10 * lr}, {"params": rest, "lr": lr}]
+        optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=weight_decay)
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
     depth_weights = depth_weight_vector(config).to(device)
 
@@ -339,12 +364,29 @@ def finetune_run(
         )
         return targets
 
-    train_argo = ArgoTargetDataset(
-        train_ds, _split_dates(stores, train_ds), targets_for("train"), n_lat, n_lon
-    )
-    val_argo = ArgoTargetDataset(
-        val_ds, _split_dates(stores, val_ds), targets_for("val"), n_lat, n_lon
-    )
+    argo_inputs: ArgoInputs | None = None
+    train_argo: Dataset[dict[str, torch.Tensor]]
+    val_argo: Dataset[dict[str, torch.Tensor]]
+    if argo_input:
+        argo_inputs = argo_inputs_for(
+            config, argo_paths, holdout, stores, sigma_np, depths_m=list(config.depths_m)
+        )
+        train_ds.set_argo(argo_inputs, "train")
+        val_ds.set_argo(argo_inputs, "val")
+        train_dates, val_dates = _split_dates(stores, train_ds), _split_dates(stores, val_ds)
+        train_argo = Subset(
+            train_ds, [i for i, d in enumerate(train_dates) if argo_inputs.has_profiles(d)]
+        )
+        val_argo = Subset(
+            val_ds, [i for i, d in enumerate(val_dates) if argo_inputs.has_profiles(d)]
+        )
+    else:
+        train_argo = ArgoTargetDataset(
+            train_ds, _split_dates(stores, train_ds), targets_for("train"), n_lat, n_lon
+        )
+        val_argo = ArgoTargetDataset(
+            val_ds, _split_dates(stores, val_ds), targets_for("val"), n_lat, n_lon
+        )
     if len(train_argo) == 0 or len(val_argo) == 0:
         raise ValueError("No training or validation days with ARGO targets")
     logger.info("Fine-tune days: %d train, %d val", len(train_argo), len(val_argo))
@@ -392,6 +434,7 @@ def finetune_run(
                 "run_id": run_id,
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
+                "argo_input": argo_input,
             },
             best_path,
         )
@@ -426,6 +469,8 @@ def finetune_run(
         start = time.perf_counter()
         generator = torch.Generator().manual_seed(seed + 1000 + state.epoch)
         order = torch.randperm(len(train_argo), generator=generator).tolist()
+        if argo_inputs is not None:
+            argo_inputs.epoch = state.epoch  # a new draw of hidden profiles each epoch
         model.train()
         total, count = 0.0, 0
         for batch in _loader(train_argo, config, device, order):
@@ -499,6 +544,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument(
+        "--argo-input", action="store_true", help="Turn the ARGO input channels on (P4-6)"
+    )
     return parser
 
 
@@ -520,6 +568,7 @@ def main() -> None:
         device_choice=args.device,
         epochs=args.epochs,
         patience=args.patience,
+        argo_input=args.argo_input,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 

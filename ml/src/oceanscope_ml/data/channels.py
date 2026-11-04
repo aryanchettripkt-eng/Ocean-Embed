@@ -19,7 +19,7 @@ from oceanscope_ml.config import ExperimentConfig
 
 logger = logging.getLogger("oceanscope_ml.data.channels")
 
-EXTRA_KINDS = ("doy_sin", "doy_cos", "lat", "lon", "ocean_mask")
+EXTRA_KINDS = ("doy_sin", "doy_cos", "lat", "lon", "ocean_mask", "year")
 ARGO_EXTRA_NAMES = ("argo_mask", "argo_age")
 
 

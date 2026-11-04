@@ -20,14 +20,16 @@ import torch
 import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
+from oceanscope_ml.data.argo_inputs import ArgoInputs
 from oceanscope_ml.data.cache import build_cache, open_cache
-from oceanscope_ml.data.channels import ChannelSpec, channel_list
+from oceanscope_ml.data.channels import ARGO_EXTRA_NAMES, ChannelSpec, channel_list
 from oceanscope_ml.data.parts import open_parts
 from oceanscope_ml.data.transform import TestLeakageError, check_no_test_leakage
 
 logger = logging.getLogger("oceanscope_ml.data.dataset")
 
 TRAINABLE_SPLITS = ("train", "val")
+YEAR_CENTER, YEAR_SCALE = 2005.0, 10.0  # the optional "year" extra channel
 
 
 def _split_range(config: ExperimentConfig, split: str) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -76,6 +78,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     - ``mask``: bool [D, H, W]; target valid.
     - ``grep_y``, ``grep_mask``: as ``y`` and ``mask`` for GREP, zeros when GREP is missing.
     - ``has_grep``: bool scalar; True when GREP exists for this date.
+    - ``argo_y``, ``argo_mask``: same-day ARGO targets hidden from the inputs, only when ARGO
+      input channels are on (``set_argo``, oceanscope_ml.data.argo_inputs).
     """
 
     def __init__(
@@ -86,13 +90,22 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         stats_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         allow_test: bool = False,
+        live_dates: list[pd.Timestamp] | None = None,
     ) -> None:
         # Only final_test passes allow_test=True, to read the sealed test year once (PRD §0 rule 3).
-        if split not in TRAINABLE_SPLITS and not (split == "test" and allow_test):
+        # Live mode (PRD §12) passes split="live" with the target days to predict: days after
+        # the test period, with no GLORYS target.
+        if split == "live":
+            if not live_dates:
+                raise ValueError("split='live' needs live_dates")
+            if cache_dir is not None:
+                raise ValueError("split='live' reads the store directly, not a training cache")
+        elif split not in TRAINABLE_SPLITS and not (split == "test" and allow_test):
             raise TestLeakageError(
                 f"Dataset split must be one of {TRAINABLE_SPLITS}; got {split!r}. "
                 "The test period is read only by final_test (PRD_AI_ML §0 rule 3)."
             )
+        self._live_dates = pd.DatetimeIndex(live_dates) if live_dates else None
         # One store, or the part stores of a multi-part build plus the stats store that
         # holds `clim` and `norm_stats` (oceanscope_ml.data.parts).
         paths = store_path if isinstance(store_path, list) else [store_path]
@@ -113,6 +126,10 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         # With a cache dir, samples come from the fast local cache (oceanscope_ml.data.cache).
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self._arrays: dict[str, np.ndarray] | None = None
+        # ARGO input channels (P4-6) come from profiles, not from the store: see set_argo.
+        self._has_argo_channels = any(c.kind == "argo" for c in self.channels)
+        self.argo: ArgoInputs | None = None
+        self.argo_mode = "predict"
 
         with self._open_store() as ds:
             _check_store_matches_config(ds, config)
@@ -205,6 +222,8 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     def _select_positions(self, ds: xr.Dataset) -> np.ndarray:
         """Store time positions for this split, after the gap and history checks."""
         times = pd.to_datetime(ds["time"].values)
+        if self.split == "live":
+            return self._select_live_positions(times)
         start, end = _split_range(self.config, self.split)
         gap = pd.Timedelta(days=int(self.config.splits.gap_days))
         last_day = end - gap  # the gap_days at the end of train and val are dropped
@@ -231,6 +250,39 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         if self.split != "test":
             check_no_test_leakage(selected_dates, self.config.splits.test)
         return positions
+
+    def _select_live_positions(self, times: pd.DatetimeIndex) -> np.ndarray:
+        """Store positions of the live target days; each needs its full unbroken history.
+
+        Live mode predicts days after the test period. The NRT check (P9-1) also predicts one
+        past month outside the test period, so only test dates are refused here.
+        """
+        assert self._live_dates is not None
+        test_start, test_end = (pd.Timestamp(d) for d in self.config.splits.test)
+        sealed = [str(d.date()) for d in self._live_dates if test_start <= d <= test_end]
+        if sealed:
+            raise TestLeakageError(f"Live dates fall in the sealed test period: {sealed}")
+        lookup = {t: i for i, t in enumerate(times)}
+        positions: list[int] = []
+        for day in self._live_dates:
+            t = lookup.get(day)
+            if t is None:
+                raise ValueError(f"Live date {day.date()} is not in the store")
+            if t < self._lookback or times[t] - times[t - self._lookback] != pd.Timedelta(
+                days=self._lookback
+            ):
+                raise ValueError(
+                    f"Live date {day.date()} lacks {self._lookback} unbroken days of history"
+                )
+            positions.append(t)
+        return np.asarray(positions, dtype=np.int64)
+
+    def set_argo(self, argo: ArgoInputs, mode: str) -> None:
+        """Attach the ARGO profiles that feed the ARGO channels, and the hide/target mode."""
+        if not self._has_argo_channels:
+            raise ValueError("ARGO input channels are off in this config (inputs.argo_input)")
+        self.argo = argo
+        self.argo_mode = mode
 
     # ------------------------------------------------------------- dataset API
 
@@ -274,7 +326,19 @@ class OceanScopeDataset(torch.utils.data.Dataset):
                 for var in self._window_vars()
             }
 
-        planes = [self._input_plane(c, ds, window, t, day, doy) for c in self.channels]
+        argo_sample = None
+        if self._has_argo_channels:
+            if self.argo is None:
+                raise ValueError("ARGO input channels are on but no profiles are set (set_argo)")
+            argo_sample = self.argo.sample(day, self.argo_mode, index)
+        planes = []
+        for c in self.channels:
+            if c.kind == "argo":
+                assert argo_sample is not None
+                k = c.depth_index if c.depth_index is not None else self._argo_extra(c.name)
+                planes.append(argo_sample.planes[k])
+            else:
+                planes.append(self._input_plane(c, ds, window, t, day, doy))
         x = np.stack(planes).astype(np.float32)
         x = np.nan_to_num(x, nan=0.0)
 
@@ -284,7 +348,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         pad_w = self.padded_hw[1] - self._n_lon
         x = np.pad(x, ((0, 0), (0, pad_h), (0, pad_w)))
 
-        return {
+        sample = {
             "x": torch.from_numpy(x),
             "y": torch.from_numpy(y),
             "mask": torch.from_numpy(mask),
@@ -292,6 +356,13 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             "grep_mask": torch.from_numpy(grep_mask),
             "has_grep": torch.tensor(has_grep, dtype=torch.bool),
         }
+        if argo_sample is not None:
+            sample["argo_y"] = torch.from_numpy(argo_sample.target)
+            sample["argo_mask"] = torch.from_numpy(argo_sample.target_mask)
+        return sample
+
+    def _argo_extra(self, name: str) -> int:
+        return len(self.config.depths_m) + ARGO_EXTRA_NAMES.index(name)
 
     def _window_vars(self) -> list[str]:
         return sorted({c.source for c in self.channels if c.kind in ("dynamic", "long_history")})
@@ -349,6 +420,9 @@ class OceanScopeDataset(torch.utils.data.Dataset):
                 return np.broadcast_to(self._lon_scaled[None, :], shape).astype(np.float64)
             if channel.source == "ocean_mask":
                 return np.asarray(self._static["ocean_mask"], dtype=np.float64)
+            if channel.source == "year":
+                # Slow trends (warming of the thermocline): the calendar year, scaled.
+                return np.full(shape, (day.year + (doy - 1) / 366.0 - YEAR_CENTER) / YEAR_SCALE)
 
         raise NotImplementedError(f"Channel kind {kind!r} is not built yet")
 
@@ -377,6 +451,11 @@ class OceanScopeDataset(torch.utils.data.Dataset):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]:
         if self.cache_dir is not None:
             return self._cached_targets(t)
+        if self.split == "live":
+            # No reference exists for live days (PRD §12): all-masked zero targets.
+            shape = (len(self.sigma_d), self._n_lat, self._n_lon)
+            zeros = np.zeros(shape, dtype=np.float32)
+            return zeros, np.zeros(shape, dtype=bool), zeros.copy(), np.zeros(shape, bool), False
         clim_day = self._clim(ds, doy)
         sigma = self.sigma_d[:, None, None]
 

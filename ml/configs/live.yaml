@@ -1,0 +1,54 @@
+# Live mode settings (PRD_AI_ML §12, PHASES P9), kept out of experiment.yaml on purpose:
+# experiment.yaml feeds compute_config_hash, and train.py refuses to resume a run whose
+# config hash changed. Live settings must be editable without touching training runs.
+live:                     # PRD §12, PHASES P9. Used by `python -m oceanscope_ml.live`.
+  kit_repo: ""            # [CONFIRM] private HF model repo holding the live kit (best.pt, stats, static)
+  max_lag_days: 10        # look for the newest complete day this far back; none found = failed run
+  window_days: 365        # rolling window of live days kept in the prediction store
+  trim_slack_days: 30     # trim only past window + slack, so the rewrite runs about monthly
+  era5_min_lag_days: 5    # newest ERA5T day asked of CDS is today - this
+  sources:                # near-real-time products. [CONFIRM] every dataset_id with `copernicusmarine describe`
+    sla_adt:
+      service: copernicusmarine
+      dataset_id: cmems_obs-sl_glo_phy-ssh_nrt_allsat-l4-duacs-0.125deg_P1D   # SEALEVEL_GLO_PHY_L4_NRT_008_046
+      variables: [sla, adt]
+    sst:
+      service: copernicusmarine
+      dataset_id: METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2                        # SST_GLO_SST_L4_NRT_OBSERVATIONS_010_001
+      variables: [analysed_sst]
+    sss:
+      service: copernicusmarine
+      dataset_id: cmems_obs-mob_glo_phy-sss_nrt_multi_P1D                    # MULTIOBS_GLO_PHY_S_SURFACE_MYNRT_015_013
+      variables: [sos]
+    currents:
+      service: earthdata
+      dataset_id: OSCAR_L4_OC_NRT_V2.0
+    era5:
+      service: cds
+      dataset_id: derived-era5-single-levels-daily-statistics                # ERA5T for recent days
+
+live_check:               # P9-1: the same month with reprocessed inputs (the products the store used)
+  reprocessed:
+    sla_adt:
+      service: copernicusmarine
+      dataset_id: cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D
+      variables: [sla, adt]
+    sst:
+      service: copernicusmarine
+      dataset_id: METOFFICE-GLO-SST-L4-REP-OBS-SST
+      variables: [analysed_sst]
+    sss:
+      service: copernicusmarine
+      dataset_id: cmems_obs-mob_glo_phy-sss_my_multi_P1D
+      dataset_version: "202311"
+      variables: [sos]
+    currents:
+      service: earthdata
+      dataset_id: OSCAR_L4_OC_FINAL_V2.0
+    era5:
+      service: cds
+      dataset_id: derived-era5-single-levels-daily-statistics
+  glorys:
+    service: copernicusmarine
+    dataset_id: cmems_mod_glo_phy_my_0.083deg_P1D-m   # use the myint dataset for months after mid-2021
+    variables: [thetao]
