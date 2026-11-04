@@ -24,6 +24,8 @@ dependencies = [
     "jsonschema>=4.17.0",
     # Multipart form parsing for POST /transcribe (PRD_BACKEND §4.13); FastAPI needs it for File/Form.
     "python-multipart>=0.0.18",
+    # Meta's parser for SAM 3.1's streamed box/mask records (lasso, PRD_BACKEND §4.16). Pure Python.
+    "meta-sam-parser>=0.1.0",
 ]
 
 [project.optional-dependencies]
