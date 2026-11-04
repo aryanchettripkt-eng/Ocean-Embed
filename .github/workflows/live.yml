@@ -1,6 +1,7 @@
 # Live mode (PRD_AI_ML §12, PHASES P9-3): one new day per run from near-real-time inputs.
 #
 # Before enabling (Aryan):
+#   0. Run it by hand with mode "sources" to check every dataset ID (needs no HF token).
 #   1. Accept the P9-1 check (outputs/reports/live_mode_check.md).
 #   2. Build and upload the live kit: python -m oceanscope_ml.live kit ... --upload,
 #      and set live.kit_repo in ml/configs/live.yaml.
@@ -15,6 +16,11 @@ name: Live
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "run = publish a day; sources = only check every dataset ID and its newest day"
+        type: choice
+        options: [run, sources]
+        default: run
       dry_run:
         description: "Do everything but upload"
         type: boolean
@@ -55,8 +61,10 @@ jobs:
       - name: Check secrets are set
         run: |
           missing=""
-          for v in COPERNICUSMARINE_SERVICE_USERNAME COPERNICUSMARINE_SERVICE_PASSWORD \
-                   EARTHDATA_USERNAME EARTHDATA_PASSWORD CDSAPI_KEY HF_TOKEN; do
+          needed="COPERNICUSMARINE_SERVICE_USERNAME COPERNICUSMARINE_SERVICE_PASSWORD
+                  EARTHDATA_USERNAME EARTHDATA_PASSWORD CDSAPI_KEY"
+          [ "${{ inputs.mode }}" = "sources" ] || needed="$needed HF_TOKEN"
+          for v in $needed; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then echo "::error::Missing secrets:$missing"; exit 1; fi
@@ -67,7 +75,12 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --system -e .
 
+      - name: Check live sources
+        if: inputs.mode == 'sources'
+        run: python -m oceanscope_ml.live sources --all --log outputs/live/live_run.json
+
       - name: Live run
+        if: inputs.mode != 'sources'
         run: |
           python -m oceanscope_ml.live run \
             --work-dir "$RUNNER_TEMP/live" \

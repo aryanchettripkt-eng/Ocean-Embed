@@ -320,3 +320,97 @@ def test_kit_for_a_run_published_under_another_name(
     assert (kit.run_id, kit.checkpoint_run_id) == ("main2_ft", "main2_ft_l0.3")
     log = _run(live_config, RecordingRepo(root), kit, tmp_path / "b", "2001-03-15")
     assert log.status == "published" and log.run_id == "main2_ft"
+
+
+# --- `live sources`: the dataset-ID check before P9-1 --------------------------------------
+
+
+def _sources_cfg() -> dict[str, Any]:
+    return {
+        "live": {
+            "sources": {
+                "sst": {
+                    "service": "copernicusmarine",
+                    "dataset_id": "SST_NRT",
+                    "variables": ["analysed_sst"],
+                },
+                "sss": {
+                    "service": "copernicusmarine",
+                    "dataset_id": "SSS_NRT",
+                    "variables": ["sos"],
+                },
+                "currents": {"service": "earthdata", "dataset_id": "OSCAR_NRT"},
+                "era5": {"service": "cds", "dataset_id": "era5-daily"},
+            }
+        },
+        "live_check": {
+            "reprocessed": {"sst": {"service": "copernicusmarine", "dataset_id": "SST_REP"}},
+            "glorys": {
+                "service": "copernicusmarine",
+                "dataset_id": "GLORYS",
+                "variables": ["thetao"],
+            },
+        },
+    }
+
+
+def test_check_sources_reports_each_source() -> None:
+    from oceanscope_ml.live import sources
+
+    today = pd.Timestamp("2026-11-04")
+
+    def cmems(spec, _today, _bbox):
+        if spec["dataset_id"] == "SSS_NRT":
+            raise RuntimeError("dataset not found")
+        return {"newest_day": "2026-11-02", "variables": ["analysed_sst"]}
+
+    probes = {
+        "copernicusmarine": cmems,
+        "earthdata": lambda spec, t, b: {"newest_day": "2026-10-01"},  # too old for live
+        "cds": lambda spec, t, b: {"newest_day": today - pd.Timedelta(days=5), "variables": None},
+    }
+    res = {
+        r.product: r
+        for r in sources.check_sources(
+            _sources_cfg(), today, (80, 95, 5, 22), probes, max_lag_days=10
+        )
+    }
+    assert set(res) == {"sst", "sss", "currents", "era5"}  # reprocessed only with --all
+    assert res["sst"].ok and res["sst"].lag_days == 2
+    assert not res["sss"].ok and "dataset not found" in res["sss"].note
+    assert not res["currents"].ok and "34 days old" in res["currents"].note
+    assert res["era5"].ok and res["era5"].newest_day == "2026-10-30"
+    text = sources.markdown(list(res.values()), today)
+    assert "2 of 4 sources OK" in text
+
+
+def test_check_sources_all_flags_missing_variables(tmp_path: Path) -> None:
+    from oceanscope_ml.live import sources
+
+    today = pd.Timestamp("2026-11-04")
+    probes = {
+        "copernicusmarine": lambda spec, t, b: {"newest_day": "2021-06-30", "variables": ["so"]},
+        "earthdata": lambda spec, t, b: {"newest_day": None, "note": "no collection"},
+        "cds": lambda spec, t, b: {"newest_day": "2026-10-30"},
+    }
+    results = sources.check_sources(
+        _sources_cfg(), today, (80, 95, 5, 22), probes, include_check=True, max_lag_days=10
+    )
+    by = {(r.group, r.product): r for r in results}
+    assert by[("glorys", "glorys")].missing_variables == ["thetao"]
+    assert not by[("glorys", "glorys")].ok
+    # Reprocessed products have no variables listed and are not held to max_lag_days.
+    assert by[("reprocessed", "sst")].ok
+    assert not by[("live", "currents")].ok and by[("live", "currents")].note == "no collection"
+    out = tmp_path / "check.json"
+    sources.write_report(results, today, out)
+    assert len(json.loads(out.read_text())["sources"]) == 6
+
+
+def test_live_config_sources_are_all_known_services() -> None:
+    from oceanscope_ml.live import sources
+
+    cfg = load_live_config(Path(__file__).resolve().parents[1] / "configs" / "live.yaml")
+    for _group, _product, spec in sources.specs_to_check(cfg, include_check=True):
+        assert spec["service"] in sources.REAL_PROBES
+        assert spec["dataset_id"]
