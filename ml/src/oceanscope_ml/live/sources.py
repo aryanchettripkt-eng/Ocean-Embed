@@ -247,8 +247,28 @@ def probe_cds(
     return {"newest_day": None, "note": f"no day in lags {list(lags)}: {errors}"}
 
 
+def probe_arco(
+    spec: dict[str, Any], today: pd.Timestamp, bbox: tuple[float, float, float, float]
+) -> dict[str, Any]:
+    """Read ARCO ERA5's metadata: the last ERA5T day (``valid_time_stop_era5t``)."""
+    import xarray as xr
+
+    from oceanscope_ml.data.build_store import ARCO_ERA5_URL, ARCO_ERA5_VARIABLES
+
+    ds = xr.open_zarr(ARCO_ERA5_URL, chunks=None, consolidated=True, zarr_format=2)
+    stop = ds.attrs.get("valid_time_stop_era5t") or ds.attrs.get("valid_time_stop")
+    missing = [v for v in ARCO_ERA5_VARIABLES if v not in ds.data_vars]
+    return {
+        "newest_day": stop,
+        "variables": None,
+        "note": f"final ERA5 to {ds.attrs.get('valid_time_stop')}"
+        + (f"; missing {missing}" if missing else ""),
+    }
+
+
 REAL_PROBES: dict[str, Probe] = {
     "copernicusmarine": probe_copernicus,
     "earthdata": probe_earthdata,
     "cds": probe_cds,
+    "arco": probe_arco,
 }
