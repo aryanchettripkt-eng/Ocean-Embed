@@ -206,3 +206,120 @@ test("ambient rendering pauses outside the viewport and resumes on return", asyn
   await page.evaluate(() => window.scrollTo(0, 0));
   await expect(canvas).toHaveAttribute("data-running", "true");
 });
+
+test("water, traveling light and fish each change independently", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.locator('[data-scene-ready="true"]')).toBeVisible({
+    timeout: 20000,
+  });
+  const hero = (await page
+    .locator('section[aria-label="Hero Introduction"]')
+    .boundingBox())!;
+  const clips = [
+    { name: "surface", x: 0.73, y: 0.13, width: 0.17, height: 0.12 },
+    { name: "light on the reef", x: 0.34, y: 0.71, width: 0.13, height: 0.15 },
+    { name: "fish routes", x: 0.68, y: 0.63, width: 0.23, height: 0.18 },
+  ].map((region) => ({
+    name: region.name,
+    clip: {
+      x: hero.x + hero.width * region.x,
+      y: hero.y + hero.height * region.y,
+      width: hero.width * region.width,
+      height: hero.height * region.height,
+    },
+  }));
+  const before = [];
+  for (const region of clips)
+    before.push(await page.screenshot({ clip: region.clip }));
+  await page.waitForTimeout(1300);
+  for (let i = 0; i < clips.length; i++) {
+    const after = await page.screenshot({ clip: clips[i].clip });
+    expect(before[i].equals(after), clips[i].name).toBe(false);
+  }
+});
+
+test("the viewpoint stays fixed as the pointer moves", async ({ page }) => {
+  await page.addInitScript(() => {
+    let count = 0;
+    Object.defineProperty(window, "__windowPointerMoves", { get: () => count });
+    const original = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (
+      this: EventTarget,
+      ...args: Parameters<typeof original>
+    ) {
+      if (this === window && args[0] === "pointermove") count++;
+      return original.apply(this, args);
+    };
+  });
+  await page.goto("/");
+  const canvas = page.locator("canvas[data-ocean-canvas]");
+  await expect(canvas).toHaveAttribute("data-running", "true", {
+    timeout: 20000,
+  });
+  expect(
+    await page.evaluate(() =>
+      Number(Reflect.get(window, "__windowPointerMoves")),
+    ),
+  ).toBe(0);
+  await page.getByRole("button", { name: "Pause ambient motion" }).click();
+  // Finish the permitted button hover/entrance motion before comparing the background.
+  await page.mouse.move(25, 220);
+  await expect
+    .poll(() =>
+      page
+        .locator("[data-entrance]")
+        .evaluateAll((elements) =>
+          elements.every(
+            (element) =>
+              getComputedStyle(element).transform === "none" &&
+              getComputedStyle(element).opacity === "1",
+          ),
+        ),
+    )
+    .toBe(true);
+  await page.waitForTimeout(400);
+  const fixed = await canvas.screenshot();
+  const stage = page.locator("[data-landing-scene]");
+  const transform = await stage.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
+  await page.mouse.move(25, 220);
+  await page.mouse.move(1200, 680, { steps: 12 });
+  await page.waitForTimeout(900);
+  expect(fixed.equals(await canvas.screenshot())).toBe(true);
+  expect(
+    await stage.evaluate((element) => getComputedStyle(element).transform),
+  ).toBe(transform);
+});
+
+test("CTA glass glints on hover and keyboard focus", async ({ page }) => {
+  await page.goto("/");
+  const cta = page.getByRole("link", {
+    name: "Explore the Ocean",
+    exact: true,
+  });
+  await expect(page.locator('[data-scene-ready="true"]')).toBeVisible({
+    timeout: 20000,
+  });
+  await page.waitForTimeout(1300);
+  await cta.hover();
+  await expect
+    .poll(() =>
+      cta.evaluate((element) =>
+        parseFloat(getComputedStyle(element).getPropertyValue("--glint-x")),
+      ),
+    )
+    .toBeGreaterThan(0);
+  await page.mouse.move(25, 220);
+  await cta.focus();
+  await expect
+    .poll(() => cta.evaluate((element) => getComputedStyle(element).transform))
+    .not.toBe("none");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect
+    .poll(() => cta.evaluate((element) => getComputedStyle(element).transform))
+    .toBe("none");
+});

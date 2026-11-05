@@ -207,3 +207,12 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - No invented imagery: the "zoomed out" and "zoomed in" frames are the live basemap and model grid. The overlay never holds the screen for more than 15 s; after 4 s it explains that the backend may be waking up.
 - Runs in any browser (no View Transitions API needed); reduced motion keeps the plain navigation. GSAP is loaded when the transition starts, so the landing's initial-JS budget (DECISIONS above) is unchanged: `/` first load 143 kB before and after.
 - Asked for by Aryan in this chat, 2026-11-05.
+
+## 2026-11-05 — Immersive landing motion with a fixed viewpoint (PRD_FRONTEND §4)
+- Aryan approved the stronger motion direction: rolling water, traveling sunbeams/reef caustics, fish at multiple apparent depths with individual tail cycles and curved routes, occasional closer passes, suspended particles, and GSAP glass glints/hover/focus feedback.
+- **No pointer-bound parallax or floating viewpoint.** The camera remains fixed. The old scene-wide `pointermove` handler and pointer uniform are removed. Pointer interactions affect only the actual controls; ordinary autonomous water/fish/light motion continues without cursor input.
+- The ceiling is now a subdivided, tilted Three.js plane with animated vertex displacement and wave normals. Its projected image coordinates blend into the existing labelled art. Mirrored edge sampling prevents the photograph's edge pixels from stretching into stripes when a wave crosses the frame.
+- Fish use continuous curved routes with headings aligned to travel, independent tail speeds, and invisible offscreen loop endpoints; they no longer swim backwards on a yoyo tween. Mobile uses fewer segments, fish, and particles and retains its frame-rate cap. Pause, reduced motion, fallback, offscreen suspension, cancellation and GPU cleanup still apply.
+- Hero posters load eagerly, then their decoding and an idle slot gate graphics initialization, so the richer scene does not compete with the first screen for bandwidth/CPU.
+- The separately approved landing → Explorer arrival sequence remains connected; this change does not replace it. No new assets, dependencies, APIs, scientific content, or data contracts.
+- Approved by Aryan ("I like all the ideas except ... the parallax effect bound by the pointer ... implement everything else"), 2026-11-05.

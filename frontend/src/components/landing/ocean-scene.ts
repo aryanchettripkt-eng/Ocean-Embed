@@ -3,69 +3,36 @@ import {
   Scene,
   OrthographicCamera,
   PlaneGeometry,
+  BufferGeometry,
+  Float32BufferAttribute,
   ShaderMaterial,
   Mesh,
+  Points,
   TextureLoader,
   SRGBColorSpace,
-  Vector2,
+  DoubleSide,
+  AdditiveBlending,
   type Texture,
 } from "three";
 import { gsap } from "gsap";
 import { fishLayout } from "./fish-layout";
+import { sampleSwimRoute, type SwimRoute } from "./ocean-swimming";
+import {
+  plateVertex,
+  waterFragment,
+  surfaceVertex,
+  surfaceFragment,
+  fishVertex,
+  fishFragment,
+  particleVertex,
+  particleFragment,
+} from "./ocean-shaders";
 
 export interface OceanScene {
   setPaused(value: boolean): void;
   setTheme(theme: "light" | "dark"): void;
   dispose(): void;
 }
-const vertex = `varying vec2 vUv;
-void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`;
-const waterFragment = `
-uniform sampler2D uLight; uniform sampler2D uDark;
-uniform float uTime; uniform float uTheme; uniform vec2 uPointer;
-varying vec2 vUv;
-void main() {
-  vec2 uv = vUv;
-  float surface = smoothstep(.69, 1., uv.y);
-  // Refraction is confined to the surface: the reef and tether stay anchored.
-  uv.x += surface * (sin(uv.y*69. + uTime*.71) + sin(uv.x*51.-uTime*.48))*.0028;
-  uv.y += surface * sin(uv.x*78. + uTime*.83)*.0022;
-  uv += uPointer * surface * .001;
-  vec3 base = mix(texture2D(uLight, uv).rgb, texture2D(uDark, uv).rgb, uTheme);
-  float ripples = sin(uv.x*128. + sin(uv.y*71.-uTime*.45)*2. + uTime*.6);
-  float highlight = smoothstep(.16,.6,max(base.r,max(base.g,base.b)));
-  float shimmer = pow(max(0., ripples), 12.) * surface * highlight;
-  float shaft = 0.;
-  for (int i=0; i<5; i++) {
-    float n = float(i);
-    float origin = .49 + n*.073 + sin(uTime*.13+n*2.)*.012;
-    float ray = uv.x - origin + (1.-uv.y)*(.22+n*.025);
-    shaft += exp(-ray*ray/(.00025+(1.-uv.y)*.0013)) * (.55+.45*sin(uTime*.21+n));
-  }
-  shaft *= smoothstep(.08, .85, uv.y)*(1.-smoothstep(.87,1.,uv.y));
-  float floorMask = (1.-smoothstep(.08,.4,uv.y))*smoothstep(.08,.38,uv.x);
-  float caustic = pow(max(0.,sin(uv.x*85.+sin(uv.y*43.+uTime*.3)*2.-uTime*.37)
-    *sin(uv.y*71.-sin(uv.x*48.-uTime*.26)*2.+uTime*.41)), 5.);
-  vec3 light = mix(vec3(1.,.79,.43), vec3(.23,.83,.88), uTheme);
-  base += light * (shimmer*.018 + shaft*.006 + caustic*floorMask*.003);
-  gl_FragColor = vec4(base, 1.);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`;
-const fishVertex = `uniform float uTime; uniform float uPhase; varying vec2 vUv;
-void main() {
- vUv=uv; vec3 p=position;
- // Head is left; flex progressively toward the forked tail on the right.
- p.y += sin(uTime*3.2+uPhase+uv.x*5.)*pow(uv.x,3.)*.075;
- p.x *= 1.-pow(uv.x,2.)*(.025+.025*sin(uTime*3.2+uPhase));
- gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.);
-}`;
-const fishFragment = `uniform sampler2D uFish; uniform float uOpacity; uniform float uTheme; varying vec2 vUv;
-void main() { vec4 c=texture2D(uFish,vUv); if(c.a<.02) discard;
- c.rgb *= mix(.68,.38,uTheme); gl_FragColor=vec4(c.rgb,c.a*uOpacity);
- #include <tonemapping_fragment>
- #include <colorspace_fragment>
-}`;
 
 export async function createOceanScene(
   host: HTMLElement,
@@ -88,8 +55,16 @@ export async function createOceanScene(
   const loader = new TextureLoader();
   const textures: Texture[] = [];
   const materials: ShaderMaterial[] = [];
-  const geometries: PlaneGeometry[] = [];
-  const paths: gsap.core.Tween[] = [];
+  const geometries: BufferGeometry[] = [];
+  const swimmers: {
+    mesh: Mesh;
+    material: ShaderMaterial;
+    route: SwimRoute;
+    progress: { value: number };
+    path: gsap.core.Tween;
+    offset: number;
+    opacity: number;
+  }[] = [];
   let disposed = false;
   let paused = false;
   let visible = true;
@@ -101,17 +76,28 @@ export async function createOceanScene(
   canvas.dataset.oceanCanvas = "true";
   canvas.setAttribute("aria-hidden", "true");
   const scene = new Scene();
+  // Fixed viewpoint: neither the camera nor the scene responds to pointer movement.
   const camera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-  camera.position.z = 2;
+  camera.position.z = 3;
   const uniforms = {
     uLight: { value: null as Texture | null },
     uDark: { value: null as Texture | null },
     uTime: { value: 0 },
     uTheme: { value: theme === "dark" ? 1 : 0 },
-    uPointer: { value: new Vector2() },
+    uPixelRatio: { value: 1 },
   };
   const draw = () => {
     if (!disposed) renderer.render(scene, camera);
+  };
+  const updateSwimmers = () => {
+    for (const swimmer of swimmers) {
+      swimmer.path.totalTime(time + swimmer.offset);
+      const pose = sampleSwimRoute(swimmer.progress.value, time, swimmer.route);
+      swimmer.mesh.position.x = pose.x;
+      swimmer.mesh.position.y = pose.y;
+      swimmer.mesh.rotation.z = pose.rotation;
+      swimmer.material.uniforms.uOpacity.value = pose.opacity * swimmer.opacity;
+    }
   };
   const update = (_elapsed: number, delta: number) => {
     accumulatedDelta += delta;
@@ -119,37 +105,24 @@ export async function createOceanScene(
     time += Math.min(accumulatedDelta, 100) / 1000;
     accumulatedDelta = 0;
     uniforms.uTime.value = time;
-    for (const material of materials)
-      if (material.uniforms.uTime) material.uniforms.uTime.value = time;
-    for (const path of paths) path.totalTime(time);
+    updateSwimmers();
     draw();
   };
   const syncRunning = () => {
     const next = !paused && visible && !document.hidden && !disposed;
     if (next === running) return;
     running = next;
+    accumulatedDelta = 0;
     if (running) gsap.ticker.add(update);
     else gsap.ticker.remove(update);
     canvas.dataset.running = String(running);
   };
   const resize = () => {
-    renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio || 1, mobile ? 1 : 1.5),
-    );
+    const ratio = Math.min(window.devicePixelRatio || 1, mobile ? 1 : 1.5);
+    uniforms.uPixelRatio.value = ratio;
+    renderer.setPixelRatio(ratio);
     renderer.setSize(host.clientWidth, host.clientHeight, false);
     draw();
-  };
-  const pointer = { x: 0, y: 0 };
-  const move = (event: PointerEvent) => {
-    if (paused || event.pointerType !== "mouse") return;
-    const rect = host.getBoundingClientRect();
-    gsap.to(pointer, {
-      x: (event.clientX - rect.left) / rect.width - 0.5,
-      y: (event.clientY - rect.top) / rect.height - 0.5,
-      duration: 1.5,
-      overwrite: true,
-      onUpdate: () => uniforms.uPointer.value.set(pointer.x, pointer.y),
-    });
   };
   const lost = (event: Event) => {
     event.preventDefault();
@@ -166,12 +139,10 @@ export async function createOceanScene(
     disposed = true;
     gsap.ticker.remove(update);
     themeTween?.kill();
-    gsap.killTweensOf(pointer);
-    paths.forEach((path) => path.kill());
+    swimmers.forEach((swimmer) => swimmer.path.kill());
     observer.disconnect();
     intersection.disconnect();
     document.removeEventListener("visibilitychange", syncRunning);
-    window.removeEventListener("pointermove", move);
     canvas.removeEventListener("webglcontextlost", lost);
     signal?.removeEventListener("abort", dispose);
     geometries.forEach((geometry) => geometry.dispose());
@@ -183,7 +154,6 @@ export async function createOceanScene(
   canvas.addEventListener("webglcontextlost", lost);
   signal?.addEventListener("abort", dispose, { once: true });
   try {
-    // All settled: even a successful sibling load is disposed if another texture fails.
     const suffix = mobile ? 1024 : 1600;
     const loaded = await Promise.allSettled(
       [
@@ -212,50 +182,159 @@ export async function createOceanScene(
     uniforms.uLight.value = lightMap;
     uniforms.uDark.value = darkMap;
     const water = new ShaderMaterial({
-      vertexShader: vertex,
+      vertexShader: plateVertex,
       fragmentShader: waterFragment,
       uniforms,
       depthWrite: false,
     });
     materials.push(water);
-    const plane = new PlaneGeometry(2, 2);
-    geometries.push(plane);
-    scene.add(new Mesh(plane, water));
-    const fishGeometry = new PlaneGeometry(1, 1, 12, 2);
+    const plate = new PlaneGeometry(2, 2);
+    geometries.push(plate);
+    scene.add(new Mesh(plate, water));
+
+    // A real subdivided ceiling recedes overhead. Vertex waves change its shape and normals.
+    const ceilingGeometry = new PlaneGeometry(
+      2.12,
+      3,
+      mobile ? 48 : 96,
+      mobile ? 24 : 48,
+    );
+    geometries.push(ceilingGeometry);
+    const ceilingMaterial = new ShaderMaterial({
+      vertexShader: surfaceVertex,
+      fragmentShader: surfaceFragment,
+      uniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      side: DoubleSide,
+    });
+    materials.push(ceilingMaterial);
+    const ceiling = new Mesh(ceilingGeometry, ceilingMaterial);
+    ceiling.rotation.x = 1.15;
+    ceiling.position.set(0, 0.96, 0.2);
+    ceiling.renderOrder = 1;
+    ceiling.frustumCulled = false;
+    scene.add(ceiling);
+
+    const fishGeometry = new PlaneGeometry(1, 1, 16, 3);
     geometries.push(fishGeometry);
-    fishLayout.slice(0, mobile ? 10 : 18).forEach((fish, i) => {
+    const core = fishLayout.slice(0, mobile ? 10 : 18).map((fish, i) => ({
+      ...fish,
+      depth: 0.5 + (i % 4) * 0.09,
+      duration: 40 + i * 1.9,
+      delay: 0,
+    }));
+    const distant = Array.from({ length: mobile ? 4 : 8 }, (_, i) => ({
+      x: 0.21 + ((i * 0.618) % 1) * 0.65,
+      y: 0.64 + Math.sin(i * 2.2) * 0.08,
+      width: 0.018 + (i % 3) * 0.004,
+      opacity: 0.22 + (i % 3) * 0.05,
+      depth: 0.2,
+      duration: 75 + i * 4,
+      delay: 0,
+    }));
+    const near = Array.from({ length: mobile ? 1 : 2 }, (_, i) => ({
+      x: 0.86 - i * 0.9,
+      y: 0.72 + i * 0.1,
+      width: 0.105 + i * 0.02,
+      opacity: 0.76,
+      depth: 1,
+      duration: 25 + i * 6,
+      delay: 22 + i * 10,
+    }));
+    [...distant, ...core, ...near].forEach((fish, i) => {
+      const route: SwimRoute = {
+        direction: fish.depth < 0.3 && i % 3 === 0 ? 1 : -1,
+        y: 1 - fish.y * 2,
+        bend: Math.sin(i * 2.3) * 0.11,
+        phase: i * 2.1,
+      };
       const material = new ShaderMaterial({
         vertexShader: fishVertex,
         fragmentShader: fishFragment,
         transparent: true,
+        depthTest: false,
         depthWrite: false,
         uniforms: {
-          uTime: { value: 0 },
-          uPhase: { value: i * 2.1 },
-          uFish: { value: fishTexture },
-          uOpacity: { value: fish.opacity },
+          uTime: uniforms.uTime,
           uTheme: uniforms.uTheme,
+          uFish: { value: fishTexture },
+          uPhase: { value: route.phase },
+          uSpeed: { value: 3.6 + (i % 5) * 0.46 },
+          uOpacity: { value: 0 },
+          uDepth: { value: fish.depth },
         },
       });
       materials.push(material);
       const mesh = new Mesh(fishGeometry, material);
-      mesh.scale.set(fish.width * 2, (fish.width * 2 * (1672 / 941)) / 3, 1);
-      mesh.position.set(fish.x * 2 - 1, 1 - fish.y * 2, 0.1 + i * 0.001);
-      mesh.rotation.z = -0.08;
-      scene.add(mesh);
-      paths.push(
-        gsap.to(mesh.position, {
-          x: mesh.position.x - 0.48,
-          y: mesh.position.y + 0.06,
-          duration: 32 + i * 2.3,
-          repeat: -1,
-          yoyo: true,
-          ease: "sine.inOut",
-          paused: true,
-        }),
+      mesh.scale.set(
+        -route.direction * fish.width * 2,
+        (fish.width * 2 * (1672 / 941)) / 3,
+        1,
       );
+      mesh.position.z = 0.1 + fish.depth * 0.1;
+      mesh.renderOrder = 2 + Math.round(fish.depth * 2);
+      scene.add(mesh);
+      const progress = { value: 0 };
+      const path = gsap.to(progress, {
+        value: 1,
+        duration: fish.duration,
+        repeat: -1,
+        repeatDelay: fish.delay,
+        ease: "none",
+        paused: true,
+      });
+      const offset =
+        ((1.325 + route.direction * (fish.x * 2 - 1)) / 2.65) * fish.duration;
+      swimmers.push({
+        mesh,
+        material,
+        route,
+        progress,
+        path,
+        offset,
+        opacity: fish.opacity,
+      });
     });
-    // Parallel GPU compilation avoids a synchronous shader stall on the first frame.
+    updateSwimmers();
+
+    const count = mobile ? 28 : 56;
+    const positions: number[] = [],
+      seeds: number[] = [];
+    for (let i = 0; i < count; i++) {
+      positions.push(
+        ((i * 0.6180339) % 1) * 2 - 1,
+        ((i * 0.4142135) % 1) * 2 - 1,
+        0.3,
+      );
+      seeds.push((i * 0.73205) % 1);
+    }
+    const particlesGeometry = new BufferGeometry();
+    geometries.push(particlesGeometry);
+    particlesGeometry.setAttribute(
+      "position",
+      new Float32BufferAttribute(positions, 3),
+    );
+    particlesGeometry.setAttribute(
+      "aSeed",
+      new Float32BufferAttribute(seeds, 1),
+    );
+    const particleMaterial = new ShaderMaterial({
+      vertexShader: particleVertex,
+      fragmentShader: particleFragment,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: AdditiveBlending,
+    });
+    materials.push(particleMaterial);
+    const particles = new Points(particlesGeometry, particleMaterial);
+    particles.renderOrder = 5;
+    particles.frustumCulled = false;
+    scene.add(particles);
+
     await renderer.compileAsync(scene, camera);
     if (disposed) return null;
     host.appendChild(canvas);
@@ -263,17 +342,14 @@ export async function createOceanScene(
     observer.observe(host);
     intersection.observe(host);
     document.addEventListener("visibilitychange", syncRunning);
-    window.addEventListener("pointermove", move, { passive: true });
     syncRunning();
     return {
       setPaused(value) {
         paused = value;
-        if (value) gsap.killTweensOf(pointer);
         syncRunning();
       },
       setTheme(value) {
         themeTween?.kill();
-        // User pause freezes the scene, but an intentional theme change still renders.
         themeTween = gsap.to(uniforms.uTheme, {
           value: value === "dark" ? 1 : 0,
           duration: paused ? 0 : 0.65,

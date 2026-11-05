@@ -25,6 +25,7 @@ export function HeroScene({
     let generation = 0;
     let pending: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let idle: number | undefined;
     const reset = () => {
       generation++;
       pending?.abort();
@@ -32,37 +33,56 @@ export function HeroScene({
       controller.current = null;
       setReady(false);
       clearTimeout(timer);
+      if (idle !== undefined) window.cancelIdleCallback?.(idle);
       if (reduced.matches) return;
       const current = generation;
       const aborter = new AbortController();
       pending = aborter;
-      // The poster paints first. Canvas code stays outside the initial landing bundle.
+      // Decode the eagerly loaded poster before asking the network/CPU for Three.js.
       timer = setTimeout(() => {
-        import("./ocean-scene")
-          .then(async ({ createOceanScene }) => {
-            if (disposed || current !== generation) return;
-            const scene = await createOceanScene(
-              element,
-              latest.current.theme,
-              () => {
-                if (!disposed && current === generation) setReady(false);
-              },
-              aborter.signal,
-            );
-            if (disposed || current !== generation) {
-              scene?.dispose();
-              return;
-            }
-            controller.current = scene;
-            if (scene) {
-              scene.setPaused(latest.current.paused);
-              scene.setTheme(latest.current.theme);
-              setReady(true);
-            }
-          })
-          .catch(() => {
-            if (!disposed) setReady(false);
-          });
+        const enhance = () => {
+          if (disposed || current !== generation) return;
+          void import("./ocean-scene")
+            .then(async ({ createOceanScene }) => {
+              if (disposed || current !== generation) return;
+              const scene = await createOceanScene(
+                element,
+                latest.current.theme,
+                () => {
+                  if (!disposed && current === generation) setReady(false);
+                },
+                aborter.signal,
+              );
+              if (disposed || current !== generation) {
+                scene?.dispose();
+                return;
+              }
+              controller.current = scene;
+              if (scene) {
+                scene.setPaused(latest.current.paused);
+                scene.setTheme(latest.current.theme);
+                setReady(true);
+              }
+            })
+            .catch(() => {
+              if (!disposed) setReady(false);
+            });
+        };
+        const posters = Array.from(
+          element.querySelectorAll<HTMLImageElement>("picture img"),
+        );
+        void Promise.all(
+          posters.map((image) =>
+            typeof image.decode === "function"
+              ? image.decode().catch(() => {})
+              : Promise.resolve(),
+          ),
+        ).then(() => {
+          if (disposed || current !== generation) return;
+          if ("requestIdleCallback" in window) {
+            idle = window.requestIdleCallback(enhance, { timeout: 1200 });
+          } else enhance();
+        });
       }, 180);
     };
     reset();
@@ -72,6 +92,7 @@ export function HeroScene({
       generation++;
       pending?.abort();
       clearTimeout(timer);
+      if (idle !== undefined) window.cancelIdleCallback?.(idle);
       reduced.removeEventListener("change", reset);
       controller.current?.dispose();
       controller.current = null;
@@ -98,6 +119,7 @@ export function HeroScene({
           />
           <Image
             unoptimized
+            loading="eager"
             className={`${styles.sceneImage} ${styles.lightPoster}`}
             src="/landing/ocean/light-1600.webp"
             alt=""
@@ -117,6 +139,7 @@ export function HeroScene({
           />
           <Image
             unoptimized
+            loading="eager"
             className={`${styles.sceneImage} ${styles.darkPoster}`}
             src="/landing/ocean/dark-1600.webp"
             alt=""

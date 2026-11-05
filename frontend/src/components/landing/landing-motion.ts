@@ -6,11 +6,11 @@ export function attachLandingMotion(root: HTMLElement) {
   media.add("(prefers-reduced-motion: no-preference)", () => {
     const context = gsap.context(() => {
       gsap.from("[data-entrance]", {
-        y: 16,
-        opacity: 0.65,
-        duration: 1.1,
-        stagger: 0.13,
-        ease: "power2.out",
+        y: 22,
+        opacity: 0.35,
+        duration: 1.15,
+        stagger: 0.16,
+        ease: "power3.out",
         clearProps: "all",
       });
     }, root);
@@ -20,12 +20,38 @@ export function attachLandingMotion(root: HTMLElement) {
         gsap.to(element, {
           scale,
           y,
-          duration: 0.25,
-          overwrite: true,
+          duration: 0.3,
+          overwrite: "auto",
           ease: "power2.out",
         });
-      const enter = () => animate(cta ? 1.035 : 1.03, -1);
-      const leave = () => animate(1, 0);
+      const enter = () => {
+        animate(cta ? 1.04 : 1.025, cta ? -3 : -1);
+        gsap.to(element, {
+          "--hover-light": 0.12,
+          duration: 0.3,
+          overwrite: "auto",
+        });
+        if (cta) {
+          gsap.fromTo(
+            element,
+            { "--glint-x": "-65%" },
+            {
+              "--glint-x": "65%",
+              duration: 0.85,
+              ease: "power2.out",
+              overwrite: "auto",
+            },
+          );
+        }
+      };
+      const leave = () => {
+        animate(1, 0);
+        gsap.to(element, {
+          "--hover-light": 0,
+          duration: 0.35,
+          overwrite: "auto",
+        });
+      };
       const down = () => animate(0.97, 0);
       const events: [string, EventListener][] = [
         ["pointerenter", enter],
@@ -43,7 +69,7 @@ export function attachLandingMotion(root: HTMLElement) {
           element.removeEventListener(name, handler),
         );
         gsap.killTweensOf(element);
-        gsap.set(element, { clearProps: "transform" });
+        gsap.set(element, { clearProps: "transform,--hover-light,--glint-x" });
       });
     });
     const observer = new IntersectionObserver(

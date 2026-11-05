@@ -160,9 +160,10 @@
   line-height: 30px;
   padding: 3px 10px;
   border-radius: 99px;
+  background: rgba(255, 255, 255, var(--hover-light, 0));
 }
 .navLink:hover {
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, var(--hover-light, 0.09));
 }
 .sceneControls {
   display: flex;
@@ -226,6 +227,9 @@
   margin-top: 34px;
 }
 .ctaButton {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -241,6 +245,19 @@
   text-decoration: none;
   box-shadow: 0 8px 28px rgba(0, 21, 25, 0.14);
   will-change: transform;
+}
+.ctaButton::after {
+  content: "";
+  position: absolute;
+  inset: -90% -50%;
+  pointer-events: none;
+  background: linear-gradient(
+    110deg,
+    transparent 41%,
+    rgba(190, 245, 235, 0.35) 50%,
+    transparent 59%
+  );
+  transform: translateX(var(--glint-x, -65%));
 }
 :global(.dark) .ctaButton {
   color: #f4f8f6;
