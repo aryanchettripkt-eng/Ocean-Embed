@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -38,8 +39,16 @@ from meta_sam_parser import (
 
 from app.settings import settings
 
+logger = logging.getLogger(__name__)
+
 # Status codes after which the chat fallback model is tried (§6.1).
 _FALLBACK_STATUSES = {429, 500, 502, 503, 504}
+
+# One retry of a chat call that times out or loses its connection (cold starts upstream).
+# The first attempt gets this share of the time left, so the retry fits in the same budget.
+CHAT_FIRST_ATTEMPT_SHARE = 0.6
+CHAT_RETRY_MIN_BUDGET_S = 10.0
+CHAT_RETRY_MIN_REMAINING_S = 3.0
 
 
 @dataclass
@@ -339,6 +348,41 @@ class HttpMetaModelClient:
         except _RetryableStatus as exc:
             raise MetaUpstreamError(f"Meta API fallback returned HTTP {exc.status}") from None
 
+    def _post_chat_with_retry(
+        self, payload: dict[str, Any], headers: dict[str, str], timeout_s: float
+    ) -> httpx.Response:
+        """POST a chat request, retrying once on a timeout or a dropped connection.
+
+        After a quiet spell the first Meta call can stall (cold start upstream), and the next
+        one succeeds. With enough budget left, the first attempt gets a share of it so a
+        retry still fits inside `timeout_s`; the total never exceeds `timeout_s`.
+        """
+        deadline = time.monotonic() + timeout_s
+        can_retry = timeout_s >= CHAT_RETRY_MIN_BUDGET_S
+        first = timeout_s * CHAT_FIRST_ATTEMPT_SHARE if can_retry else timeout_s
+        try:
+            with httpx.Client(timeout=first, transport=self._transport) as client:
+                return client.post(self._url, json=payload, headers=headers)
+        except httpx.TimeoutException:
+            if not can_retry:
+                raise MetaUpstreamError("Meta API request timed out") from None
+        except httpx.TransportError as exc:
+            if not can_retry:
+                raise MetaUpstreamError(f"Meta API request failed ({type(exc).__name__})") from None
+        except httpx.HTTPError as exc:
+            raise MetaUpstreamError(f"Meta API request failed ({type(exc).__name__})") from None
+        remaining = deadline - time.monotonic()
+        if remaining < CHAT_RETRY_MIN_REMAINING_S:
+            raise MetaUpstreamError("Meta API request timed out")
+        logger.info("meta chat retry after a timeout or dropped connection")
+        try:
+            with httpx.Client(timeout=remaining, transport=self._transport) as client:
+                return client.post(self._url, json=payload, headers=headers)
+        except httpx.TimeoutException:
+            raise MetaUpstreamError("Meta API request timed out") from None
+        except httpx.HTTPError as exc:
+            raise MetaUpstreamError(f"Meta API request failed ({type(exc).__name__})") from None
+
     def _chat_once(
         self,
         model: str,
@@ -359,13 +403,7 @@ class HttpMetaModelClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        try:
-            with httpx.Client(timeout=timeout_s, transport=self._transport) as client:
-                resp = client.post(self._url, json=payload, headers=headers)
-        except httpx.TimeoutException:
-            raise MetaUpstreamError("Meta API request timed out") from None
-        except httpx.HTTPError as exc:
-            raise MetaUpstreamError(f"Meta API request failed ({type(exc).__name__})") from None
+        resp = self._post_chat_with_retry(payload, headers, timeout_s)
 
         if resp.status_code in _FALLBACK_STATUSES:
             raise _RetryableStatus(resp.status_code)
@@ -634,6 +672,32 @@ def png_size(png: bytes) -> tuple[int, int]:
     if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("not a PNG")
     return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+# Startup warm-up: one tiny chat call so the first visitor's question doesn't hit a cold
+# upstream. A few output tokens; it goes through the budget like every other call.
+WARMUP_MAX_TOKENS = 16
+WARMUP_TIMEOUT_S = 30.0
+
+
+def warm_up_chat() -> None:
+    """Send one small chat request to the real API. Never raises; logs the outcome."""
+    from app.meta.config import chat_available
+
+    if settings.META_CLIENT == "mock" or not chat_available():
+        return
+    started = time.monotonic()
+    try:
+        build_client().chat(
+            [{"role": "user", "content": "Reply with OK."}],
+            None,
+            max_tokens=WARMUP_MAX_TOKENS,
+            timeout_s=WARMUP_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 - warm-up must never break startup
+        logger.warning("meta chat warm-up failed (%s)", type(exc).__name__)
+        return
+    logger.info("meta chat warm-up done in %d ms", (time.monotonic() - started) * 1000)
 
 
 def build_client() -> MetaModelClient:
