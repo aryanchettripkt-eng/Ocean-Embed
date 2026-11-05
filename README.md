@@ -1,13 +1,32 @@
 # OceanScope AI
 
-**See the ocean below the surface.** OceanScope AI reconstructs daily sea temperature at 15 depths, from the surface down to about 1,060 m, across the North Indian Ocean. It uses only what satellites and a few other sources can see from the surface, plus recent ARGO float profiles. You can explore the result as a 2D map or a 3D cutaway block.
+**See the ocean below the surface.** OceanScope AI reconstructs daily sea temperature at 15 depths, from the surface down to about 1,060 m, across the North Indian Ocean. It uses only what satellites and a few other sources can see from the surface, plus recent ARGO float profiles. You can explore the result as a 2D map or a 3D cutaway block, ask questions about it in plain language (typed or spoken), and even ask it out loud through a pair of Meta smart glasses.
 
 - **Live site:** https://ocean-embed.vercel.app
 - **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
 - **Model run shown:** `ens3` (the average of three U-Net runs, see [Results](#results))
+- **Uptime:** an UptimeRobot monitor pings the backend every 5 minutes, backed up by a GitHub Actions ping (see [Keeping the backend awake](#keeping-the-backend-awake))
 
 > **Honest caveat, up front.** The model is trained to reproduce the GLORYS12 reanalysis. GLORYS assimilates satellite altimetry and ARGO profiles, so agreement with GLORYS is not the same as agreement with the real ocean. ARGO profiles are also assimilated into GLORYS, so our ARGO comparison is not fully independent either. See [Limitations](#limitations).
+
+## Contents
+
+- [Why this matters](#why-this-matters)
+- [What it does](#what-it-does)
+- [Results](#results)
+- [Architecture](#architecture)
+- [Frontend (Next.js on Vercel)](#frontend-nextjs-on-vercel)
+- [Backend (FastAPI on Render)](#backend-fastapi-on-render)
+- [Meta AI features: "Talk to the ocean"](#meta-ai-features-talk-to-the-ocean)
+- [Android: Ocean Glasses](#android-ocean-glasses)
+- [Live mode: a new day every day](#live-mode-a-new-day-every-day)
+- [Keeping the backend awake](#keeping-the-backend-awake)
+- [ML pipeline](#ml-pipeline)
+- [Reproduce it](#reproduce-it)
+- [Repository layout](#repository-layout)
+- [Limitations](#limitations)
+- [Data credits](#data-credits)
 
 ---
 
@@ -22,17 +41,20 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 | **Region** | 40–100°E, 0–30°N (Arabian Sea, Bay of Bengal, northern equatorial Indian Ocean) |
 | **Grid** | 0.25°, daily |
 | **Depths** | 15 native GLORYS12 levels: 0.5, 5, 10, 18, 29, 47, 66, 92, 131, 186, 222, 266, 380, 644 and 1,062 m (7 of them in 50–300 m) |
-| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021 (scored once, on `main2_ft`) |
+| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021 (scored once, on `main2_ft`) · Live days from near-real-time inputs, about 3 days behind today |
 | **Model** | Small 2D U-Net (≤ 10 M parameters) that predicts temperature anomalies from a training-period climatology |
 | **Headline test** | Bay of Bengal, 50–300 m: is the model's error against held-out ARGO floats lower than GLORYS12, the GREP ensemble mean and ARMOR3D? Fixed before training (see [Results](#results)) |
 
-### On the site
+### At a glance
 
-- **Landing page:** a woodblock-print scene; "Dive" takes you into the Explorer.
-- **Explorer, 2D map:** temperature at any date and depth, the GLORYS reference, or the error between them. Click a point for its depth profile and time series.
-- **Explorer, 3D cutaway:** the region as a block hanging under the map, with the selected depth as the top face, the water column on the walls, 2 °C contours and the 20 °C isotherm. Includes a depth rail, an exploded-layers mode and a guided tour. Desktop and tablet only; phones get the 2D map.
-- **Validation page:** metrics per depth, season and region, ARGO comparisons and the headline card (it says "Not met" if the result isn't met).
-- **"Talk to the ocean":** an AI guide built on Meta's models (Muse Spark, Muse Voice Transcribe, Muse Image, SAM 3.1) that answers questions from the data and moves the map for you, plus an event time machine, postcards and a lasso tool. The guide is live; AI text and images are labelled as AI and never the source of a number.
+| Part | What it is | Where it runs |
+|---|---|---|
+| **ML** (`ml/`) | Data build, U-Net training, evaluation, prediction, publishing, daily live runs | Kaggle / Colab GPUs, GitHub Actions (live) |
+| **Backend** (`backend/`) | FastAPI service: data API plus every Meta model call | Render (Docker, free tier) |
+| **Frontend** (`frontend/`) | Next.js site: landing, Explorer 2D/3D, Validation, About, beach mode | Vercel |
+| **Android** (`android/glasses-guide/`) | "Ocean Glasses" app for Ray-Ban/Oakley Meta glasses | Sideloaded on an Android phone |
+| **Meta models** | Muse Spark, Muse Voice Transcribe, Muse Image, SAM 3.1 | Meta Model API, called only from the backend |
+| **Monitoring** | UptimeRobot (every 5 min) and a GitHub Actions ping (every 10 min) | External |
 
 ---
 
@@ -62,7 +84,7 @@ The per-depth, per-season and per-region tables are in the published dataset und
 
 ---
 
-## How it works
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -75,24 +97,30 @@ flowchart LR
     ARGO["Argo GDAC via ERDDAP<br/>float profiles"]
   end
 
-  subgraph ML["ml/ (Kaggle / Colab, GPU)"]
-    BUILD["build_store<br/>stream → regrid to 0.25° → zarr<br/>(no raw archive)"]
-    STATS["parts stats<br/>train-only climatology + norms"]
-    TRAIN["train<br/>U-Net on anomalies,<br/>early stop on validation"]
+  subgraph ML["ml/ (Kaggle / Colab GPU, GitHub Actions for live)"]
+    BUILD["build_store<br/>stream → regrid to 0.25° → zarr"]
+    TRAIN["train · ensemble<br/>U-Net on anomalies"]
     EVAL["evaluate · argo_validation<br/>baselines · headline"]
-    PRED["predict<br/>prediction store + manifest"]
     PUB["publish"]
+    LIVE["live (daily 06:00 UTC)<br/>NRT inputs → one new day"]
   end
 
   HF[("Hugging Face dataset<br/>zenzone3/oceanscope-outputs")]
 
   subgraph BE["backend/ (FastAPI on Render)"]
-    API["/map /profile /section<br/>/timeseries /metrics /argo /headline"]
+    API["Data API<br/>/map /profile /section /timeseries<br/>/metrics /argo /headline /events"]
+    META["app/meta/<br/>guide · voice · postcards · lasso<br/>budget · limits · grounding guard"]
   end
 
+  MAPI["Meta Model API<br/>Muse Spark · Voice Transcribe<br/>Muse Image · SAM 3.1"]
+
   subgraph FE["frontend/ (Next.js on Vercel)"]
-    SITE["Landing · Explorer 2D/3D<br/>Validation · About"]
+    SITE["Landing · Explorer 2D/3D<br/>Validation · About · Beach"]
   end
+
+  APP["android/glasses-guide<br/>Ocean Glasses app"]
+  GLASSES["Ray-Ban / Oakley<br/>Meta glasses"]
+  UP["UptimeRobot (5 min)<br/>+ GitHub Actions (10 min)"]
 
   CM --> BUILD
   ERA --> BUILD
@@ -101,10 +129,198 @@ flowchart LR
   IDX --> BUILD
   ARGO --> BUILD
   ARGO --> EVAL
-  BUILD --> STATS --> TRAIN --> PRED --> EVAL --> PUB --> HF
-  HF -->|downloaded at startup| API
+  BUILD --> TRAIN --> EVAL --> PUB --> HF
+  CM --> LIVE
+  ERA --> LIVE
+  ARGO --> LIVE
+  LIVE --> HF
+  HF -->|downloaded at startup,<br/>manifest re-checked hourly| API
+  META <--> MAPI
   SITE <-->|HTTPS JSON| API
+  SITE <-->|HTTPS JSON| META
+  GLASSES <-->|Bluetooth| APP
+  APP <-->|/glasses/ask · /chat| BE
+  UP -->|GET /api/v1/health| API
 ```
+
+The browser and the Android app only ever talk to our backend. Every Meta model call, every key and every credit check lives on the server, in `backend/app/meta/`.
+
+---
+
+## Frontend (Next.js on Vercel)
+
+Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js and WebGL2, Recharts, TanStack Query and GSAP. It deploys to Vercel from `main` at https://ocean-embed.vercel.app. Contributor setup is in [`frontend/README.md`](frontend/README.md).
+
+### Pages
+
+| Route | What you get |
+|---|---|
+| `/` | **Landing page.** A cinematic underwater scene in light and dark themes: a waving water ceiling, light shafts and caustics (lazy-loaded Three.js), schools of fish on curved routes, and GSAP micro-interactions. The viewpoint stays fixed (no pointer parallax), motion pauses in hidden tabs and honours reduced-motion, and there is a static fallback. "Dive" plays an arrival transition into the Explorer. |
+| `/explore` | **Explorer.** The main tool: 2D map and 3D cutaway (below). |
+| `/validation` | **Validation.** The headline card (it says "Not met" when the result isn't met), summary cards, per-depth chart, breakdown tables by depth, season and region, ARGO comparisons and the sealed-test card. |
+| `/about` | **About.** What the project is, how it works, data credits and caveats, in the same underwater artwork and glass style. |
+| `/beach` | **Beach mode** (phones, behind a flag). One "Point at the sea" button: it takes your location (and compass on iOS), finds the first ocean cell in front of you and shows its temperature from surface to depth as a big vertical strip with distance and direction. Location is sent only on tap and never stored. |
+
+### Explorer
+
+- **Arrival transition.** A shared state machine (`lib/arrival.ts`) runs the dive from the landing page: a surface sweep, a short water-colour hold while the map, tiles and `/meta` preload, then a GSAP camera move from open water to the basin to the region. Any input skips it. If the free backend is still waking up, it says so.
+- **2D map, dot-matrix by default.** One dot per 0.25° cell, coloured by temperature, with hollow rings for cells with too little input and stippled land. A toggle switches to the classic continuous map (`?style=solid`). Fields: model prediction, GLORYS reference, or the error between them.
+- **3D cutaway.** The region as a block hanging under the map (WebGL2), with the chosen depth as the top face, the water column on the walls, 2 °C contours and the 20 °C isotherm. It has a depth rail (every model level selectable by click, drag, wheel or keyboard), an exploded-layers mode, a slice tool and a guided tour. Desktop and tablet only; phones get the 2D map.
+- **Details panel.** Click any point for its depth profile and time series, with charts themed for light and dark.
+- **Floating glass HUD.** An "Ocean Controls" card (date, depth, field, play), a bottom pill toolbar, a coverage legend and round badge pins. All panels open and close with GSAP animations.
+- **Date picker and play.** It covers the historical period and the live days, and skips the gap between them.
+- **Banners.** A yellow banner when the data is synthetic (mocks or fixtures) and a live banner on live dates, which have no GLORYS reference yet.
+- **Meta features** appear here when the backend switches them on: the guide drawer, mic button, postcards, lasso and event time machine. See [Meta AI features](#meta-ai-features-talk-to-the-ocean).
+
+### How the frontend stays honest
+
+- It never computes or invents numbers: every value comes from the API.
+- It reads `GET /api/v1/meta` on load and shows a Meta feature only when the backend says it is on, so there is never a dead button.
+- TypeScript API types are generated from `backend/openapi.json` (`pnpm generate-types`), and CI fails if they drift.
+- With `NEXT_PUBLIC_USE_MOCKS=true`, Mock Service Worker answers every API call in the browser with labelled synthetic data, so the whole UI works offline.
+
+---
+
+## Backend (FastAPI on Render)
+
+Python 3.11, FastAPI, xarray and zarr, pydantic-settings and httpx. It runs as a Docker web service on Render's free tier ([`render.yaml`](render.yaml), 512 MB RAM, Oregon).
+
+### How it serves data
+
+- **Startup.** The service binds its port first, then downloads the active run from the Hugging Face dataset in a worker thread. Only the files named in the remote `manifest.json` are fetched, so a deploy never times out on Render's port scan. Until the data is loaded, `/health` and `/meta` return 503.
+- **Hourly reload.** Every `RELOAD_INTERVAL_MIN` (60) minutes it re-checks the manifest, so a new live day or a newly published run appears without a redeploy. `manifest.json` is always uploaded last, so the backend never sees a half-published run.
+- **One store, one code path.** Routers hold no data logic. They call a single `OutputStore`, and the guide's data tools call the very same methods.
+- **Hardening.** NaN or infinite coordinates are refused (422), CORS is limited to the site and localhost without credentials, every response carries `nosniff`, `X-Frame-Options` and `Referrer-Policy` headers, and logs never hold user text, audio, images, keys or coordinates finer than 1°.
+
+### API (base `/api/v1`)
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /health` | `200 ok` with the active `run_id` once data is loaded, `503` before. This is what the uptime monitors ping. |
+| `GET /meta` | Run metadata, dates and date ranges (historical and live), depths, colour scales, caveats, and which Meta features are on |
+| `GET /map` | 2D temperature slice for a date and depth (`pred`, `glorys` or `error`) |
+| `GET /profile` | Temperature at all 15 depths for a point and date |
+| `GET /section` | Vertical slice along a latitude or longitude |
+| `GET /timeseries` | Temperature at a point and depth over a date range |
+| `GET /region-summary` | Area-weighted statistics for a box |
+| `GET /metrics` | Validation metrics for the model and baselines, by depth, season or region |
+| `GET /argo`, `GET /argo/profiles` | Matchups against held-out ARGO floats, and float positions |
+| `GET /headline` | The pre-registered headline test table |
+| `GET /events` | Curated events for the time machine |
+| `GET /nearest-ocean` | First ocean cell along a bearing from a location (beach mode and glasses) |
+| `POST /chat` | The Ocean guide (Muse Spark) |
+| `POST /transcribe` | Voice input (Muse Voice Transcribe) |
+| `POST /postcard`, `GET /postcard/{name}` | Ocean postcards (Muse Image) and the cached image |
+| `POST /segment` | The lasso (SAM 3.1, with a threshold fallback) |
+| `POST /glasses/ask` | Spoken question from the glasses app, answered from the data |
+
+The full schema is in [`backend/openapi.json`](backend/openapi.json). It is a frozen contract: CI fails if it is stale, and changes need the owner's approval and an entry in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+### Configuration
+
+All settings come from environment variables (see [`backend/.env.example`](backend/.env.example) and `app/settings.py`). The main ones:
+
+| Variable | Purpose |
+|---|---|
+| `HF_DATASET_REPO`, `HF_DATASET_REVISION`, `DATA_DIR` | Where to download the published run from, and where to keep it |
+| `CORS_ORIGINS` | Allowed site origins |
+| `RELOAD_INTERVAL_MIN` | How often to re-check the manifest (default 60) |
+| `META_API_BASE_URL`, `META_API_KEY` | Meta Model API (`https://api.meta.ai/v1`); the key lives only in Render secrets |
+| `META_CHAT_MODEL`, `META_CHAT_FALLBACK_MODEL`, `META_TRANSCRIBE_MODEL`, `META_IMAGE_MODEL`, `META_SEGMENT_MODEL` | Model ids (for example `muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-image-1.0`, `sam-3.1`) |
+| `META_CLIENT` | `http` for the real API, `mock` for an offline guide with no key and no network |
+| `CHAT_ENABLED`, `VOICE_ENABLED`, `POSTCARD_ENABLED`, `SEGMENT_ENABLED`, `BEACH_ENABLED`, `GLASSES_ENABLED` | One flag per feature; all off by default |
+| `SEGMENT_PROVIDER` | `sam` or `threshold` for the lasso |
+| `META_BUDGET_USD`, `META_DAILY_BUDGET_USD`, `META_PRICE_*`, `META_BUDGET_HF_REPO`, `HF_BUDGET_TOKEN` | The credit budget and its ledger (below) |
+| `*_RATE_LIMIT`, `*_IP_DAILY_CAP`, `*_DAILY_CAP` | Per-feature request limits |
+
+---
+
+## Meta AI features: "Talk to the ocean"
+
+Meta's models are the interaction layer. They let people move through and ask about the data. They never produce numbers, never run the scientific model and never see a secret. All calls go through one `MetaModelClient` in `backend/app/meta/`, and AI-written text and images are always labelled as AI.
+
+| Feature | Meta model | What it does |
+|---|---|---|
+| **Ocean guide** ("Ask the ocean") | Muse Spark 1.3 | A chat drawer in the Explorer. It answers questions by calling data tools and moves the map for you |
+| **Voice input** | Muse Voice Transcribe 1.0 | A mic button in the guide. The browser records, converts to 16 kHz mono WAV and sends it; the transcript comes back for you to check before it goes to the guide |
+| **Ocean postcards** | Muse Image 1.0 | A woodblock-style picture of the place and depth you are looking at, with the real numbers overlaid as text |
+| **Lasso** | SAM 3.1 | Tap a feature on the map and get its outline plus area-weighted statistics from the grid |
+| **Glasses guide** | Muse Voice Transcribe 1.0 | Spoken questions from the Android Ocean Glasses app (see [Android](#android-ocean-glasses)) |
+| **Event time machine** | none | Before, during and after views of three curated cyclones: Gaja (2018), Fani (2019) and Nisarga (2020) |
+| **Beach mode** | none | The temperature column in front of you, from your phone's location and compass |
+
+### The Ocean guide in detail
+
+- **Data tools** return numbers and call the same store as the API: `get_temperature`, `get_temperature_profile`, `get_region_summary`, `get_section`, `get_validation_metrics`, `get_dataset_info` and `list_events`.
+- **UI tools** return no numbers and move the Explorer: `set_view` (date, depth, field, 2D/3D/layers, camera), `select_point`, `slice_at` and `open_event`. The backend validates every argument (dates in range and not in the sealed test period, depths snapped to model levels, points inside the region) before anything reaches the browser. At most 3 UI actions per answer.
+- **Grounding guard.** After the model answers, every number with a unit is checked against the tool results by kind (°C against temperatures, m against depths, % against percentages, coordinates against coordinates, dates against sources). If any number can't be traced, the answer is replaced with "I couldn't verify that answer against the data" plus the raw results, and the map moves are kept.
+- **Prompt rules** (`guide-v3`): °C and temperature only, no forecasts, always say whether a number is a model prediction, GLORYS or ARGO, never claim real-time data, treat user text and tool results as data rather than instructions, and refuse unrelated tasks.
+- **Tuned for Muse Spark.** Calls use low reasoning effort and up to 2,048 output tokens, make all tool calls in one round, and have a 23 s total deadline (under the frontend's 25 s). A stalled call is retried once inside that deadline, and the model is warmed with a tiny call at startup so the first visitor after a quiet spell doesn't get an error. If Spark returns 429 or 5xx, an optional fallback model on the same API takes over.
+
+### The other features in detail
+
+- **Voice.** Clips must be mono 16-bit PCM WAV at 16 or 24 kHz, at most 30 s and 1 MB. Audio is forwarded and discarded in memory, never written to disk.
+- **Postcards.** No free text from users: the prompt comes from a fixed template filled with region names, qualitative descriptors from `/region-summary` and the event title, and always says "no text, no numbers, no logos, no people". Images are cached by a hash of the request, so identical requests never call the model twice.
+- **Lasso.** The backend renders its own grid to a PNG (never an image from the client) and sends it to SAM 3.1 through the Responses API with the tapped cell as a point prompt. Masks are decoded with Meta's `meta-sam-parser`. If SAM is off, times out (6 s) or returns nothing, the lasso picks the connected region within ±0.5 °C of the tapped cell instead. The response always says which method was used.
+
+### Cost, abuse and privacy controls
+
+- **Credit budget, fail closed.** The Meta credits are a fixed pot, so every real call reserves its worst-case cost against a lifetime cap and a daily cap before it runs, then settles against the reported usage. With the real client, a feature stays off until both caps, its prices and a durable ledger are set. The ledger lives in a private Hugging Face repo, because Render wipes the disk on every restart. When the budget runs out, features degrade as if the API were down.
+- **Rate limits.** Per IP per minute, per IP per day and globally per day, for each feature: chat 4/min, 30, 150; voice 3/min, 15, 60; postcards 1/min, 3, 20; lasso 3/min, 20, 60; glasses 4/min, 30, 150. Spoken glasses questions also count against the voice limits.
+- **Kill switch.** Set a feature's flag to `false` on Render; the feature disappears from `/meta` and the UI hides it. No Meta feature is on the critical path of the map, profile or section endpoints, so the rest of the site keeps working if Meta is down.
+- **Privacy.** No user content is stored. Logs record feature, status, latency and a request id only.
+
+---
+
+## Android: Ocean Glasses
+
+[`android/glasses-guide/`](android/glasses-guide/) is a Kotlin app for Ray-Ban and Oakley Meta glasses, built on Meta's Wearables Device Access Toolkit 1.0.1 (`mwdat-core`, `mwdat-speech`, `mwdat-inputs`, `mwdat-mockdevice`). It is a hackathon demo: Android only, sideloaded, tested on mock glasses.
+
+**How it works.** You face the sea, tap the glasses and ask "How warm is it out there at 500 metres?". The app hears you through the glasses mic, takes the phone's GPS location and compass heading, and calls `POST /api/v1/glasses/ask`. The backend reads the depth from your question, finds the first 0.25° cell at least 5 km out along your heading with water that deep, and builds the answer from the prediction store with a fixed template, so every spoken number is exact. It always says the distance, direction and date, and it says when it blended two levels, when the water isn't that deep, or when the compass is unreliable. The app then asks the guide (`POST /chat`) to add a short, natural sentence around that answer, replies to "hi" or "help" with a greeting, and speaks the result through the glasses speakers with Android text-to-speech.
+
+| Part | Real glasses | Mock glasses (no hardware) |
+|---|---|---|
+| Question audio | Glasses mic, transcribed on the glasses | Text typed into "What the mock glasses hear" |
+| Start a question | Tap the touchpad or press the capture button | "Simulate touchpad tap" or Ask |
+| Location and heading | Phone GPS and compass | A fake place: Puri beach facing 150° |
+| Answer audio | Text-to-speech over Bluetooth to the glasses | Phone speaker |
+
+Without any glasses connected, Ask uses the phone mic and Android's speech recogniser.
+
+**UI.** A seafoam and mint underwater design with custom-drawn ocean artwork (`OceanArtwork.kt`).
+
+**Build.** Open `android/glasses-guide/` in Android Studio (Ladybug or newer), with JDK 17, Android SDK 35 (min SDK 29) and Kotlin 2.2.20. Run on a phone in Developer Mode, keep "Use mock glasses" and "Fake location and heading" on, press **Connect glasses**, then **Simulate touchpad tap**. The backend needs `GLASSES_ENABLED=true`. For a local backend from the emulator, set the Backend URL to `http://10.0.2.2:7860/api/v1`. Full steps are in [`android/glasses-guide/README.md`](android/glasses-guide/README.md).
+
+| File | Role |
+|---|---|
+| `MainActivity.kt` | Screen, controls and the ask flow |
+| `GlassesLink.kt` | All toolkit code: connect, speech, touchpad input, mock device |
+| `OceanApi.kt` | HTTP client for `/glasses/ask` and `/chat` (no extra dependencies) |
+| `PhoneSensors.kt`, `Heading.kt` | GPS location and compass heading |
+| `OceanArtwork.kt` | The underwater artwork |
+
+---
+
+## Live mode: a new day every day
+
+Since 4 November 2026 a daily live run adds recent days to the site, not just the past. The **Live** workflow ([`.github/workflows/live.yml`](.github/workflows/live.yml)) runs daily at 06:00 UTC. It picks the newest day for which every near-real-time input exists, runs the published model (for an ensemble, each member, then averages them; ARGO-input members read the last 10 days of profiles from the Argo ERDDAP, with held-out floats left out), and uploads that day to the Hugging Face dataset, with `manifest.json` last. The backend picks it up on its next hourly reload.
+
+Live maps run about 3 days behind real time. They have no GLORYS reference yet, so the site marks them with a live banner. Before switching it on, a one-month check compared the model on near-real-time and reprocessed inputs: within 0.01 °C at 0–30 m and below 180 m, and 0.03–0.15 °C better at 47–131 m. The full runbook is [`docs/P9_LIVE_RUNBOOK.md`](docs/P9_LIVE_RUNBOOK.md).
+
+---
+
+## Keeping the backend awake
+
+Render's free tier puts a web service to sleep after about 15 minutes without traffic, and waking it means re-downloading the data (a minute or more). Two monitors keep it awake:
+
+- **UptimeRobot** sends `GET https://oceanscope-backend.onrender.com/api/v1/health` **every 5 minutes**. It is the main keep-alive and also alerts if the API goes down. It is configured in UptimeRobot's dashboard, not in this repository.
+- **GitHub Actions** ([`.github/workflows/keep-render-awake.yml`](.github/workflows/keep-render-awake.yml)) pings the same endpoint every 10 minutes (minutes 7, 17, 27 and so on) as a backup, because GitHub's scheduled runs can be delayed. Any HTTP response counts as awake; only a connection failure or timeout fails the job. Set the repository variable `RENDER_URL` to point it elsewhere.
+
+`/health` returns 503 for a few minutes after a restart while the data loads, so a short "down" blip after a deploy is expected.
+
+---
+
+## ML pipeline
 
 **Data.** Each product is streamed from its provider, reduced straight away to the 0.25° grid and the 15 depths, and written to a processed zarr store, one year at a time. No raw archive is kept, which keeps the full 1993–2021 build at about 20 GB instead of about 1 TB. The build runs as parallel Kaggle notebooks, one part per range of years, and a separate step fits the training-only climatology and normalisation statistics across the parts.
 
@@ -116,7 +332,7 @@ flowchart LR
 
 **Evaluation.** Baselines are climatology and per-pixel ridge regression. Metrics are computed per depth, season and region, with day-to-day flicker and per-year bias checks and physics sanity checks. Comparisons against ARGO use 20% of floats held out at the float level, which never feed the model as input. The test year (2021) is sealed: one command scores it once, on the owner's instruction, and the result is fixed after that.
 
-**Serving.** The backend downloads the active run from Hugging Face at startup and serves maps, profiles, sections and metrics. A GitHub Actions job pings it every 10 minutes so the free Render instance stays awake.
+**Ensemble.** The published run, `ens3`, is the daily mean of three members' prediction stores (`main2_ft`, `main2_ai` and `main3`, see [Results](#results)). The same members are packed into a "live kit" so the daily live run averages them too.
 
 ---
 
@@ -140,7 +356,7 @@ pnpm install
 NEXT_PUBLIC_API_BASE_URL=http://localhost:7860/api/v1 pnpm dev   # http://localhost:3000
 ```
 
-To run the frontend with no backend at all, set `NEXT_PUBLIC_USE_MOCKS=true`.
+To run the frontend with no backend at all, set `NEXT_PUBLIC_USE_MOCKS=true`. To see every Meta feature without a key, either add `NEXT_PUBLIC_MOCK_META_FEATURES=true` to the mocks, or run the backend with `META_CLIENT=mock` and the `*_ENABLED` flags set to `true`.
 
 Working on the frontend? Start with [`frontend/README.md`](frontend/README.md): Node and pnpm versions, `.env.local` setup (deployed backend, mocks or local fixtures), checks, the Meta feature flags, and the branch and PR flow.
 
@@ -190,7 +406,7 @@ python -m oceanscope_ml.publish --config configs/experiment.yaml --dry-run   # l
 HF_TOKEN=... python -m oceanscope_ml.publish --config configs/experiment.yaml
 ```
 
-`manifest.json` is uploaded last, so the backend never sees a half-published run. The backend is a Docker web service on Render ([`render.yaml`](render.yaml)) that reads `HF_DATASET_REPO` and `HF_DATASET_REVISION`. The frontend deploys to Vercel with `NEXT_PUBLIC_API_BASE_URL` set to the backend.
+`manifest.json` is uploaded last, so the backend never sees a half-published run. The backend is a Docker web service on Render ([`render.yaml`](render.yaml)) that reads `HF_DATASET_REPO` and `HF_DATASET_REVISION`. The frontend deploys to Vercel with `NEXT_PUBLIC_API_BASE_URL` set to the backend. For the Meta features, add the `META_*` variables and feature flags as Render secrets.
 
 ### Checks
 
@@ -200,18 +416,21 @@ cd backend  && ruff check . && ruff format --check . && mypy app && pytest -q &&
 cd frontend && pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
-Tests never read the test year.
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the checks for whichever areas a change touches, plus the frontend's Playwright end-to-end tests. Tests never read the test year and never call the real Meta API.
 
 ---
 
 ## Repository layout
 
 ```
-ml/         Python package oceanscope_ml: data build, models, training, evaluation, inference, publish
-backend/    FastAPI app, Dockerfile, openapi.json, tests
-frontend/   Next.js app (landing, Explorer 2D/3D, validation, about)
-fixtures/   synthetic, contract-exact sample outputs for development (< 5 MB)
-docs/       PRDs, DECISIONS.md, PHASES.md, OPEN_QUESTIONS.md, PROGRESS.md, reviews
+ml/                    Python package oceanscope_ml: data build, models, training, evaluation, inference, live, publish
+backend/               FastAPI app (data API + app/meta/ for every Meta model call), Dockerfile, openapi.json, tests
+frontend/              Next.js app (landing, Explorer 2D/3D, validation, about, beach), unit and e2e tests
+android/glasses-guide/ Ocean Glasses Android app for Meta glasses (Kotlin, Wearables Device Access Toolkit)
+fixtures/              synthetic, contract-exact sample outputs for development (< 5 MB)
+docs/                  PRDs, DECISIONS.md, PHASES.md, OPEN_QUESTIONS.md, PROGRESS.md, runbooks, reviews
+.github/workflows/     ci.yml, live.yml (daily live day), keep-render-awake.yml (backend ping)
+render.yaml            Render blueprint for the backend
 ```
 
 Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design decisions, with dates and who approved them, are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
@@ -224,14 +443,16 @@ Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design
 - **The headline test was not met.** Against held-out ARGO floats in the Bay of Bengal at 50–300 m, GLORYS12 and ARMOR3D are more accurate than our model; we only tie the GREP mean.
 - **Training years.** 2005 and 2006 were not built in time and are not in the training set.
 - **Before 2004**, there are few ARGO floats, so the ARGO input channels are empty by design for those years.
-- **Not tuned exhaustively.** Two full training runs and one ARGO fine-tune, with no hyperparameter search. The per-input-group ablation study planned in the PRD hasn't been run, so we make no claim about which inputs matter most.
-- **Test year not scored yet.** All numbers above are on the 2018–2020 validation years.
+- **Not tuned exhaustively.** There was no hyperparameter search, and the per-input-group ablation study planned in the PRD hasn't been run, so we make no claim about which inputs matter most.
+- **`ens3` is not scored on the test year.** The sealed 2021 test was spent on `main2_ft`; the `ens3` numbers are validation-period only.
 - **Resolution.** 0.25° and daily. Fronts, eddies and coastal features smaller than about 25 km are smoothed out, and cells less than half ocean are masked.
-- **Depth.** 15 levels down to about 1,060 m. Values between levels in the profile chart are interpolated for display only.
+- **Depth.** 15 levels down to about 1,060 m. Values between levels in the profile chart (and in glasses answers) are interpolated linearly.
 - **Region.** The North Indian Ocean box only (40–100°E, 0–30°N). The model has not been tested elsewhere.
 - **Not a forecast.** Each map is a reconstruction of a past day from that day's and earlier observations.
-- **No live maps yet.** The site covers past dates only; daily near-real-time updates are planned.
-- **Hosting.** The backend runs on Render's free tier (512 MB). After a restart it re-downloads the data, which takes a few minutes.
+- **Live days are unchecked.** They run about 3 days behind real time and have no GLORYS reference yet.
+- **AI features are an interface, not a source.** The guide's wording, postcards and lasso shapes come from Meta's models; the numbers always come from the model outputs. The grounding guard still has known gaps (for example, a number spelled out in words).
+- **Glasses app is a demo.** It is tested on Meta's mock glasses only, not on real hardware, and it uses dev/beta toolkit APIs, so it can't be published as it is. The answer is for a cell about 27 km wide, and the phone's compass sets the direction.
+- **Hosting.** The backend runs on Render's free tier (512 MB). After a restart it re-downloads the data, which takes a few minutes; the uptime monitors keep restarts rare but can't prevent them.
 
 ---
 
@@ -250,4 +471,4 @@ OceanScope AI is built entirely on open data. Thank you to everyone who collects
 
 ## Built by
 
-Aryan, with Claude (planning, review and code) and Gemini (implementation).
+Aryan, with Claude (planning, review and code), Gemini and Codex (implementation), on Meta's models for the AI features.
