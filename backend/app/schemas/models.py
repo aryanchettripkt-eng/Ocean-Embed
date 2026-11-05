@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Error Schemas
@@ -124,6 +124,13 @@ class Features(BaseModel):
     provider_label: str | None = None
 
 
+class DateRange(BaseModel):
+    """A run of consecutive days present in the served prediction store."""
+
+    start: str = Field(..., description="First day YYYY-MM-DD")
+    end: str = Field(..., description="Last day YYYY-MM-DD")
+
+
 class MetaResponse(BaseModel):
     """Response model for GET /meta."""
 
@@ -137,6 +144,14 @@ class MetaResponse(BaseModel):
     depths_m: list[float]
     available_dates: AvailableDates
     latest_live_date: str | None = None
+    date_ranges: list[DateRange] | None = Field(
+        None,
+        description=(
+            "Runs of consecutive days the store holds, oldest first. Live mode appends recent "
+            "days after the historical ones, leaving a gap inside available_dates; dates in a "
+            "gap return 404 date_unavailable."
+        ),
+    )
     splits: Splits
     test_evaluated: bool
     color_ranges: list[ColorRange]
@@ -412,6 +427,14 @@ class ChatRequest(BaseModel):
 
     messages: list[ChatMessage] = Field(..., min_length=1, max_length=10)
     context: ChatContext | None = None
+
+    @model_validator(mode="after")
+    def _ends_with_user(self) -> ChatRequest:
+        # The guide answers the last user turn; a trailing assistant turn would have the model
+        # continue text the client wrote in the guide's voice.
+        if self.messages[-1].role != "user":
+            raise ValueError("the last message must have role 'user'")
+        return self
 
 
 class ToolCallRecord(BaseModel):

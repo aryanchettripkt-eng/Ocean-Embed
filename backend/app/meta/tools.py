@@ -9,6 +9,7 @@ never forwarded. Tool errors are returned as `{"error": {"code", "message"}}`, n
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -521,8 +522,13 @@ def _req(args: dict[str, Any], key: str) -> Any:
 
 
 def _number(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ToolArgError("invalid_arguments", f"'{name}' must be a number")
+    # json.loads accepts NaN and Infinity, so model-written arguments can carry them.
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        raise ToolArgError("invalid_arguments", f"'{name}' must be a finite number")
     return float(value)
 
 

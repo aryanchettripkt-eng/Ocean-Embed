@@ -21,7 +21,7 @@
         android:allowBackup="false"
         android:label="Ocean Glasses"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
         android:usesCleartextTraffic="true">
 
         <meta-data

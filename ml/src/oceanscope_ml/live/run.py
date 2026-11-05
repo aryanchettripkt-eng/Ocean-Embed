@@ -10,7 +10,10 @@ run repairs that first (see ``repair_manifest``).
    newest day whose inputs and history are all present. Newer days are skipped with the
    reason in the log (no partial maps). No complete day at all fails the run.
 4. If that day is already published, stop: nothing new today.
-5. Predict the day, append it (``live`` label, NaN ``temp_glorys``), trim the rolling window.
+   When a kit member has ARGO input channels, fetch the ARGO profiles of the window before
+   that day (held-out floats left out); a failed fetch, or none at all, fails the run.
+5. Predict the day (the mean of the members for an ensemble kit), append it (``live``
+   label, NaN ``temp_glorys``), trim the rolling window.
 6. Upload the changed store files in one commit, then ``manifest.json`` in its own commit.
 7. Write the run log (per-input newest day and latency, chosen day, skipped days).
 """
@@ -32,7 +35,8 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.live import inputs as live_inputs
-from oceanscope_ml.live.kit import Kit, download_kit, open_kit, predict_days
+from oceanscope_ml.live.argo import ArgoFetcher
+from oceanscope_ml.live.kit import Kit, argo_window_days, download_kit, open_kit, predict_days
 from oceanscope_ml.live.store import (
     PublishedRepo,
     append_day,
@@ -92,12 +96,15 @@ class RunLog:
     today: str
     status: str = "started"
     run_id: str | None = None
+    members: list[str] = field(default_factory=list)
     target_day: str | None = None
     published_end_before: str | None = None
     published_end_after: str | None = None
     input_last_day: dict[str, str | None] = field(default_factory=dict)
     input_latency_days: dict[str, int | None] = field(default_factory=dict)
     skipped_days: dict[str, list[str]] = field(default_factory=dict)
+    argo_profiles: int | None = None
+    argo_floats: int | None = None
     trimmed_days: int = 0
     uploaded_files: int = 0
     deleted_files: int = 0
@@ -112,7 +119,9 @@ class RunLog:
             f"## Live run {self.today}: {self.status}",
             "",
             f"- Run: `{self.run_id}`",
+            f"- Members: {', '.join(self.members) or self.run_id}",
             f"- Target day: {self.target_day or 'none'}",
+            f"- ARGO input profiles / floats: {self.argo_profiles} / {self.argo_floats}",
             f"- Published end: {self.published_end_before} → {self.published_end_after}",
             f"- Trimmed live days: {self.trimmed_days}",
             f"- Files uploaded / deleted: {self.uploaded_files} / {self.deleted_files}",
@@ -151,10 +160,12 @@ def run_live(
     settings: LiveSettings,
     dry_run: bool = False,
     log: RunLog | None = None,
+    argo_fetch: ArgoFetcher | None = None,
 ) -> RunLog:
     """One live run; ``log`` is filled in as the run goes, so a failure keeps what was found."""
     log = log if log is not None else RunLog(today=str(today.date()))
     log.run_id = kit.run_id
+    log.members = [m.name for m in kit.members]
     published = work / "published"
     published.mkdir(parents=True, exist_ok=True)
 
@@ -223,12 +234,29 @@ def run_live(
         log.notes.append(f"Newest complete day {target.date()} is already published")
         return log
 
+    profiles = None
+    if kit.needs_argo:
+        if argo_fetch is None:
+            raise LiveRunError("The kit has ARGO input members but no ARGO fetcher was given")
+        argo_start = target - pd.Timedelta(days=argo_window_days(config) - 1)
+        profiles = argo_fetch(argo_start, target)
+        log.argo_profiles = int(len(profiles))
+        log.argo_floats = int(profiles["platform_number"].nunique()) if len(profiles) else 0
+        if profiles.empty:
+            raise LiveRunError(
+                f"No ARGO profiles in {argo_start.date()}..{target.date()}; the ARGO input "
+                "channels would be empty"
+            )
+        held = set(profiles["platform_number"].astype(str)) & kit.holdout()
+        if held:
+            raise LiveRunError(f"Held-out floats reached the ARGO inputs: {sorted(held)[:5]}")
+
     # --- 5. predict, append, trim
     before = file_hashes(published)
     window = live_inputs.write_window_store(
         work / "window.zarr", inputs, static, target - pd.Timedelta(days=max_lb), target
     )
-    day = predict_days(config, kit, window, [target])
+    day = predict_days(config, kit, window, [target], argo_profiles=profiles)
     if not (day["coverage"].values == 1).any():
         raise LiveRunError(f"Prediction for {target.date()} has no valid cell")
     append_day(store, day, config)
@@ -265,6 +293,15 @@ def resolve_kit(config: ExperimentConfig, settings: LiveSettings, kit_dir: Path 
             raise ValueError("No --kit-dir and no live.kit_repo in the config")
         kit_dir = download_kit(settings.kit_repo, Path(tempfile.mkdtemp(prefix="oceanscope-kit-")))
     return open_kit(kit_dir, config)
+
+
+def default_argo_fetch(config: ExperimentConfig, kit: Kit, scratch: Path) -> ArgoFetcher | None:
+    """ERDDAP ARGO profiles for kits with ARGO input members; None otherwise."""
+    if not kit.needs_argo:
+        return None
+    from oceanscope_ml.live import argo as live_argo
+
+    return live_argo.default_fetch(config, scratch, kit.holdout())
 
 
 def default_fetch(config: ExperimentConfig, scratch: Path) -> live_inputs.Fetcher:

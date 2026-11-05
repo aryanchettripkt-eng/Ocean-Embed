@@ -36,6 +36,47 @@ _LANG_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$")
 TIMEOUT_S = 20.0
 
 
+# Longest clip accepted (PRD_BACKEND §6.5). The budget reserves and charges at most this much
+# audio per call (app/meta/budget.py MAX_AUDIO_MIN), so a longer clip would be billed upstream
+# for more than the ledger records. 1 MB of 16 kHz PCM is 31.25 s, so the byte cap alone is not
+# enough. A little slack for encoder rounding in the browser's 30 s recorder.
+MAX_AUDIO_S = 30.0
+_DURATION_SLACK_S = 0.25
+
+
+def wav_duration_s(data: bytes) -> float | None:
+    """Seconds of PCM audio in a mono 16-bit WAV, from its `fmt ` rate and `data` length.
+
+    The `data` length is capped by the bytes actually present, so a header that lies about
+    its size cannot make a clip look shorter or longer than the upload. None if unreadable.
+    """
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    rate: int | None = None
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk_id = data[pos : pos + 4]
+        size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+        if chunk_id == b"fmt " and pos + 16 <= len(data):
+            rate = int.from_bytes(data[pos + 12 : pos + 16], "little")
+        elif chunk_id == b"data":
+            if not rate:
+                return None
+            present = min(size, len(data) - (pos + 8))
+            return present / (rate * 2)
+        pos += 8 + size + (size & 1)
+    return None
+
+
+def check_audio_length(data: bytes) -> None:
+    """413 `audio_too_long` for a clip over MAX_AUDIO_S (or with no readable `data` chunk)."""
+    duration = wav_duration_s(data)
+    if duration is None:
+        raise APIError(415, "unsupported_audio", WAV_MESSAGE)
+    if duration > MAX_AUDIO_S + _DURATION_SLACK_S:
+        raise APIError(413, "audio_too_long", "Audio must be 30 seconds or less")
+
+
 def is_supported_wav(data: bytes) -> bool:
     """True for a RIFF/WAVE file whose `fmt ` chunk is mono 16-bit PCM at 16 or 24 kHz."""
     if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
@@ -124,6 +165,7 @@ def post_transcribe(
         raise APIError(422, "empty_audio", "The audio upload is empty")
     if not is_supported_wav(data):
         raise APIError(415, "unsupported_audio", WAV_MESSAGE)
+    check_audio_length(data)
 
     store_module.store._ensure_loaded()
     manifest = store_module.store.loader.manifest

@@ -57,6 +57,7 @@ from app.schemas.models import (
     Caveats,
     ChatInfo,
     ColorRange,
+    DateRange,
     ErrorRange,
     Features,
     GridShape,
@@ -329,6 +330,24 @@ class OutputStore:
         self._cached_color_ranges = computed_ranges
         return computed_ranges
 
+    @staticmethod
+    def _served_date_ranges(ds: xr.Dataset) -> list[DateRange] | None:
+        """Runs of consecutive days in the store's time axis (gaps split them)."""
+        if "time" not in ds.coords:
+            return None
+        days = sorted({str(t)[:10] for t in ds["time"].values})
+        if not days:
+            return None
+        ranges: list[DateRange] = []
+        start = prev = days[0]
+        for day in days[1:]:
+            if (dt_date.fromisoformat(day) - dt_date.fromisoformat(prev)).days != 1:
+                ranges.append(DateRange(start=start, end=prev))
+                start = day
+            prev = day
+        ranges.append(DateRange(start=start, end=prev))
+        return ranges
+
     def _get_latest_live_date(self, ds: xr.Dataset) -> str | None:
         """Extract the latest live date from split_of_each_date attribute if present."""
         raw_splits = ds.attrs.get("split_of_each_date")
@@ -409,6 +428,7 @@ class OutputStore:
             depths_m=depths,
             available_dates=AvailableDates(**manifest["available_dates"]),
             latest_live_date=latest_live_date,
+            date_ranges=self._served_date_ranges(ds),
             splits=Splits(**manifest["splits"]),
             test_evaluated=manifest["test_evaluated"],
             color_ranges=color_ranges,

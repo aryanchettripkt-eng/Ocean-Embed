@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -185,7 +186,11 @@ async def validation_exception_handler(
             "error": {
                 "code": "validation_error",
                 "message": "Invalid request parameters",
-                "details": {"errors": exc.errors()},
+                # A model validator's ValueError sits in `ctx` and is not JSON; render it as text
+                # rather than failing the error response itself with a 500.
+                "details": {
+                    "errors": jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
+                },
             }
         },
     )

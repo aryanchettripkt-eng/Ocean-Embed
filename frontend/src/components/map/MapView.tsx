@@ -11,6 +11,14 @@ import type { CutawayLayer } from "../map3d/CutawayLayer";
 import type { CameraFocus } from "../../lib/guide/ui-actions";
 import { gsap, loopPing, prefersReducedMotion } from "../../lib/motion";
 
+/** Escape API values before they go into a MapLibre popup, which takes raw HTML. */
+function escapeHtml(value: unknown): string {
+  return String(value).replace(
+    /[&<>"']/g,
+    (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch
+  );
+}
+
 export interface RegionBounds {
   lat_min: number;
   lat_max: number;
@@ -1104,8 +1112,8 @@ export function MapView({
           .setPopup(
             new maplibregl.Popup({ offset: 12, closeButton: false }).setHTML(`
               <div class="text-xs leading-relaxed text-neutral-900 dark:text-neutral-100">
-                <p class="font-semibold">ARGO float ${p.platform_number}</p>
-                <p class="text-neutral-600 dark:text-neutral-400">Cycle ${p.cycle} · ${p.n_obs} obs · ${p.time.slice(0, 10)}</p>
+                <p class="font-semibold">ARGO float ${escapeHtml(p.platform_number)}</p>
+                <p class="text-neutral-600 dark:text-neutral-400">Cycle ${escapeHtml(p.cycle)} · ${escapeHtml(p.n_obs)} obs · ${escapeHtml(String(p.time).slice(0, 10))}</p>
               </div>
             `)
           )

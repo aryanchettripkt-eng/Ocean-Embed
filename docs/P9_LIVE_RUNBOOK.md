@@ -2,7 +2,7 @@
 
 Code: `ml/src/oceanscope_ml/live/` (P9-3) and `ml/src/oceanscope_ml/evaluation/live_check.py` (P9-1).
 Settings: `ml/configs/live.yaml`. It is kept out of `experiment.yaml` because `train.py` refuses to resume a run whose config hash changed.
-Workflow: `.github/workflows/live.yml` (manual trigger only until the schedule is uncommented).
+Workflow: `.github/workflows/live.yml` (daily at 06:00 UTC, and by hand).
 
 ## Steps for Aryan, in order
 
@@ -20,6 +20,8 @@ Workflow: `.github/workflows/live.yml` (manual trigger only until the schedule i
        --run-id main2_ft --upload
    ```
    - Rebuild the kit whenever a new run is published.
+   - **An ensemble** (e.g. `ens3` = mean of `main2_ai`, `main2_ft`, `main3`): one `--member name=best.pt` per member and `--run-id <published name>`. Members may differ in their optional channels (ARGO inputs, `year`) but share one stats store. When a member has ARGO input channels the kit also holds `argo_eval_floats.json` (`--holdout`, default `configs/argo_eval_floats.json`), and every live run reads the last `window_days` (10) of ARGO profiles from the Argo ERDDAP, held-out floats left out. No ARGO profiles in that window fails the run.
+   - On Kaggle: `ml/scripts/kaggle_live_kit.py` finds each member's checkpoint, builds the kit, runs the P9-1 check for the whole ensemble, and uploads with `OCEANSCOPE_UPLOAD=1`. Upload the kit on the day the ensemble is published: until then the daily run fails red (kit run ≠ published run) and uploads nothing.
 3. **P9-1 check**: run the model on one past month with NRT inputs and with reprocessed inputs:
    ```
    python -m oceanscope_ml.evaluation.live_check --kit-dir kit/ --month YYYY-MM \
