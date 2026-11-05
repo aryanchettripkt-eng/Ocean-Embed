@@ -27,6 +27,10 @@ def snap_coordinate(
     Raises OutOfRegionError if val is outside [min_bound, max_bound].
     Returns (index, snapped_coordinate).
     """
+    # NaN passes both bound checks below and would crash round_half_up (a 500); inf is
+    # out of range anyway. Query floats accept "nan" and "inf", so refuse them here.
+    if not math.isfinite(val):
+        raise OutOfRegionError(f"Coordinate {val} is not a finite number")
     if val < min_bound - tolerance or val > max_bound + tolerance:
         raise OutOfRegionError(
             f"Coordinate {val} is outside valid region [{min_bound}, {max_bound}]"

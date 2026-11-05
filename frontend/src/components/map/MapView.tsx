@@ -9,6 +9,14 @@ import type { WallId } from "../map3d/depthScale";
 import type { CutawayLayer } from "../map3d/CutawayLayer";
 import type { CameraFocus } from "../../lib/guide/ui-actions";
 
+/** Escape API values before they go into a MapLibre popup, which takes raw HTML. */
+function escapeHtml(value: unknown): string {
+  return String(value).replace(
+    /[&<>"']/g,
+    (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch
+  );
+}
+
 export interface RegionBounds {
   lat_min: number;
   lat_max: number;
@@ -830,9 +838,9 @@ export function MapView({
           .setPopup(
             new maplibregl.Popup({ offset: 10, closeButton: false }).setHTML(`
               <div class="text-xs p-1 text-slate-900">
-                <p class="font-bold">ARGO Float ${p.platform_number}</p>
-                <p>Cycle: ${p.cycle} (${p.n_obs} obs)</p>
-                <p class="text-[10px] text-slate-500">${p.time.slice(0, 10)}</p>
+                <p class="font-bold">ARGO Float ${escapeHtml(p.platform_number)}</p>
+                <p>Cycle: ${escapeHtml(p.cycle)} (${escapeHtml(p.n_obs)} obs)</p>
+                <p class="text-[10px] text-slate-500">${escapeHtml(String(p.time).slice(0, 10))}</p>
               </div>
             `)
           )

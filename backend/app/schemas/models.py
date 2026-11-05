@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Error Schemas
@@ -427,6 +427,14 @@ class ChatRequest(BaseModel):
 
     messages: list[ChatMessage] = Field(..., min_length=1, max_length=10)
     context: ChatContext | None = None
+
+    @model_validator(mode="after")
+    def _ends_with_user(self) -> ChatRequest:
+        # The guide answers the last user turn; a trailing assistant turn would have the model
+        # continue text the client wrote in the guide's voice.
+        if self.messages[-1].role != "user":
+            raise ValueError("the last message must have role 'user'")
+        return self
 
 
 class ToolCallRecord(BaseModel):

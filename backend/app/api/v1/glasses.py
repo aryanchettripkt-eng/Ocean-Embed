@@ -26,8 +26,10 @@ from app.api.v1.voice import (
     MAX_BODY_BYTES,
     TIMEOUT_S,
     WAV_MESSAGE,
+    check_audio_length,
     is_supported_wav,
 )
+from app.api.v1.voice import get_limiter as voice_limiter
 from app.data import glasses
 from app.errors import APIError
 from app.meta import client as client_module
@@ -81,7 +83,7 @@ class _BoundedRoute(APIRoute):
 router = APIRouter(route_class=_BoundedRoute)
 
 
-def _transcribe(audio: UploadFile, lang: str) -> str:
+def _transcribe(audio: UploadFile, lang: str, ip: str) -> str:
     if not voice_available():
         raise APIError(503, "voice_disabled", "Voice input is not available right now")
     mime = (audio.content_type or "").split(";")[0].strip().lower()
@@ -94,6 +96,10 @@ def _transcribe(audio: UploadFile, lang: str) -> str:
         raise APIError(422, "empty_audio", "The audio upload is empty")
     if not is_supported_wav(data):
         raise APIError(415, "unsupported_audio", WAV_MESSAGE)
+    check_audio_length(data)
+    # A spoken question is a Voice Transcribe call: count it against the voice limits too, so
+    # /glasses/ask cannot be used to go past VOICE_RATE_LIMIT and the voice daily caps.
+    voice_limiter().check(ip)
     try:
         result = client_module.build_client().transcribe(data, mime, lang, timeout_s=TIMEOUT_S)
     except MetaUpstreamError:
@@ -116,6 +122,7 @@ def _transcribe(audio: UploadFile, lang: str) -> str:
     ),
 )
 def post_glasses_ask(
+    request: Request,
     lat: float = Form(..., ge=-90, le=90, description="User latitude"),
     lon: float = Form(..., ge=-180, le=180, description="User longitude"),
     bearing_deg: float | None = Form(
@@ -135,7 +142,9 @@ def post_glasses_ask(
     request_id = uuid.uuid4().hex[:12]
     started = time.monotonic()
     source = "audio" if audio is not None else "text"
-    question = (_transcribe(audio, lang) if audio is not None else (text or "")).strip()
+    question = (
+        _transcribe(audio, lang, client_ip(request)) if audio is not None else (text or "")
+    ).strip()
     if not question:
         raise APIError(422, "empty_question", "Send a question as audio or text")
     question = question[:MAX_QUESTION_CHARS]
