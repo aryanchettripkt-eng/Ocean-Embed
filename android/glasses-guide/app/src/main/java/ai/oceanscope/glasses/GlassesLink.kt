@@ -144,7 +144,7 @@ class GlassesLink(
         val kit = mock?.services?.speech
         if (kit != null && !mockQuestion.isNullOrBlank()) {
             scope.launch {
-                delay(400)
+                delay(150); kit.simulateTranscription("", isFinal = false); delay(150)
                 kit.simulateTranscription(mockQuestion, isFinal = true)
             }
         }

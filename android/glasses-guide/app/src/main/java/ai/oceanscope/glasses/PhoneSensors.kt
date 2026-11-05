@@ -28,7 +28,7 @@ object PhoneLocation {
         }
         val fresh = if (Build.VERSION.SDK_INT >= 30) {
             withTimeoutOrNull(timeoutMs) {
-                suspendCancellableCoroutine { cont ->
+                suspendCancellableCoroutine<Location?> { cont ->
                     val cancel = CancellationSignal()
                     cont.invokeOnCancellation { cancel.cancel() }
                     lm.getCurrentLocation(provider, cancel, context.mainExecutor) { loc ->
