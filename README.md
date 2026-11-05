@@ -5,7 +5,7 @@
 - **Live site:** https://ocean-embed.vercel.app
 - **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
-- **Model run shown:** `main2_ft`
+- **Model run shown:** `ens3` (the average of three U-Net runs, see [Results](#results))
 
 > **Honest caveat, up front.** The model is trained to reproduce the GLORYS12 reanalysis. GLORYS assimilates satellite altimetry and ARGO profiles, so agreement with GLORYS is not the same as agreement with the real ocean. ARGO profiles are also assimilated into GLORYS, so our ARGO comparison is not fully independent either. See [Limitations](#limitations).
 
@@ -22,7 +22,7 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 | **Region** | 40–100°E, 0–30°N (Arabian Sea, Bay of Bengal, northern equatorial Indian Ocean) |
 | **Grid** | 0.25°, daily |
 | **Depths** | 15 native GLORYS12 levels: 0.5, 5, 10, 18, 29, 47, 66, 92, 131, 186, 222, 266, 380, 644 and 1,062 m (7 of them in 50–300 m) |
-| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021 (sealed until the final test) |
+| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021 (scored once, on `main2_ft`) |
 | **Model** | Small 2D U-Net (≤ 10 M parameters) that predicts temperature anomalies from a training-period climatology |
 | **Headline test** | Bay of Bengal, 50–300 m: is the model's error against held-out ARGO floats lower than GLORYS12, the GREP ensemble mean and ARMOR3D? Fixed before training (see [Results](#results)) |
 
@@ -32,28 +32,33 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 - **Explorer, 2D map:** temperature at any date and depth, the GLORYS reference, or the error between them. Click a point for its depth profile and time series.
 - **Explorer, 3D cutaway:** the region as a block hanging under the map, with the selected depth as the top face, the water column on the walls, 2 °C contours and the 20 °C isotherm. Includes a depth rail, an exploded-layers mode and a guided tour. Desktop and tablet only; phones get the 2D map.
 - **Validation page:** metrics per depth, season and region, ARGO comparisons and the headline card (it says "Not met" if the result isn't met).
-- **Coming next, "Talk to the ocean":** an AI guide built on Meta's models (Muse Spark, Muse Voice Transcribe, Muse Image, SAM 3.1) that answers questions from the data and moves the map for you, plus an event time machine, postcards and a lasso tool. The backend for the guide is written and tested but not yet deployed, and none of it is in this release.
+- **"Talk to the ocean":** an AI guide built on Meta's models (Muse Spark, Muse Voice Transcribe, Muse Image, SAM 3.1) that answers questions from the data and moves the map for you, plus an event time machine, postcards and a lasso tool. The guide is live; AI text and images are labelled as AI and never the source of a number.
 
 ---
 
 ## Results
 
-**Run `main2_ft`**: the U-Net trained on 23 training years (1993–2017 without 2005 and 2006, which weren't built in time), then fine-tuned on ARGO profiles from floats that are not held out (λ = 0.3, picked on validation).
+**Run `ens3`**: the daily average of three U-Net runs:
+- `main2_ft`: trained on 23 training years (1993–2017 without 2005 and 2006, which weren't built in time), then fine-tuned on ARGO profiles from floats that are not held out (λ = 0.3, picked on validation);
+- `main2_ai`: the same network fine-tuned with ARGO profiles as extra input channels;
+- `main3`: trained from scratch with ARGO inputs, recency weighting and a year channel.
 
-**Validation, 2018–2020, against GLORYS12:** RMSE **0.660 °C**, which is **33.5% skill** over the climatology baseline.
+**Validation, 2018–2020, against GLORYS12:** RMSE **0.644 °C** (MAE 0.429 °C), which is **35.1% skill** over the climatology baseline. `main2_ft` alone scores 0.660 °C (33.5%).
 
 **Headline test (Bay of Bengal, 50–300 m, held-out ARGO floats, validation years):**
 
 | Product | RMSE vs held-out floats (°C) |
 |---|---|
-| OceanScope `main2_ft` | 0.996 |
+| OceanScope `ens3` | 0.957 (95% CI 0.868–1.052) |
 | GLORYS12 | 0.786 |
 | GREP ensemble mean | 0.952 |
 | ARMOR3D | 0.607 |
 
-**Verdict: not met.** The model is level with the GREP mean (the difference isn't significant), but GLORYS12 and ARMOR3D are closer to the floats. We fixed this test before training and report it as it came out. ARGO fine-tuning brought the model's error down from 1.026 °C (`main2`) to 0.996 °C.
+**Verdict: not met.** The ensemble is level with the GREP mean (the difference isn't significant), but GLORYS12 and ARMOR3D, which assimilate ARGO profiles, are closer to the floats. We fixed this test before training and report it as it came out. For reference, `main2_ft` alone scores 0.996 °C, and `main2` before ARGO fine-tuning scored 1.026 °C. A per-depth ARGO correction of `main2_ai` reached 0.862 °C (CI 0.815–0.910) on the same floats, but it needs a live ARGO feed and is not published.
 
-The sealed 2021 test year has not been scored yet; it runs once, at the end. The per-depth, per-season and per-region tables are in the published dataset under `metrics/` and on the site's Validation page.
+**Sealed 2021 test:** run once, on `main2_ft` (the run published at the time): RMSE 0.753 °C, MAE 0.497 °C, bias −0.08 °C, 32.4% skill over climatology. The test year is now spent, so `ens3` is **not evaluated** on 2021; its numbers above are validation-period only.
+
+The per-depth, per-season and per-region tables are in the published dataset under `metrics/` and on the site's Validation page.
 
 ---
 
