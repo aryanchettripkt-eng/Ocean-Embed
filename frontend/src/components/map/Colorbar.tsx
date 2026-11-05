@@ -29,31 +29,27 @@ export function Colorbar({ field, vmin, vmax, wallRange, className = "" }: Color
     (Math.abs(wallRange.vmin - vmin) > 0.1 || Math.abs(wallRange.vmax - vmax) > 0.1);
 
   return (
-    <div
-      className={`bg-slate-950/85 backdrop-blur-md border border-slate-800/80 rounded-lg p-2.5 shadow-xl text-slate-200 ${className}`}
-    >
-      <div className="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
-        <span className="truncate">{title}</span>
-        <span className="text-[11px] text-slate-400 font-mono">(°C)</span>
+    <div className={`text-neutral-800 dark:text-neutral-200 ${className}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="hud-label truncate">{title}</span>
+        <span className="text-[11px] text-neutral-500">°C</span>
       </div>
 
-      {/* Gradient bar */}
       <div
-        className="w-full h-3 rounded border border-slate-700/60 shadow-inner"
+        className="h-2 w-full rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/10"
         style={{ background: gradientCss }}
       />
 
-      {/* Numerical markers */}
-      <div className="flex justify-between items-center text-[10px] font-mono text-slate-400 mt-1">
+      <div className="mt-1.5 flex items-center justify-between text-[11px] tabular-nums text-neutral-600 dark:text-neutral-400">
         <span>{formatTemp(vmin, 1)}</span>
         <span>{formatTemp(mid, 1)}</span>
         <span>{formatTemp(vmax, 1)}</span>
       </div>
 
       {showWallRange && (
-        <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-          <span>Top face: {formatTemp(vmin, 1)}–{formatTemp(vmax, 1)}</span>
-          <span>Walls: {formatTemp(wallRange.vmin, 1)}–{formatTemp(wallRange.vmax, 1)}</span>
+        <div className="mt-1.5 flex items-center justify-between text-[10px] tabular-nums text-neutral-500">
+          <span>Top face {formatTemp(vmin, 1)}–{formatTemp(vmax, 1)}</span>
+          <span>Walls {formatTemp(wallRange.vmin, 1)}–{formatTemp(wallRange.vmax, 1)}</span>
         </div>
       )}
     </div>

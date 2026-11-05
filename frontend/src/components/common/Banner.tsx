@@ -26,9 +26,9 @@ export function Banner({ type = "synthetic", message, className = "" }: BannerPr
     return (
       <div
         role="alert"
-        className={`w-full bg-amber-500 text-slate-950 font-bold px-4 py-1.5 text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm ${className}`}
+        className={`flex w-full items-center justify-center gap-2 bg-amber-400 px-4 py-1 text-xs font-semibold text-neutral-950 ${className}`}
       >
-        <AlertTriangle className="h-4 w-4 shrink-0 text-slate-950" />
+        <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
         <span>{displayMessage}</span>
       </div>
     );
@@ -42,9 +42,9 @@ export function Banner({ type = "synthetic", message, className = "" }: BannerPr
 
     return (
       <div
-        className={`w-full bg-emerald-950/40 border border-emerald-800/40 rounded-lg p-3 text-xs text-emerald-200/90 flex items-start gap-2.5 backdrop-blur-sm ${className}`}
+        className={`flex w-full items-start gap-2.5 rounded-xl bg-emerald-500/10 p-3 text-xs text-emerald-900 ring-1 ring-inset ring-emerald-500/25 dark:text-emerald-100 ${className}`}
       >
-        <Info className="h-4 w-4 shrink-0 text-emerald-400 mt-0.5" />
+        <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
         <p className="leading-relaxed">{displayMessage}</p>
       </div>
     );
@@ -55,9 +55,9 @@ export function Banner({ type = "synthetic", message, className = "" }: BannerPr
 
   return (
     <div
-      className={`w-full bg-slate-900/60 border border-slate-800 rounded-lg p-3 text-xs text-slate-300 flex items-start gap-2.5 backdrop-blur-sm ${className}`}
+      className={`flex w-full items-start gap-2.5 rounded-xl bg-black/[0.03] p-3 text-xs text-neutral-700 ring-1 ring-inset ring-black/[0.06] dark:bg-white/[0.04] dark:text-neutral-300 dark:ring-white/[0.08] ${className}`}
     >
-      <Info className="h-4 w-4 shrink-0 text-cyan-400 mt-0.5" />
+      <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-cyan-600 dark:text-cyan-400" />
       <p className="leading-relaxed">{message}</p>
     </div>
   );

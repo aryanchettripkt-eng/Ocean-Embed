@@ -171,6 +171,24 @@ describe("GuideDrawer", () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
+  it("shows three typing dots (not a spinner) while the guide is answering", async () => {
+    let resolve: (r: ChatResponse) => void = () => {};
+    vi.spyOn(apiClient, "postChat").mockImplementation(() => new Promise((r) => (resolve = r)));
+    render(<GuideDrawer meta={meta} state={base} onNavigate={vi.fn(() => ({ summary: null, undoToken: null }))} onUndo={() => {}} onClose={() => {}} />);
+    fireEvent.click(screen.getByText("Show me the warmest water today"));
+
+    const status = await screen.findByRole("status");
+    const dots = screen.getByTestId("typing-dots");
+    expect(status).toContainElement(dots);
+    expect(dots.querySelectorAll(".hud-typing-dot")).toHaveLength(3);
+    expect(status).toHaveTextContent("Looking at the data…");
+    expect(status.querySelector(".animate-spin")).toBeNull();
+
+    await act(async () => resolve(chat({ answer: "Warmest here." })));
+    expect(await screen.findByText("Warmest here.")).toBeInTheDocument();
+    expect(screen.queryByTestId("typing-dots")).not.toBeInTheDocument();
+  });
+
   it("shows a friendly message on 429", async () => {
     vi.spyOn(apiClient, "postChat").mockRejectedValue(new ApiError(429, "rate_limited", "slow down"));
     render(<GuideDrawer meta={meta} state={base} onNavigate={vi.fn()} onUndo={() => {}} onClose={() => {}} />);

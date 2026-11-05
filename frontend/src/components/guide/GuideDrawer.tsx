@@ -6,7 +6,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Send, ShieldQuestion, Undo2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, ShieldQuestion, Undo2, X } from "lucide-react";
 
 import {
   ApiError,
@@ -18,6 +18,7 @@ import {
 import type { ExplorerState } from "../../lib/url-state";
 import { formatDepth } from "../../lib/format";
 import { MicButton } from "./MicButton";
+import { TypingDots } from "../common/TypingDots";
 
 export const CHAT_TIMEOUT_MS = 25_000;
 const MAX_HISTORY = 10;
@@ -55,7 +56,12 @@ export interface GuideDrawerProps {
   onClose: () => void;
   /** A message to send as soon as it arrives (e.g. the time machine's "Explain"). */
   prompt?: GuidePrompt | null;
+  /** Positioning classes; defaults to a fixed bottom sheet / right-hand card. */
+  placementClassName?: string;
 }
+
+const DEFAULT_PLACEMENT =
+  "fixed inset-x-3 bottom-3 h-[78vh] md:inset-x-auto md:right-4 md:top-20 md:bottom-4 md:h-auto md:w-[380px]";
 
 export function guideErrorMessage(err: unknown): string {
   if (err instanceof DOMException && err.name === "TimeoutError") {
@@ -89,6 +95,7 @@ export function GuideDrawer({
   onUndo,
   onClose,
   prompt,
+  placementClassName = DEFAULT_PLACEMENT,
 }: GuideDrawerProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -189,36 +196,35 @@ export function GuideDrawer({
     <aside
       role="dialog"
       aria-label="Ask the ocean"
-      className="fixed z-50 inset-x-0 bottom-0 h-[78vh] rounded-t-2xl md:rounded-none md:inset-x-auto md:right-0 md:top-14 md:bottom-0 md:h-auto md:w-[400px] flex flex-col bg-white dark:bg-slate-950 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 shadow-2xl"
+      className={`hud-glass z-50 flex flex-col overflow-hidden rounded-[20px] ${placementClassName}`}
     >
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Ask the ocean</h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+      <header className="hud-divider flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-3.5">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-neutral-950 dark:text-white">Ask the ocean</h2>
+          <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
             Ask a question and the map moves to show you.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close guide"
-          className="p-1.5 rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-900"
-        >
-          <X className="h-4 w-4" />
+        <button type="button" onClick={onClose} aria-label="Close guide" className="hud-icon-btn">
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </header>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3" aria-live="polite">
+      <div
+        ref={listRef}
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-3.5"
+        aria-live="polite"
+      >
         {turns.length === 0 && (
           <div className="space-y-2">
-            <p className="text-xs text-slate-500 dark:text-slate-400">Try one of these:</p>
+            <p className="hud-label">Try one of these</p>
             {starters.map((q) => (
               <button
                 key={q}
                 type="button"
                 onClick={() => void send(q)}
                 disabled={pending}
-                className="block w-full text-left text-xs px-3 py-2 rounded-lg border border-cyan-200 dark:border-cyan-900 bg-cyan-50 dark:bg-cyan-950/40 text-cyan-900 dark:text-cyan-100 hover:bg-cyan-100 dark:hover:bg-cyan-900/50 disabled:opacity-50"
+                className="block w-full rounded-2xl bg-black/[0.035] px-3.5 py-2.5 text-left text-xs text-neutral-800 ring-1 ring-inset ring-black/[0.05] transition-colors hover:bg-black/[0.06] disabled:opacity-50 dark:bg-white/[0.04] dark:text-neutral-200 dark:ring-white/[0.07] dark:hover:bg-white/[0.08]"
               >
                 {q}
               </button>
@@ -240,13 +246,14 @@ export function GuideDrawer({
         ))}
 
         {pending && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400" role="status">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Looking at the data…</span>
+          <div className="mr-10 flex items-center gap-3" role="status">
+            <div className="rounded-2xl rounded-bl-md bg-black/[0.04] px-3.5 py-3 text-neutral-500 dark:bg-white/[0.06] dark:text-neutral-400">
+              <TypingDots label="Looking at the data…" />
+            </div>
             <button
               type="button"
               onClick={() => abortRef.current?.controller.abort()}
-              className="ml-auto underline text-cyan-600 dark:text-cyan-400"
+              className="text-[11px] text-neutral-500 underline underline-offset-2 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
             >
               Cancel
             </button>
@@ -255,13 +262,13 @@ export function GuideDrawer({
       </div>
 
       <form
-        className="border-t border-slate-200 dark:border-slate-800 p-3 space-y-1.5"
+        className="hud-divider shrink-0 space-y-2 border-t p-3"
         onSubmit={(e) => {
           e.preventDefault();
           void send(input);
         }}
       >
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-1.5 rounded-2xl bg-black/[0.04] p-1.5 ring-1 ring-inset ring-black/[0.05] focus-within:ring-cyan-500/60 dark:bg-white/[0.05] dark:ring-white/[0.08]">
           <label htmlFor="guide-input" className="sr-only">
             Your question
           </label>
@@ -280,7 +287,7 @@ export function GuideDrawer({
               }
             }}
             placeholder="Ask about the ocean here…"
-            className="flex-1 resize-none text-sm rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-3 py-2 disabled:opacity-60"
+            className="min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none disabled:opacity-60 dark:text-neutral-100 dark:placeholder:text-neutral-500"
           />
           {meta.features.voice && (
             <MicButton disabled={pending} onTranscript={setInput} onAutoSend={(text) => void send(text)} />
@@ -289,15 +296,13 @@ export function GuideDrawer({
             type="submit"
             disabled={pending || !input.trim()}
             aria-label="Send"
-            className="p-2.5 rounded-lg bg-cyan-600 text-white disabled:opacity-40 hover:bg-cyan-500"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-400 text-neutral-950 transition-colors hover:bg-cyan-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400 disabled:bg-black/10 disabled:text-neutral-400 dark:disabled:bg-white/10 dark:disabled:text-neutral-500"
           >
-            <Send className="h-4 w-4" />
+            <ArrowUp aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
-        {providerLabel && (
-          <p className="text-[10px] text-slate-500 dark:text-slate-400">{providerLabel}</p>
-        )}
-        <p className="text-[10px] leading-snug text-slate-500 dark:text-slate-400">{meta.caveats.ai}</p>
+        {providerLabel && <p className="px-1 text-[10px] text-neutral-500 dark:text-neutral-400">{providerLabel}</p>}
+        <p className="px-1 text-[10px] leading-snug text-neutral-500 dark:text-neutral-400">{meta.caveats.ai}</p>
       </form>
     </aside>
   );
@@ -308,8 +313,10 @@ function TurnView({ turn, onUndo }: { turn: Turn; onUndo: () => void }) {
 
   if (turn.role === "user") {
     return (
-      <div className="ml-8 rounded-xl rounded-br-sm bg-cyan-600 text-white text-sm px-3 py-2 whitespace-pre-wrap break-words">
-        {turn.content}
+      <div className="ml-10 flex justify-end">
+        <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-neutral-900 px-3.5 py-2 text-sm text-white dark:bg-white dark:text-neutral-950">
+          {turn.content}
+        </div>
       </div>
     );
   }
@@ -317,17 +324,17 @@ function TurnView({ turn, onUndo }: { turn: Turn; onUndo: () => void }) {
   const r = turn.response;
   const ungrounded = r && r.grounded === false;
   return (
-    <div className="mr-4 space-y-1.5">
+    <div className="mr-6 space-y-1.5">
       <div
-        className={`rounded-xl rounded-bl-sm text-sm px-3 py-2 whitespace-pre-wrap break-words ${
+        className={`whitespace-pre-wrap break-words rounded-2xl rounded-bl-md px-3.5 py-2 text-sm ${
           turn.error
-            ? "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 border border-amber-200 dark:border-amber-900"
-            : "bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+            ? "bg-amber-500/10 text-amber-900 ring-1 ring-inset ring-amber-500/25 dark:text-amber-100"
+            : "bg-black/[0.04] text-neutral-900 dark:bg-white/[0.06] dark:text-neutral-100"
         }`}
       >
         {ungrounded && (
-          <span className="mb-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            <ShieldQuestion className="h-3 w-3" /> Couldn&apos;t verify
+          <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-black/[0.06] px-2 py-0.5 text-[10px] font-medium text-neutral-700 dark:bg-white/[0.08] dark:text-neutral-300">
+            <ShieldQuestion aria-hidden="true" className="h-3 w-3" /> Couldn&apos;t verify
           </span>
         )}
         {/* Plain text only: no HTML is ever rendered from the model (PRD_FRONTEND §4 Security) */}
@@ -335,13 +342,17 @@ function TurnView({ turn, onUndo }: { turn: Turn; onUndo: () => void }) {
       </div>
 
       {turn.nav?.summary && (
-        <div className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-          <span className="px-2 py-0.5 rounded-full bg-cyan-50 dark:bg-cyan-950/50 border border-cyan-200 dark:border-cyan-900">
+        <div className="flex items-center gap-2 text-[11px] text-neutral-600 dark:text-neutral-300">
+          <span className="rounded-full bg-cyan-500/10 px-2.5 py-0.5 ring-1 ring-inset ring-cyan-500/25">
             {turn.undone ? "Moved back" : turn.nav.summary}
           </span>
           {!turn.undone && turn.nav.undoToken != null && (
-            <button type="button" onClick={onUndo} className="inline-flex items-center gap-1 underline text-cyan-700 dark:text-cyan-400">
-              <Undo2 className="h-3 w-3" /> Undo
+            <button
+              type="button"
+              onClick={onUndo}
+              className="inline-flex items-center gap-1 text-neutral-600 underline underline-offset-2 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white"
+            >
+              <Undo2 aria-hidden="true" className="h-3 w-3" /> Undo
             </button>
           )}
         </div>
@@ -353,17 +364,17 @@ function TurnView({ turn, onUndo }: { turn: Turn; onUndo: () => void }) {
             type="button"
             aria-expanded={showData}
             onClick={() => setShowData(!showData)}
-            className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+            className="inline-flex items-center gap-1 text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
           >
-            {showData ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            {showData ? <ChevronDown aria-hidden="true" className="h-3 w-3" /> : <ChevronRight aria-hidden="true" className="h-3 w-3" />}
             Data used ({r.tool_calls.length})
           </button>
           {showData && (
             <ul className="mt-1 space-y-1">
               {r.tool_calls.map((c, i) => (
-                <li key={i} className="rounded-md bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 p-2">
-                  <p className="font-mono font-semibold text-slate-700 dark:text-slate-300">{c.name}</p>
-                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] text-slate-600 dark:text-slate-400">
+                <li key={i} className="rounded-xl bg-black/[0.03] p-2 ring-1 ring-inset ring-black/[0.05] dark:bg-white/[0.03] dark:ring-white/[0.07]">
+                  <p className="font-mono font-semibold text-neutral-700 dark:text-neutral-300">{c.name}</p>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[10px] text-neutral-600 dark:text-neutral-400">
                     {JSON.stringify({ arguments: c.arguments, result: c.result }, null, 1)}
                   </pre>
                 </li>

@@ -1,0 +1,53 @@
+{
+  "date": "2026-11-05",
+  "environment": "Isolated mock-backed Next.js production build on port 3004; Lighthouse mobile default profile",
+  "fixed_viewpoint": true,
+  "lighthouse_version": "13.6.0",
+  "scores": {
+    "performance": 95,
+    "accessibility": 100,
+    "best-practices": 96,
+    "seo": 100
+  },
+  "metrics": {
+    "lcp_ms": 3008.5107,
+    "cls": 0.00001328748658332952,
+    "tbt_ms": 24
+  },
+  "checks": {
+    "typecheck": "pass",
+    "lint": "pass",
+    "vitest": "116 passed",
+    "production_build": "pass",
+    "playwright": "40 passed"
+  },
+  "build": {
+    "landing_specific_kb": 11.7,
+    "initial_route_kb": 144,
+    "initial_route_gzip_bytes": 151876,
+    "deferred_animation_gzip_bytes": 168880,
+    "total_landing_gzip_bytes": 320756,
+    "excluded_development_mock_chunks": [
+      "static/chunks/202.69e2fb90fa73bf00.js",
+      "static/chunks/624.8af99b1f16e9153f.js"
+    ]
+  },
+  "initial_image_bytes": {
+    "desktop": 206646,
+    "mobile": 114856
+  },
+  "verified": [
+    "Rolling subdivided surface, traveling reef light and fish each change across frames.",
+    "No scene-wide pointermove registration; paused scene pixels and viewpoint remain identical after pointer movement.",
+    "Curved fish routes follow their headings and hide both wrap endpoints.",
+    "CTA glint responds to hover and keyboard focus and stops under reduced motion.",
+    "Reduced motion, pause/resume, offscreen suspension, context/asset failures, no-JS links, themes and Explorer arrival all pass."
+  ],
+  "notes": [
+    "No new dependencies, generated assets, scientific values or API/ML contract changes.",
+    "Hero images load eagerly; graphics initialization waits for decoded posters and an idle slot.",
+    "Best-practices score loses four points to the existing mock metadata connection race; no real model API was called.",
+    "These are local laboratory measurements, not field-performance guarantees.",
+    "Tests ran on this machine's Node 26.13.0; the project target remains Node 22. Existing jsdom canvas/Node localStorage warnings remain."
+  ]
+}

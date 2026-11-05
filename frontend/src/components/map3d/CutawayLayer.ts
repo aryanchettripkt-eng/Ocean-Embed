@@ -4,6 +4,7 @@
  * 20°C isotherm line, soft shadow, perimeter outline, and exploded layers mode.
  */
 
+import { gsap, DURATION } from "../../lib/motion";
 import type { CustomLayerInterface, CustomRenderMethod, Map as MapLibreMap } from "maplibre-gl";
 import type { MapResponse, SectionResponse } from "../../lib/api/client";
 import {
@@ -32,6 +33,7 @@ export interface CutawayLayerOptions {
   availableDepths: number[];
   colorRanges?: { depth_m: number; vmin: number; vmax: number }[];
   isDark?: boolean;
+  dotMode?: boolean;
 }
 
 export class CutawayLayer implements CustomLayerInterface {
@@ -78,11 +80,22 @@ export class CutawayLayer implements CustomLayerInterface {
   private currentZ = 0.0;
   private targetZ = 0.0;
   private heightMercator = 0.05; // 1/3 of region width
-  private animating = false;
+  /** GSAP tween easing the top face to a new depth (the "dive"). */
+  private diveTween: gsap.core.Tween | null = null;
 
   private smoothed = false;
   private exploded = false;
   private showContours = true;
+  private dotMode = true;
+  private activeField: "pred" | "glorys" | "error" = "pred";
+  private lutBalanceTexture: WebGLTexture | null = null;
+  private topFaceGridSize: [number, number] = [240, 120];
+  private wallGridSizes: Record<WallId, [number, number]> = {
+    south: [240, 15],
+    north: [240, 15],
+    west: [120, 15],
+    east: [120, 15],
+  };
   private vminTop = 15.0;
   private vmaxTop = 30.0;
   private vminWall = 2.0;
@@ -98,6 +111,7 @@ export class CutawayLayer implements CustomLayerInterface {
     this.maxDepth_m = Math.max(...options.availableDepths, 1000);
     this.colorRanges = options.colorRanges;
     this.isDark = options.isDark ?? true;
+    this.dotMode = options.dotMode ?? true;
 
     // Block height is 1/3 of region width in Mercator coordinates
     const widthMerc = (this.region.lon_max - this.region.lon_min) / 360.0;
@@ -120,17 +134,27 @@ export class CutawayLayer implements CustomLayerInterface {
     this.initShaders();
     this.initBuffers();
     this.lutTexture = createLutTexture(gl, "thermal");
+    this.lutBalanceTexture = createLutTexture(gl, "balance");
   }
 
   setDepth(depth_m: number, immediate: boolean = false): void {
     this.currentDepth_m = depth_m;
     this.targetZ = depthToZ(depth_m, this.maxDepth_m, this.heightMercator);
 
+    this.diveTween?.kill();
+    this.diveTween = null;
     if (immediate) {
       this.currentZ = this.targetZ;
-      this.animating = false;
     } else {
-      this.animating = true;
+      this.diveTween = gsap.to(this, {
+        currentZ: this.targetZ,
+        duration: DURATION.dive,
+        ease: "power2.out",
+        onUpdate: () => this.map?.triggerRepaint(),
+        onComplete: () => {
+          this.diveTween = null;
+        },
+      });
     }
     this.map?.triggerRepaint();
   }
@@ -139,6 +163,7 @@ export class CutawayLayer implements CustomLayerInterface {
     if (!this.gl) return;
     this.vminTop = vmin;
     this.vmaxTop = vmax;
+    this.activeField = mapData.field === "error" ? "error" : mapData.field === "glorys" ? "glorys" : "pred";
 
     if (this.topFaceTexture) {
       this.gl.deleteTexture(this.topFaceTexture);
@@ -147,6 +172,9 @@ export class CutawayLayer implements CustomLayerInterface {
 
     const width = mapData.lon.length;
     const height = mapData.lat.length;
+    if (width > 0 && height > 0) {
+      this.topFaceGridSize = [width, height];
+    }
     this.topFaceTexture = createGridTexture(
       this.gl,
       width,
@@ -172,6 +200,12 @@ export class CutawayLayer implements CustomLayerInterface {
     // Section shape: [depths][positions]
     const width = section.positions.length;
     const height = section.depths_m.length;
+    if (width > 0 && height > 0) {
+      this.wallGridSizes[wallId] = [width, height];
+    }
+
+    const wallMin = section.field === "error" ? this.vminTop : this.vminWall;
+    const wallMax = section.field === "error" ? this.vmaxTop : this.vmaxWall;
 
     this.wallTextures[wallId] = createGridTexture(
       this.gl,
@@ -179,8 +213,8 @@ export class CutawayLayer implements CustomLayerInterface {
       height,
       section.values,
       section.coverage,
-      this.vminWall,
-      this.vmaxWall,
+      wallMin,
+      wallMax,
       this.smoothed
     );
     this.map?.triggerRepaint();
@@ -203,6 +237,11 @@ export class CutawayLayer implements CustomLayerInterface {
 
   setIsDark(isDark: boolean): void {
     this.isDark = isDark;
+    this.map?.triggerRepaint();
+  }
+
+  setDotMode(dotMode: boolean): void {
+    this.dotMode = dotMode;
     this.map?.triggerRepaint();
   }
 
@@ -230,18 +269,6 @@ export class CutawayLayer implements CustomLayerInterface {
   render: CustomRenderMethod = (gl, matrix) => {
     if (!this.gl || !(gl instanceof WebGL2RenderingContext) || !this.map) return;
     this.latestMatrix = Array.from(matrix as unknown as ArrayLike<number>);
-
-    // Update dive easing
-    if (this.animating) {
-      const diff = this.targetZ - this.currentZ;
-      if (Math.abs(diff) < 0.0001) {
-        this.currentZ = this.targetZ;
-        this.animating = false;
-      } else {
-        this.currentZ += diff * 0.15; // smooth ~300ms ease
-        this.map.triggerRepaint();
-      }
-    }
 
     this.gl.enable(this.gl.DEPTH_TEST);
     this.gl.depthFunc(this.gl.LEQUAL);
@@ -321,6 +348,8 @@ export class CutawayLayer implements CustomLayerInterface {
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.topFaceVBO);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, verts, this.gl.DYNAMIC_DRAW);
 
+    const activeLut = this.activeField === "error" ? (this.lutBalanceTexture ?? this.lutTexture) : this.lutTexture;
+
     // Set uniforms
     const uMatrix = this.gl.getUniformLocation(this.topFaceProgram, "u_matrix");
     const uDataTex = this.gl.getUniformLocation(this.topFaceProgram, "u_data_tex");
@@ -330,20 +359,24 @@ export class CutawayLayer implements CustomLayerInterface {
     const uOpacity = this.gl.getUniformLocation(this.topFaceProgram, "u_opacity");
     const uContours = this.gl.getUniformLocation(this.topFaceProgram, "u_show_contours");
     const uIsDark = this.gl.getUniformLocation(this.topFaceProgram, "u_is_dark");
+    const uDotMode = this.gl.getUniformLocation(this.topFaceProgram, "u_dot_mode");
+    const uGridSize = this.gl.getUniformLocation(this.topFaceProgram, "u_grid_size");
 
     this.gl.uniformMatrix4fv(uMatrix, false, matrix as unknown as Float32List);
     this.gl.uniform1f(uVmin, this.vminTop);
     this.gl.uniform1f(uVmax, this.vmaxTop);
     this.gl.uniform1f(uOpacity, opacity);
-    this.gl.uniform1i(uContours, this.showContours ? 1 : 0);
+    this.gl.uniform1i(uContours, this.showContours && this.activeField !== "error" ? 1 : 0);
     this.gl.uniform1i(uIsDark, this.isDark ? 1 : 0);
+    this.gl.uniform1i(uDotMode, this.dotMode ? 1 : 0);
+    this.gl.uniform2f(uGridSize, this.topFaceGridSize[0], this.topFaceGridSize[1]);
 
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.topFaceTexture);
     this.gl.uniform1i(uDataTex, 0);
 
     this.gl.activeTexture(this.gl.TEXTURE1);
-    this.gl.bindTexture(this.gl.TEXTURE_2D, this.lutTexture);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, activeLut);
     this.gl.uniform1i(uLutTex, 1);
 
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
@@ -432,6 +465,11 @@ export class CutawayLayer implements CustomLayerInterface {
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.wallVBO);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, verts, this.gl.DYNAMIC_DRAW);
 
+    const activeLut = this.activeField === "error" ? (this.lutBalanceTexture ?? this.lutTexture) : this.lutTexture;
+    const wallMin = this.activeField === "error" ? this.vminTop : this.vminWall;
+    const wallMax = this.activeField === "error" ? this.vmaxTop : this.vmaxWall;
+    const wallGrid = this.wallGridSizes[wallId];
+
     const uMatrix = this.gl.getUniformLocation(this.wallProgram, "u_matrix");
     const uSecTex = this.gl.getUniformLocation(this.wallProgram, "u_section_tex");
     const uLutTex = this.gl.getUniformLocation(this.wallProgram, "u_lut_tex");
@@ -439,19 +477,25 @@ export class CutawayLayer implements CustomLayerInterface {
     const uVmax = this.gl.getUniformLocation(this.wallProgram, "u_vmax");
     const uOpacity = this.gl.getUniformLocation(this.wallProgram, "u_opacity");
     const uContours = this.gl.getUniformLocation(this.wallProgram, "u_show_contours");
+    const uIsDark = this.gl.getUniformLocation(this.wallProgram, "u_is_dark");
+    const uDotMode = this.gl.getUniformLocation(this.wallProgram, "u_dot_mode");
+    const uWallGrid = this.gl.getUniformLocation(this.wallProgram, "u_wall_grid");
 
     this.gl.uniformMatrix4fv(uMatrix, false, matrix as unknown as Float32List);
-    this.gl.uniform1f(uVmin, this.vminWall);
-    this.gl.uniform1f(uVmax, this.vmaxWall);
+    this.gl.uniform1f(uVmin, wallMin);
+    this.gl.uniform1f(uVmax, wallMax);
     this.gl.uniform1f(uOpacity, 1.0);
-    this.gl.uniform1i(uContours, this.showContours ? 1 : 0);
+    this.gl.uniform1i(uContours, this.showContours && this.activeField !== "error" ? 1 : 0);
+    this.gl.uniform1i(uIsDark, this.isDark ? 1 : 0);
+    this.gl.uniform1i(uDotMode, this.dotMode ? 1 : 0);
+    this.gl.uniform2f(uWallGrid, wallGrid[0], wallGrid[1]);
 
     this.gl.activeTexture(this.gl.TEXTURE0);
     this.gl.bindTexture(this.gl.TEXTURE_2D, wallTex);
     this.gl.uniform1i(uSecTex, 0);
 
     this.gl.activeTexture(this.gl.TEXTURE1);
-    this.gl.bindTexture(this.gl.TEXTURE_2D, this.lutTexture);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, activeLut);
     this.gl.uniform1i(uLutTex, 1);
 
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
@@ -567,6 +611,8 @@ export class CutawayLayer implements CustomLayerInterface {
       uniform float u_opacity;
       uniform int u_show_contours;
       uniform int u_is_dark;
+      uniform int u_dot_mode;
+      uniform vec2 u_grid_size;
 
       out vec4 fragColor;
 
@@ -574,7 +620,18 @@ export class CutawayLayer implements CustomLayerInterface {
         vec4 data = texture(u_data_tex, v_uv);
         int cov = int(data.g * 255.0 + 0.5);
 
+        vec3 bg = (u_is_dark == 1) ? vec3(0.028, 0.051, 0.071) : vec3(0.945, 0.961, 0.976);
+        vec2 cell = fract(v_uv * u_grid_size) - 0.5;
+        float dist = length(cell);
+        float aa = clamp(fwidth(dist), 0.03, 0.14);
+
         if (cov == 0) {
+          if (u_dot_mode == 1) {
+            float landMask = smoothstep(0.24 + aa, 0.24 - aa, dist) * 0.82;
+            vec3 landDot = (u_is_dark == 1) ? vec3(0.494, 0.404, 0.298) : vec3(0.580, 0.541, 0.486);
+            fragColor = vec4(mix(bg, landDot, landMask), u_opacity);
+            return;
+          }
           if (u_is_dark == 1) {
             fragColor = vec4(0.12, 0.15, 0.20, u_opacity);
           } else {
@@ -584,6 +641,12 @@ export class CutawayLayer implements CustomLayerInterface {
         }
 
         if (cov == 2) {
+          if (u_dot_mode == 1) {
+            float ring = smoothstep(0.37 + aa, 0.37 - aa, dist) * smoothstep(0.19 - aa, 0.19 + aa, dist);
+            vec3 ringCol = (u_is_dark == 1) ? vec3(0.58, 0.64, 0.72) : vec3(0.28, 0.33, 0.41);
+            fragColor = vec4(mix(bg, ringCol, ring * 0.92), u_opacity);
+            return;
+          }
           vec2 coord = gl_FragCoord.xy;
           float stripe = mod(coord.x + coord.y, 8.0);
           if (stripe < 2.5) {
@@ -597,6 +660,7 @@ export class CutawayLayer implements CustomLayerInterface {
         float norm = (data.r * 256.0 + data.b) / 257.0;
         float temp = u_vmin + norm * (u_vmax - u_vmin);
         vec4 col = texture(u_lut_tex, vec2(norm, 0.5));
+        float isoStrength = 0.0;
 
         if (u_show_contours == 1) {
           float c = abs(fract(temp * 0.5) - 0.5);
@@ -609,9 +673,18 @@ export class CutawayLayer implements CustomLayerInterface {
           float isoDiff = abs(temp - 20.0);
           float fwIso = fwidth(temp);
           if (fwIso > 0.0001) {
-            float iso = smoothstep(fwIso * 1.8, 0.0, isoDiff);
-            col.rgb = mix(col.rgb, vec3(1.0, 0.95, 0.35), iso * 0.85);
+            isoStrength = smoothstep(fwIso * 1.8, 0.0, isoDiff);
+            col.rgb = mix(col.rgb, vec3(1.0, 0.95, 0.35), isoStrength * 0.85);
           }
+        }
+
+        if (u_dot_mode == 1) {
+          float dotMask = smoothstep(0.38 + aa, 0.38 - aa, dist);
+          float core = smoothstep(0.18, 0.0, dist) * 0.11;
+          vec3 litDot = min(vec3(1.0), col.rgb + core);
+          float maskWithIso = max(dotMask, isoStrength * 0.85);
+          fragColor = vec4(mix(bg, litDot, maskWithIso), col.a * u_opacity);
+          return;
         }
 
         fragColor = vec4(col.rgb, col.a * u_opacity);
@@ -630,15 +703,23 @@ export class CutawayLayer implements CustomLayerInterface {
       uniform float u_vmax;
       uniform float u_opacity;
       uniform int u_show_contours;
+      uniform int u_is_dark;
+      uniform int u_dot_mode;
+      uniform vec2 u_wall_grid;
 
       out vec4 fragColor;
 
       void main() {
         vec4 data = texture(u_section_tex, v_uv);
         int cov = int(data.g * 255.0 + 0.5);
+        vec3 bg = (u_is_dark == 1) ? vec3(0.025, 0.045, 0.065) : vec3(0.92, 0.94, 0.96);
 
         if (cov == 0) {
-          fragColor = vec4(0.1, 0.14, 0.18, u_opacity);
+          if (u_dot_mode == 1) {
+            fragColor = vec4(bg, u_opacity);
+          } else {
+            fragColor = vec4(0.1, 0.14, 0.18, u_opacity);
+          }
           return;
         }
 
@@ -649,6 +730,7 @@ export class CutawayLayer implements CustomLayerInterface {
         // Shading: darken slightly with depth
         float depthFactor = 1.0 - 0.25 * v_uv.y;
         col.rgb *= depthFactor;
+        float isoStrength = 0.0;
 
         if (u_show_contours == 1) {
           float c = abs(fract(temp * 0.5) - 0.5);
@@ -661,9 +743,18 @@ export class CutawayLayer implements CustomLayerInterface {
           float isoDiff = abs(temp - 20.0);
           float fwIso = fwidth(temp);
           if (fwIso > 0.0001) {
-            float iso = smoothstep(fwIso * 1.8, 0.0, isoDiff);
-            col.rgb = mix(col.rgb, vec3(1.0, 0.95, 0.35), iso * 0.85);
+            isoStrength = smoothstep(fwIso * 1.8, 0.0, isoDiff);
+            col.rgb = mix(col.rgb, vec3(1.0, 0.95, 0.35), isoStrength * 0.85);
           }
+        }
+
+        if (u_dot_mode == 1) {
+          float colDist = abs(fract(v_uv.x * u_wall_grid.x) - 0.5);
+          float aaX = clamp(fwidth(colDist), 0.03, 0.16);
+          float colMask = smoothstep(0.36 + aaX, 0.36 - aaX, colDist);
+          float mask = max(colMask, isoStrength * 0.85);
+          fragColor = vec4(mix(bg, col.rgb, mask), col.a * u_opacity);
+          return;
         }
 
         fragColor = vec4(col.rgb, col.a * u_opacity);
@@ -734,6 +825,8 @@ export class CutawayLayer implements CustomLayerInterface {
   }
 
   onRemove(): void {
+    this.diveTween?.kill();
+    this.diveTween = null;
     if (!this.gl) return;
 
     if (this.topFaceProgram) this.gl.deleteProgram(this.topFaceProgram);
@@ -748,6 +841,7 @@ export class CutawayLayer implements CustomLayerInterface {
     if (this.lineVBO) this.gl.deleteBuffer(this.lineVBO);
 
     if (this.lutTexture) this.gl.deleteTexture(this.lutTexture);
+    if (this.lutBalanceTexture) this.gl.deleteTexture(this.lutBalanceTexture);
     if (this.topFaceTexture) this.gl.deleteTexture(this.topFaceTexture);
 
     for (const id of Object.keys(this.wallTextures) as WallId[]) {

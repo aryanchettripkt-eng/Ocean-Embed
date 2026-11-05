@@ -65,7 +65,7 @@ export function ExploreLink({
     import("maplibre-gl").catch(() => {});
   }, [router, targetHref]);
 
-  // 3. On click: check reduced-motion / startViewTransition
+  // 3. On click: play the GSAP arrival (any browser) unless the user prefers reduced motion
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     // Only intercept normal left clicks without modifiers
     if (e.button !== 0 || e.metaKey || e.altKey || e.ctrlKey || e.shiftKey) {
@@ -73,20 +73,18 @@ export function ExploreLink({
     }
 
     e.preventDefault();
+    window.dispatchEvent(new Event("oceanscope:focus-explorer"));
 
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const hasViewTransition =
-      typeof document !== "undefined" && "startViewTransition" in document;
-
-    if (prefersReducedMotion || !hasViewTransition) {
+    if (prefersReducedMotion) {
       router.push(targetHref);
       return;
     }
 
-    // Trigger dive overlay animation
+    // Rise out of the ocean into the Explorer (DiveOverlay + ArrivalOverlay)
     window.dispatchEvent(
       new CustomEvent("oceanscope:dive", { detail: { href: targetHref } })
     );
@@ -96,6 +94,7 @@ export function ExploreLink({
     <a
       href={targetHref}
       className={`${styles.ctaButton} ${className}`}
+      data-micro="cta"
       onClick={handleClick}
       onMouseEnter={handleWarm}
       onFocus={handleWarm}
@@ -103,8 +102,7 @@ export function ExploreLink({
     >
       {children ?? (
         <>
-          <span>EXPLORE THE OCEAN</span>
-          <span aria-hidden="true">→</span>
+          <span>Explore the Ocean</span>
         </>
       )}
     </a>

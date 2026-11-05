@@ -97,44 +97,47 @@ export function DatePicker({
     if (target) onChange(target);
   };
 
+  const fillPct = `${(currentSliderValue / totalDays) * 100}%`;
+
   return (
-    <div className={`flex flex-col gap-2.5 ${className}`}>
-      {/* Top Header Row */}
-      <div className="flex items-center justify-between">
-        <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <Calendar className="h-3.5 w-3.5 text-cyan-400" />
+    <div className={`flex flex-col gap-2 ${className}`}>
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor="explorer-date-input" className="hud-label flex items-center gap-1.5">
+          <Calendar aria-hidden="true" className="h-3.5 w-3.5" />
           <span>Date</span>
         </label>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <SplitBadge split={split} />
           {latestLiveDate && (
             <button
               type="button"
               onClick={() => onChange(latestLiveDate)}
-              className="text-[11px] font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-950/50 hover:bg-emerald-900/50 border border-emerald-700/60 px-2 py-0.5 rounded transition-all flex items-center gap-1"
+              className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 dark:text-emerald-300"
               title="Jump to latest live date"
             >
-              <Sparkles className="h-3 w-3" />
+              <Sparkles aria-hidden="true" className="h-3 w-3" />
               <span>Latest</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Date display & step buttons */}
-      <div className="flex items-center justify-between bg-slate-900/80 border border-slate-800 rounded-lg p-1.5 shadow-sm">
+      {/* Step buttons around the native date input */}
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           disabled={!canStepPrev}
           onClick={() => handleStep(-1)}
-          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          className="hud-icon-btn"
           title="Previous day (-1d)"
+          aria-label="Previous day"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft aria-hidden="true" className="h-4 w-4" />
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex h-8 min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-black/[0.04] px-2 dark:bg-white/[0.05]">
           <input
+            id="explorer-date-input"
             type="date"
             min={startDate}
             max={endDate}
@@ -142,10 +145,10 @@ export function DatePicker({
             onChange={(e) => {
               if (e.target.value) onChange(served.snap(e.target.value));
             }}
-            className="bg-transparent text-sm font-semibold text-slate-100 text-center border-none focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded px-1.5 cursor-pointer"
+            className="min-w-0 cursor-pointer rounded bg-transparent px-1 text-center text-sm font-medium tabular-nums text-neutral-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500 dark:text-neutral-100 dark:[color-scheme:dark]"
           />
-          <span className="text-xs text-slate-400 font-mono hidden sm:inline">
-            ({formatDate(date)})
+          <span className="hidden whitespace-nowrap text-[11px] text-neutral-500 sm:inline dark:text-neutral-400">
+            {formatDate(date)}
           </span>
         </div>
 
@@ -153,30 +156,34 @@ export function DatePicker({
           type="button"
           disabled={!canStepNext}
           onClick={() => handleStep(1)}
-          className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          className="hud-icon-btn"
           title="Next day (+1d)"
+          aria-label="Next day"
         >
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight aria-hidden="true" className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Date slider and Play button */}
-      <div className="flex items-center gap-2 pt-1">
+      {/* Play + scrubber */}
+      <div className="flex items-center gap-2.5">
         <button
           type="button"
+          aria-pressed={isPlaying}
           onClick={() => setIsPlaying(!isPlaying)}
-          className={`p-1.5 rounded-lg border text-xs font-medium transition-all flex items-center justify-center shrink-0 ${
-            isPlaying
-              ? "bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20"
-              : "bg-slate-800 text-slate-300 hover:text-white border-slate-700 hover:bg-slate-700"
-          }`}
+          className={`hud-icon-btn ${isPlaying ? "!border-transparent !bg-amber-400 !text-neutral-950" : ""}`}
           title={isPlaying ? "Pause animation" : "Play daily animation (2 fps)"}
+          aria-label="Play daily animation"
         >
-          {isPlaying ? <Square className="h-3.5 w-3.5 fill-current" /> : <Play className="h-3.5 w-3.5 fill-current" />}
+          {isPlaying ? (
+            <Square aria-hidden="true" className="h-3 w-3 fill-current" />
+          ) : (
+            <Play aria-hidden="true" className="ml-0.5 h-3 w-3 fill-current" />
+          )}
         </button>
 
         <input
           type="range"
+          aria-label="Date scrubber"
           min={0}
           max={totalDays}
           step={1}
@@ -185,13 +192,14 @@ export function DatePicker({
             const val = parseInt(e.target.value, 10);
             onChange(served.at(val));
           }}
-          className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:accent-cyan-300 transition-all"
+          className="hud-range"
+          style={{ "--fill": fillPct } as React.CSSProperties}
         />
       </div>
 
-      <div className="flex justify-between text-[10px] text-slate-500 font-mono px-0.5 -mt-1">
-        <span>{startDate}</span>
-        <span>{endDate}</span>
+      <div className="flex justify-between pl-[38px] text-[10px] tabular-nums text-neutral-500">
+        <span>{formatDate(startDate)}</span>
+        <span>{formatDate(endDate)}</span>
       </div>
     </div>
   );

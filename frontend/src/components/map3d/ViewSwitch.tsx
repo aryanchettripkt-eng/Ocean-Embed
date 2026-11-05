@@ -1,12 +1,16 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Box, Layers, Play, RotateCw, Sparkles, Map as MapIcon } from "lucide-react";
+import { Box, Grip, Grid2x2, Layers, Play, RotateCw, Sparkles, Map as MapIcon, Waves } from "lucide-react";
+import type { GridStyle } from "../../lib/url-state";
 import { isWebGL2Supported } from "./webglUtils";
+import { Presence, Spin } from "../common/Motion";
 
 interface ViewSwitchProps {
   view: "map" | "3d";
   onChangeView: (view: "map" | "3d") => void;
+  gridStyle?: GridStyle;
+  onChangeGridStyle?: (style: GridStyle) => void;
   isTouring?: boolean;
   onToggleTour?: () => void;
   isExploded?: boolean;
@@ -15,11 +19,20 @@ interface ViewSwitchProps {
   onToggleSmoothed?: () => void;
   showContours?: boolean;
   onToggleContours?: () => void;
+  /** Extra toolbar buttons (layers, Meta tools) rendered inside the same pill after a divider. */
+  children?: React.ReactNode;
+}
+
+/** Thin vertical rule between toolbar groups. */
+export function ToolbarDivider() {
+  return <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-black/10 dark:bg-white/10" />;
 }
 
 export function ViewSwitch({
   view,
   onChangeView,
+  gridStyle = "dots",
+  onChangeGridStyle,
   isTouring = false,
   onToggleTour,
   isExploded = false,
@@ -28,6 +41,7 @@ export function ViewSwitch({
   onToggleSmoothed,
   showContours = true,
   onToggleContours,
+  children,
 }: ViewSwitchProps) {
   const [canUse3D, setCanUse3D] = useState(true);
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
@@ -53,113 +67,139 @@ export function ViewSwitch({
     return () => window.removeEventListener("resize", checkSupport);
   }, []);
 
+  const btn = (active: boolean) => `hud-btn ${active ? "hud-btn-active" : ""}`;
+
   return (
     <div
-      className="flex flex-col gap-2 pointer-events-auto"
+      className="pointer-events-auto flex max-w-full flex-col items-center gap-2"
       onMouseDown={(e) => e.stopPropagation()}
       onTouchStart={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Primary View Segmented Toggle */}
-      <div className="flex items-center p-1 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg">
-        <button
-          type="button"
-          onClick={() => onChangeView("map")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-            view === "map"
-              ? "bg-cyan-500 text-white font-semibold shadow-sm"
-              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          }`}
+      {/* 3D-only options float just above the main toolbar */}
+      <Presence show={view === "3d"} from="bottom" className="max-w-full">
+        <div
+          role="group"
+          aria-label="3D options"
+          className="hud-glass flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full p-1"
         >
-          <MapIcon className="h-3.5 w-3.5" />
-          <span>2D Map</span>
-        </button>
-
-        <button
-          type="button"
-          disabled={!canUse3D}
-          onClick={() => canUse3D && onChangeView("3d")}
-          title={fallbackReason ?? "Switch to 3D Ocean Cutaway"}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-            view === "3d"
-              ? "bg-cyan-500 text-white font-semibold shadow-sm"
-              : canUse3D
-              ? "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-              : "text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60"
-          }`}
-        >
-          <Box className="h-3.5 w-3.5" />
-          <span>3D Cutaway</span>
-        </button>
-      </div>
-
-      {/* 3D-specific toolbar controls */}
-      {view === "3d" && (
-        <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg text-xs animate-in fade-in duration-200">
           {onToggleTour && (
             <button
               type="button"
+              aria-pressed={isTouring}
               onClick={onToggleTour}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
-                isTouring
-                  ? "bg-amber-500 text-slate-950 font-semibold"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-              }`}
+              className={btn(isTouring)}
               title="Automatically rotate around the ocean block"
             >
-              {isTouring ? <RotateCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+              {isTouring ? (
+                <Spin>
+                  <RotateCw aria-hidden="true" className="h-3.5 w-3.5" />
+                </Spin>
+              ) : (
+                <Play aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
               <span>Tour</span>
             </button>
           )}
-
           {onToggleExploded && (
             <button
               type="button"
+              aria-pressed={isExploded}
               onClick={onToggleExploded}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
-                isExploded
-                  ? "bg-cyan-500 text-white font-semibold"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-              }`}
+              className={btn(isExploded)}
               title="Explode into stacked depth sheets"
             >
-              <Layers className="h-3 w-3" />
+              <Layers aria-hidden="true" className="h-3.5 w-3.5" />
               <span>Exploded</span>
             </button>
           )}
-
           {onToggleSmoothed && (
             <button
               type="button"
+              aria-pressed={isSmoothed}
               onClick={onToggleSmoothed}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors ${
-                isSmoothed
-                  ? "bg-cyan-500 text-white font-semibold"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-              }`}
+              className={btn(isSmoothed)}
               title="Toggle between linear smoothed display and exact raw grid cells"
             >
-              <Sparkles className="h-3 w-3" />
+              <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
               <span>{isSmoothed ? "Smoothed" : "Exact cells"}</span>
             </button>
           )}
-
           {onToggleContours && (
             <button
               type="button"
+              aria-pressed={showContours}
               onClick={onToggleContours}
-              className={`px-2 py-1 rounded-md transition-colors ${
-                showContours
-                  ? "bg-cyan-500 text-white font-semibold"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-              }`}
+              className={btn(showContours)}
               title="Toggle 2°C contours and 20°C isotherm lines"
             >
+              <Waves aria-hidden="true" className="h-3.5 w-3.5" />
               <span>20°C Isotherm</span>
             </button>
           )}
         </div>
-      )}
+      </Presence>
+
+      {/* Main toolbar: view, grid style, then the page's tools */}
+      <div
+        role="toolbar"
+        aria-label="Map view and tools"
+        className="hud-glass flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full p-1 [scrollbar-width:none]"
+      >
+        <button
+          type="button"
+          aria-pressed={view === "map"}
+          aria-label="2D Map"
+          onClick={() => onChangeView("map")}
+          className={btn(view === "map")}
+          title="Flat map"
+        >
+          <MapIcon aria-hidden="true" className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">2D Map</span>
+        </button>
+        <button
+          type="button"
+          disabled={!canUse3D}
+          aria-pressed={view === "3d"}
+          aria-label="3D Cutaway"
+          onClick={() => canUse3D && onChangeView("3d")}
+          title={fallbackReason ?? "Switch to 3D Ocean Cutaway"}
+          className={btn(view === "3d")}
+        >
+          <Box aria-hidden="true" className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">3D Cutaway</span>
+        </button>
+
+        {onChangeGridStyle && (
+          <>
+            <ToolbarDivider />
+            <button
+              type="button"
+              aria-pressed={gridStyle === "dots"}
+              aria-label="Dots"
+              onClick={() => onChangeGridStyle("dots")}
+              title="Dot-matrix grid: one dot per 0.25° cell"
+              className={btn(gridStyle === "dots")}
+            >
+              <Grip aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Dots</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={gridStyle === "solid"}
+              aria-label="Classic"
+              onClick={() => onChangeGridStyle("solid")}
+              title="Classic continuous grid"
+              className={btn(gridStyle === "solid")}
+            >
+              <Grid2x2 aria-hidden="true" className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Classic</span>
+            </button>
+          </>
+        )}
+
+        {children}
+      </div>
     </div>
   );
 }

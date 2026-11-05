@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useTheme } from "../../lib/use-theme";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Waves, BarChart3, Info, ExternalLink, Sun, Moon, Compass } from "lucide-react";
@@ -10,33 +11,7 @@ import { Banner } from "./Banner";
 export function Header() {
   const pathname = usePathname();
   const { data: meta } = useMeta();
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-
-  useEffect(() => {
-    const saved = typeof window !== "undefined" ? (localStorage.getItem("theme") as "dark" | "light" | null) : null;
-    const initial = saved ?? "dark";
-    setTheme(initial);
-    if (initial === "dark") {
-      document.documentElement.classList.add("dark");
-      document.documentElement.classList.remove("light");
-    } else {
-      document.documentElement.classList.remove("dark");
-      document.documentElement.classList.add("light");
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("theme", next);
-    if (next === "dark") {
-      document.documentElement.classList.add("dark");
-      document.documentElement.classList.remove("light");
-    } else {
-      document.documentElement.classList.remove("dark");
-      document.documentElement.classList.add("light");
-    }
-  };
+  const { theme, toggleTheme } = useTheme();
 
   const navLinks = [
     { href: "/explore", label: "Explorer", icon: Waves, phoneOnly: false },
@@ -47,27 +22,27 @@ export function Header() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md transition-colors">
+    <header data-hud="header" className="hud-divider sticky top-0 z-40 w-full border-b bg-white/80 backdrop-blur-xl backdrop-saturate-150 dark:bg-[#0a0c0d]/80">
       <Banner type="synthetic" />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-        {/* Brand */}
-        <div className="flex items-center gap-6">
-          <Link href="/" className="flex items-center gap-2 group" aria-label="OceanScope AI Home">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 p-1.5 flex items-center justify-center shadow-lg shadow-cyan-900/30 group-hover:shadow-cyan-600/40 transition-all">
-              <Waves className="h-full w-full text-white" />
+      <div className="flex h-14 items-center justify-between gap-3 px-3 sm:px-5">
+        {/* Brand + navigation */}
+        <div className="flex min-w-0 items-center gap-3 sm:gap-5">
+          <Link href="/" className="group flex shrink-0 items-center gap-2.5" aria-label="OceanScope AI Home">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 p-1.5 shadow-[0_4px_14px_rgba(8,145,178,0.35)]">
+              <Waves aria-hidden="true" className="h-full w-full text-white" />
             </div>
-            <div className="flex flex-col">
-              <span className="font-bold text-base tracking-tight text-slate-900 dark:text-white group-hover:text-cyan-600 dark:group-hover:text-cyan-300 transition-colors">
+            <div className="hidden flex-col leading-tight sm:flex">
+              <span className="text-[15px] font-semibold tracking-tight text-neutral-950 dark:text-white">
                 OceanScope <span className="text-cyan-600 dark:text-cyan-400">AI</span>
               </span>
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 -mt-1 hidden sm:inline">
-                Subsurface Ocean Temperature
-              </span>
+              <span className="text-[10px] text-neutral-500 dark:text-neutral-400">Subsurface Ocean Temperature</span>
             </div>
           </Link>
 
-          {/* Navigation */}
-          <nav className="flex items-center gap-1 sm:gap-2">
+          <nav
+            aria-label="Main"
+            className="flex items-center gap-0.5 rounded-full bg-black/[0.04] p-1 dark:bg-white/[0.05]"
+          >
             {navLinks.map(({ href, label, icon: Icon, phoneOnly }) => {
               const isActive =
                 href === "/explore"
@@ -78,13 +53,10 @@ export function Header() {
                   key={href}
                   href={href}
                   aria-label={label}
-                  className={`${phoneOnly ? "flex md:hidden" : "flex"} items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors ${
-                    isActive
-                      ? "bg-slate-100 dark:bg-slate-800/90 text-cyan-700 dark:text-cyan-300 shadow-sm border border-slate-200 dark:border-slate-700/60 font-semibold"
-                      : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900/60"
-                  }`}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`hud-btn h-7 ${phoneOnly ? "md:hidden" : ""} ${isActive ? "hud-btn-active" : ""}`}
                 >
-                  <Icon className="h-4 w-4" />
+                  <Icon aria-hidden="true" className="h-3.5 w-3.5" />
                   {/* Icon-only below 640 px so the header fits a 360 px phone (PRD_FRONTEND §4) */}
                   <span className="hidden sm:inline">{label}</span>
                 </Link>
@@ -93,12 +65,14 @@ export function Header() {
           </nav>
         </div>
 
-        {/* Status / Model info & theme toggle */}
-        <div className="flex items-center gap-3">
+        {/* Run, theme, GitHub */}
+        <div className="flex shrink-0 items-center gap-1.5">
           {meta && (
-            <div className="hidden md:flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 px-2.5 py-1 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-cyan-500 dark:bg-cyan-400 animate-pulse" />
-              <span>Run: {meta.run_id}</span>
+            <div className="mr-1 hidden items-center gap-2 rounded-full bg-black/[0.04] px-3 py-1 text-[11px] text-neutral-600 md:flex dark:bg-white/[0.05] dark:text-neutral-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
+              <span>
+                Run <span className="font-medium text-neutral-900 dark:text-neutral-100">{meta.run_id}</span>
+              </span>
             </div>
           )}
 
@@ -106,25 +80,28 @@ export function Header() {
             type="button"
             onClick={toggleTheme}
             aria-label="Toggle dark/light theme"
-            className="p-1.5 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
+            className="hud-icon-btn h-8 w-8"
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           >
-            {theme === "dark" ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4 text-slate-700" />}
+            {theme === "dark" ? (
+              <Sun aria-hidden="true" className="h-4 w-4" />
+            ) : (
+              <Moon aria-hidden="true" className="h-4 w-4" />
+            )}
           </button>
 
           <a
             href="https://github.com/aryanchettripkt-eng/Ocean-Embed"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 flex items-center gap-1 p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
+            className="hud-btn"
             title="GitHub Repository"
           >
             <span className="hidden sm:inline">GitHub</span>
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
           </a>
         </div>
       </div>
     </header>
   );
 }
-

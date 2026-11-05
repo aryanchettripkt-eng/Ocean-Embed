@@ -7,11 +7,12 @@
  */
 
 import React from "react";
-import { Loader2, MessageCircle, X } from "lucide-react";
+import { MessageCircle, X } from "lucide-react";
 
 import { ApiError, type SegmentResponse } from "../../lib/api/client";
 import { formatDepth, formatTemp } from "../../lib/format";
 import type { BBox } from "../../lib/guide/ui-actions";
+import { TypingDots } from "../common/TypingDots";
 
 export function methodLabel(method: SegmentResponse["method"]): string {
   return method === "sam" ? "Selected by SAM 3.1" : "Selected by similar temperature (±0.5 °C)";
@@ -64,50 +65,50 @@ export function LassoPanel({ pending, error, result, onAsk, onClose }: LassoPane
   return (
     <section
       aria-label="Lasso selection"
-      className="w-full sm:w-[320px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl shadow-2xl"
+      className="hud-glass w-full overflow-hidden rounded-[20px] sm:w-[320px]"
     >
-      <header className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-800">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Lasso</h2>
-        <button type="button" onClick={onClose} aria-label="Close lasso" className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-900">
-          <X className="h-4 w-4 text-slate-500" />
+      <header className="hud-divider flex items-center justify-between gap-3 border-b px-4 py-3">
+        <h2 className="text-sm font-semibold text-neutral-950 dark:text-white">Lasso</h2>
+        <button type="button" onClick={onClose} aria-label="Close lasso" className="hud-icon-btn">
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </header>
-      <div className="p-3 text-xs text-slate-700 dark:text-slate-300 space-y-2" aria-live="polite">
+      <div className="space-y-2.5 p-4 text-xs text-neutral-700 dark:text-neutral-300" aria-live="polite">
         {!pending && !error && !result && <p>Tap the water to select an area.</p>}
         {pending && (
-          <p role="status" className="flex items-center gap-2">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Selecting…
+          <p role="status" className="flex items-center gap-2.5 text-neutral-500 dark:text-neutral-400">
+            <TypingDots label="Selecting" /> <span aria-hidden="true">Selecting…</span>
           </p>
         )}
-        {error && !pending && <p className="text-amber-700 dark:text-amber-300">{error}</p>}
+        {error && !pending && <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-amber-800 ring-1 ring-inset ring-amber-500/25 dark:text-amber-200">{error}</p>}
         {result && s && !pending && (
           <>
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-1">
-              <dt className="text-slate-500">Mean</dt>
-              <dd className="font-semibold">{formatTemp(s.mean)}</dd>
-              <dt className="text-slate-500">Min / max</dt>
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 tabular-nums">
+              <dt className="text-neutral-500 dark:text-neutral-400">Mean</dt>
+              <dd className="font-semibold text-neutral-950 dark:text-white">{formatTemp(s.mean)}</dd>
+              <dt className="text-neutral-500 dark:text-neutral-400">Min / max</dt>
               <dd>
                 {formatTemp(s.min)} / {formatTemp(s.max)}
               </dd>
-              <dt className="text-slate-500">Std. dev.</dt>
+              <dt className="text-neutral-500 dark:text-neutral-400">Std. dev.</dt>
               <dd>{s.std !== null && s.std !== undefined ? `${s.std.toFixed(2)} °C` : "n/a"}</dd>
-              <dt className="text-slate-500">Area</dt>
+              <dt className="text-neutral-500 dark:text-neutral-400">Area</dt>
               <dd>{Math.round(s.area_km2).toLocaleString("en-GB")} km²</dd>
-              <dt className="text-slate-500">Depth</dt>
+              <dt className="text-neutral-500 dark:text-neutral-400">Depth</dt>
               <dd>{formatDepth(result.depth_m)}</dd>
             </dl>
-            <p className="text-[11px] text-slate-500">
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
               {methodLabel(result.method)} · {result.provider_label}
               {result.capped ? " · area capped" : ""}
             </p>
-            <p className="text-[10px] leading-snug text-slate-500">{result.caveat}</p>
+            <p className="text-[10px] leading-snug text-neutral-500">{result.caveat}</p>
             {onAsk && (
               <button
                 type="button"
                 onClick={() => onAsk(result)}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium px-3 py-1.5"
+                className="hud-btn w-full bg-cyan-400 font-semibold text-neutral-950 hover:bg-cyan-300 hover:text-neutral-950 dark:text-neutral-950 dark:hover:bg-cyan-300 dark:hover:text-neutral-950"
               >
-                <MessageCircle className="h-3.5 w-3.5" /> Ask about this area
+                <MessageCircle aria-hidden="true" className="h-3.5 w-3.5" /> Ask about this area
               </button>
             )}
           </>

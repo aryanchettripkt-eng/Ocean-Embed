@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { Spin } from "./Motion";
 
 interface LoadingProps {
   label?: string;
@@ -23,14 +24,13 @@ export function Loading({ label = "Loading oceanographic data...", className = "
 
   const content = (
     <div className={`flex flex-col items-center justify-center p-6 text-center ${className}`}>
-      <div className="relative mb-4">
-        <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
-        <div className="absolute inset-0 rounded-full blur-md bg-cyan-500/20 -z-10" />
-      </div>
-      <p className="text-sm font-medium text-slate-200 mb-1">{label}</p>
+      <Spin className="mb-3 inline-flex">
+        <Loader2 aria-hidden="true" className="h-6 w-6 text-cyan-600 dark:text-cyan-300" />
+      </Spin>
+      <p className="text-sm font-medium text-neutral-700 dark:text-neutral-200">{label}</p>
       {isColdBackend && (
-        <div className="max-w-xs text-xs text-slate-400 mt-2 bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-          <p className="font-medium text-cyan-300 mb-0.5">Waking up the ocean server...</p>
+        <div className="hud-glass mt-3 max-w-xs rounded-xl p-3 text-xs text-neutral-500 dark:text-neutral-400">
+          <p className="mb-0.5 font-medium text-neutral-900 dark:text-white">Waking up the ocean server...</p>
           <p>The backend may sleep after inactivity. Spinning up can take up to a minute ({seconds}s elapsed).</p>
         </div>
       )}

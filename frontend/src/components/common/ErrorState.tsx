@@ -19,20 +19,20 @@ export function ErrorState({
   return (
     <div
       role="alert"
-      className={`flex flex-col items-center justify-center p-6 text-center bg-slate-900/60 border border-red-500/30 rounded-xl backdrop-blur-sm ${className}`}
+      className={`flex flex-col items-center justify-center p-4 text-center ${className}`}
     >
-      <div className="h-10 w-10 rounded-full bg-red-950/60 border border-red-800/60 flex items-center justify-center text-red-400 mb-3 shadow-lg shadow-red-950/30">
-        <AlertCircle className="h-5 w-5" />
+      <div className="mb-2.5 flex h-9 w-9 items-center justify-center rounded-full bg-red-500/10 text-red-600 ring-1 ring-inset ring-red-500/30 dark:text-red-400">
+        <AlertCircle aria-hidden="true" className="h-[18px] w-[18px]" />
       </div>
-      <h3 className="text-sm font-semibold text-slate-100 mb-1">{title}</h3>
-      <p className="text-xs text-slate-400 max-w-sm mb-4 leading-relaxed">{message}</p>
+      <h3 className="mb-1 text-sm font-semibold text-neutral-900 dark:text-neutral-100">{title}</h3>
+      <p className="mb-3 max-w-sm text-xs leading-relaxed text-neutral-500 dark:text-neutral-400">{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}
           type="button"
-          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors shadow-sm"
+          className="hud-btn border border-black/10 dark:border-white/10"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
           <span>Try Again</span>
         </button>
       )}

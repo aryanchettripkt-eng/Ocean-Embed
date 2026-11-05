@@ -6,6 +6,8 @@ import type { components } from "./api/types";
 
 export type MetaResponse = components["schemas"]["MetaResponse"];
 
+export type GridStyle = "dots" | "solid";
+
 export interface ExplorerState {
   date: string;
   depth: number;
@@ -13,6 +15,7 @@ export interface ExplorerState {
   lat: number | null;
   lon: number | null;
   view: "map" | "3d";
+  gridStyle?: GridStyle;
 }
 
 export const DEFAULT_FALLBACK_STATE: ExplorerState = {
@@ -22,6 +25,7 @@ export const DEFAULT_FALLBACK_STATE: ExplorerState = {
   lat: null,
   lon: null,
   view: "map",
+  gridStyle: "dots",
 };
 
 /**
@@ -62,6 +66,7 @@ export function parseExplorerParams(
   const rawLat = getParam("lat");
   const rawLon = getParam("lon");
   const rawView = getParam("view");
+  const rawStyle = getParam("style");
 
   // Default depth: closest to 100m from meta.depths_m
   const defaultDepth = meta?.depths_m ? findClosestDepth(100.0, meta.depths_m) : DEFAULT_FALLBACK_STATE.depth;
@@ -139,7 +144,10 @@ export function parseExplorerParams(
     view = rawView;
   }
 
-  return { date, depth, field, lat, lon, view };
+  // Validate grid rendering style (dot-matrix default, toggleable back to classic solid)
+  const gridStyle: GridStyle = rawStyle === "solid" ? "solid" : "dots";
+
+  return { date, depth, field, lat, lon, view, gridStyle };
 }
 
 /**
@@ -156,6 +164,9 @@ export function buildExplorerSearchParams(state: ExplorerState): URLSearchParams
   }
   if (state.view && state.view !== "map") {
     params.set("view", state.view);
+  }
+  if (state.gridStyle === "solid") {
+    params.set("style", "solid");
   }
   return params;
 }

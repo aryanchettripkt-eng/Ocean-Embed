@@ -41,24 +41,24 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div className="flex flex-col items-center justify-center p-6 text-center bg-slate-900/90 border border-red-500/30 rounded-xl shadow-lg backdrop-blur-md m-4 space-y-3">
-          <div className="h-10 w-10 rounded-full bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-400">
-            <AlertTriangle className="h-5 w-5" />
+        <div className="hud-glass m-4 flex flex-col items-center justify-center space-y-3 rounded-[20px] p-6 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10 text-red-600 ring-1 ring-inset ring-red-500/30 dark:text-red-400">
+            <AlertTriangle aria-hidden="true" className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-slate-200">
+            <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
               {this.props.name ? `${this.props.name} failed to load` : "Something went wrong"}
             </h3>
-            <p className="text-xs text-slate-400 mt-1 max-w-sm">
+            <p className="mt-1 max-w-sm text-xs text-neutral-500 dark:text-neutral-400">
               {this.state.error?.message ?? "An unexpected rendering error occurred."}
             </p>
           </div>
           <button
             type="button"
             onClick={this.handleReset}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-md shadow-cyan-900/30 cursor-pointer"
+            className="hud-btn hud-btn-active"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
             <span>Retry</span>
           </button>
         </div>

@@ -25,7 +25,7 @@ vi.mock("next/navigation", () => ({
 
 // Mock next/font/google for Vitest environment
 vi.mock("next/font/google", () => ({
-  Pixelify_Sans: () => ({
+  Manrope: () => ({
     variable: "--font-pixelify",
     className: "font-pixelify",
   }),
@@ -39,11 +39,13 @@ vi.mock("next/font/google", () => ({
 vi.mock("next/image", () => ({
   __esModule: true,
   default: ({
+    unoptimized: _unoptimized,
     fill: _fill,
     priority: _priority,
     fetchPriority: _fetchPriority,
     ...props
   }: React.ImgHTMLAttributes<HTMLImageElement> & {
+    unoptimized?: boolean;
     fill?: boolean;
     priority?: boolean;
     fetchPriority?: string;
@@ -117,6 +119,10 @@ const mockMeta: MetaResponse = {
 describe("Landing Page Component Suite (§10)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(), onchange: null,
+    }));
   });
 
   afterEach(() => {
@@ -132,11 +138,11 @@ describe("Landing Page Component Suite (§10)", () => {
     renderWithClient(<Landing />);
 
     const heading = screen.getByRole("heading", { level: 1 });
-    expect(heading).toHaveTextContent("OCEANSCOPE AI");
+    expect(heading).toHaveTextContent("A New Depth of Intelligence — Beneath the Surface");
 
-    expect(screen.getByText("BENEATH THE SURFACE")).toBeInTheDocument();
+
     expect(
-      screen.getByText("A quieter way to see the hidden temperature of the ocean.")
+      screen.getByText(/A quieter way to understand the hidden temperature/)
     ).toBeInTheDocument();
   });
 
@@ -262,7 +268,7 @@ describe("Landing Page Component Suite (§10)", () => {
     );
   });
 
-  it("ExploreLink skips the overlay when startViewTransition is missing", () => {
+  it("ExploreLink plays the arrival even without the View Transitions API (GSAP, any browser)", () => {
     // prefers-reduced-motion is false
     window.matchMedia = vi.fn().mockImplementation(() => ({
       matches: false,
@@ -275,20 +281,20 @@ describe("Landing Page Component Suite (§10)", () => {
       dispatchEvent: vi.fn(),
     }));
 
-    // delete startViewTransition from document
+    // Browsers such as Firefox have no startViewTransition
     delete (document as unknown as { startViewTransition?: unknown }).startViewTransition;
 
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
-    renderWithClient(<ExploreLink href="/" />);
+    renderWithClient(<ExploreLink href="/explore" />);
     const cta = screen.getByRole("link", { name: /EXPLORE THE OCEAN/i });
     fireEvent.click(cta);
 
-    // Should push directly without overlay
-    expect(mockPush).toHaveBeenCalledWith("/");
-    expect(dispatchSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "oceanscope:dive" })
+    // The dive event starts the transition; DiveOverlay navigates once the screen is covered
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "oceanscope:dive", detail: { href: "/explore" } })
     );
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("HowItWorks renders 3 step cards without numbers typed in copy", () => {

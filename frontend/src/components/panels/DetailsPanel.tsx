@@ -107,53 +107,49 @@ export function DetailsPanel({
 
   const split = profile?.split ?? null;
 
+  const chartBox = "min-h-0 flex-1 rounded-xl bg-black/[0.025] p-2 dark:bg-white/[0.03]";
+  const statusBox = "flex min-h-0 flex-1 items-center justify-center rounded-xl bg-black/[0.025] dark:bg-white/[0.03]";
+  const sectionTitle = "flex items-center gap-1.5 text-xs font-medium text-neutral-800 dark:text-neutral-200";
+
   return (
-    <div
-      className={`flex flex-col bg-slate-950/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-30 transition-all ${className}`}
-    >
-      {/* Panel Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 bg-slate-900/60">
-        <div className="flex items-center gap-2.5">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm text-slate-100 font-mono">
-                {formatCoord(lat, lon)}
-              </span>
-              <SplitBadge split={split} />
-            </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Target Date: <span className="text-slate-300 font-medium">{formatDate(date)}</span>
-            </p>
+    // Sized by its container: the two chart sections shrink from their preferred heights to a
+    // readable minimum so everything fits without a scrollbar (scrolls only below that minimum).
+    <div className={`hud-glass z-30 flex min-h-0 flex-col overflow-hidden rounded-[20px] ${className}`}>
+      {/* Header */}
+      <div className="hud-divider flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-3.5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold tabular-nums text-neutral-950 dark:text-white">
+              {formatCoord(lat, lon)}
+            </span>
+            <SplitBadge split={split} />
           </div>
+          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+            {formatDate(date)} · {formatDepth(depth)}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close details panel"
-          className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-        >
-          <X className="h-4 w-4" />
+        <button type="button" onClick={onClose} aria-label="Close details panel" className="hud-icon-btn">
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Panel Content (Scrollable) */}
-      <div className="p-4 space-y-6 overflow-y-auto max-h-[calc(100vh-12rem)] md:max-h-[calc(100vh-8rem)]">
-        {/* Section 1: Vertical Profile */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5 uppercase tracking-wider">
-              <Layers className="h-3.5 w-3.5 text-cyan-400" />
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain p-3.5 [scrollbar-width:thin]">
+        {/* Vertical profile */}
+        <section className="flex min-h-[170px] flex-[1_1_280px] flex-col gap-1.5">
+          <div className="flex shrink-0 items-center justify-between">
+            <h3 className={sectionTitle}>
+              <Layers aria-hidden="true" className="h-3.5 w-3.5 text-neutral-500" />
               <span>Vertical Temperature Profile</span>
             </h3>
-            <span className="text-[11px] text-slate-400">0 – 1500 m</span>
+            <span className="text-[11px] text-neutral-500">0 – 1500 m</span>
           </div>
 
           {isProfileLoading ? (
-            <div className="h-56 flex items-center justify-center bg-slate-900/40 rounded-xl border border-slate-850">
+            <div className={statusBox}>
               <Loading label="Loading vertical profile..." />
             </div>
           ) : profileError || !profile ? (
-            <div className="p-4 bg-slate-900/40 rounded-xl border border-slate-850">
+            <div className={statusBox}>
               <ErrorState
                 title="Profile unavailable"
                 message="Could not load vertical temperature data for this location."
@@ -161,32 +157,28 @@ export function DetailsPanel({
               />
             </div>
           ) : (
-            <div className="p-2 bg-slate-900/40 rounded-xl border border-slate-800/60">
-              <ProfileChart
-                profile={profile}
-                selectedDepth={depth}
-                onSelectDepth={onSelectDepth}
-              />
+            <div className={chartBox}>
+              <ProfileChart profile={profile} selectedDepth={depth} onSelectDepth={onSelectDepth} />
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Section 2: Time Series Chart */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5 uppercase tracking-wider">
-              <Activity className="h-3.5 w-3.5 text-cyan-400" />
+        {/* Time series */}
+        <section className="flex min-h-[150px] flex-[1_1_220px] flex-col gap-1.5">
+          <div className="flex shrink-0 items-center justify-between">
+            <h3 className={sectionTitle}>
+              <Activity aria-hidden="true" className="h-3.5 w-3.5 text-neutral-500" />
               <span>Time Series at {formatDepth(depth)}</span>
             </h3>
-            <span className="text-[11px] text-slate-400">±90 Days</span>
+            <span className="text-[11px] text-neutral-500">±90 Days</span>
           </div>
 
           {isTimeseriesLoading ? (
-            <div className="h-44 flex items-center justify-center bg-slate-900/40 rounded-xl border border-slate-850">
+            <div className={statusBox}>
               <Loading label="Loading time series..." />
             </div>
           ) : timeseriesError || !timeseries ? (
-            <div className="p-4 bg-slate-900/40 rounded-xl border border-slate-850">
+            <div className={statusBox}>
               <ErrorState
                 title="Time series unavailable"
                 message="Could not load temporal profile for this period."
@@ -194,53 +186,53 @@ export function DetailsPanel({
               />
             </div>
           ) : (
-            <div className="p-2 bg-slate-900/40 rounded-xl border border-slate-800/60">
+            <div className={chartBox}>
               <TimeSeriesChart timeseries={timeseries} selectedDate={date} />
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Section 3: Depth Accuracy Benchmark */}
-        <div className="p-3 bg-cyan-950/30 border border-cyan-800/40 rounded-xl space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-cyan-300 flex items-center gap-1.5">
-              <BarChart2 className="h-3.5 w-3.5 text-cyan-400" />
+        {/* Accuracy at this depth */}
+        <section className="shrink-0 space-y-1.5 rounded-xl bg-black/[0.025] px-3 py-2.5 dark:bg-white/[0.03]">
+          <div className="flex items-center justify-between gap-2">
+            <span className={sectionTitle}>
+              <BarChart2 aria-hidden="true" className="h-3.5 w-3.5 text-neutral-500" />
               <span>How accurate is {formatDepth(depth)}?</span>
             </span>
             <Link
               href="/validation"
-              className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 hover:underline"
+              className="flex items-center gap-1 text-[11px] text-cyan-700 hover:underline dark:text-cyan-300"
             >
               <span>Full metrics</span>
-              <ExternalLink className="h-3 w-3" />
+              <ExternalLink aria-hidden="true" className="h-3 w-3" />
             </Link>
           </div>
 
           {depthMetric ? (
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                <p className="text-[10px] text-slate-400">Validation RMSE</p>
-                <p className="font-mono font-semibold text-cyan-300">
+            <dl className="flex items-baseline gap-5 text-xs">
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-[11px] text-neutral-500 dark:text-neutral-400">Validation RMSE</dt>
+                <dd className="font-semibold tabular-nums text-neutral-950 dark:text-white">
                   {formatTemp(depthMetric.rmse_c ?? 0)}
-                </p>
+                </dd>
               </div>
-              <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800/80">
-                <p className="text-[10px] text-slate-400">Mean Bias (vs GLORYS)</p>
-                <p className="font-mono font-semibold text-slate-200">
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-[11px] text-neutral-500 dark:text-neutral-400">Mean bias vs GLORYS</dt>
+                <dd className="font-semibold tabular-nums text-neutral-950 dark:text-white">
                   {formatTemp(depthMetric.bias_c ?? 0)}
-                </p>
+                </dd>
               </div>
-            </div>
+            </dl>
           ) : (
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
               Validation error benchmarks available across 15 depth tiers.
             </p>
           )}
 
-          <p className="text-[10px] text-slate-500 italic">
+          <p className="text-[10px] italic text-neutral-500">
             Evaluated on held-out 2018 validation split against GLORYS12 reanalysis.
           </p>
-        </div>
+        </section>
       </div>
     </div>
   );

@@ -13,6 +13,8 @@ import {
 } from "recharts";
 import { formatDate, formatSplit, formatTemp } from "../../lib/format";
 import type { TimeseriesResponse } from "../../lib/api/client";
+import { useIsDark } from "../../lib/use-dark-mode";
+import { CHART_TOOLTIP_CLASS, chartTheme } from "./chartTheme";
 
 interface TimeSeriesChartProps {
   timeseries: TimeseriesResponse;
@@ -45,39 +47,35 @@ function TimeSeriesTooltip({ active, payload }: CustomTooltipProps) {
   const { date, split, pred, glorys } = data;
 
   return (
-    <div className="bg-slate-900/95 border border-slate-700/80 rounded-lg p-3 shadow-xl backdrop-blur-md text-xs space-y-1.5 min-w-[190px]">
-      <div className="font-semibold text-slate-200 border-b border-slate-800 pb-1 flex items-center justify-between">
+    <div className={CHART_TOOLTIP_CLASS}>
+      <div className="flex items-center justify-between gap-3 border-b border-black/[0.06] pb-1 font-medium text-neutral-900 dark:border-white/[0.08] dark:text-white">
         <span>{formatDate(date)}</span>
-        <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+        <span className="rounded-full bg-black/[0.05] px-1.5 py-0.5 text-[10px] font-normal text-neutral-600 dark:bg-white/[0.08] dark:text-neutral-300">
           {formatSplit(split).label}
         </span>
       </div>
-      <div className="flex items-center justify-between text-slate-300">
+      <div className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
         <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-cyan-400" />
-          <span>Model prediction:</span>
+          <span className="h-2 w-2 rounded-full bg-cyan-600 dark:bg-cyan-400" />
+          <span>Model prediction</span>
         </span>
-        <span className="font-mono font-medium text-cyan-300">
+        <span className="font-medium tabular-nums text-neutral-950 dark:text-white">
           {pred !== null ? formatTemp(pred) : "n/a"}
         </span>
       </div>
       {glorys !== null && (
-        <div className="flex items-center justify-between text-slate-300">
+        <div className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
           <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-indigo-400" />
-            <span>GLORYS reanalysis:</span>
+            <span className="h-2 w-2 rounded-full bg-violet-600 dark:bg-violet-400" />
+            <span>GLORYS reanalysis</span>
           </span>
-          <span className="font-mono font-medium text-indigo-300">
-            {formatTemp(glorys)}
-          </span>
+          <span className="font-medium tabular-nums text-neutral-950 dark:text-white">{formatTemp(glorys)}</span>
         </div>
       )}
       {pred !== null && glorys !== null && (
-        <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-800/80">
-          <span>Diff (Model − GLORYS):</span>
-          <span className="font-mono text-amber-300">
-            {formatTemp(pred - glorys)}
-          </span>
+        <div className="flex items-center justify-between gap-3 border-t border-black/[0.06] pt-1 text-[11px] text-neutral-500 dark:border-white/[0.08] dark:text-neutral-400">
+          <span>Model − GLORYS</span>
+          <span className="tabular-nums text-amber-700 dark:text-amber-300">{formatTemp(pred - glorys)}</span>
         </div>
       )}
     </div>
@@ -85,6 +83,7 @@ function TimeSeriesTooltip({ active, payload }: CustomTooltipProps) {
 }
 
 export function TimeSeriesChart({ timeseries, selectedDate }: TimeSeriesChartProps) {
+  const theme = chartTheme(useIsDark());
   const chartData = useMemo(() => {
     return timeseries.dates.map((date, idx) => ({
       date,
@@ -111,51 +110,51 @@ export function TimeSeriesChart({ timeseries, selectedDate }: TimeSeriesChartPro
   }, [timeseries]);
 
   return (
-    <div className="w-full flex flex-col gap-2">
-      <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+    <div className="flex h-full min-h-0 w-full flex-col gap-1">
+      <div className="flex items-center justify-between gap-2 px-1 text-[11px] text-neutral-600 dark:text-neutral-400">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
-            <span className="w-2.5 h-0.5 bg-cyan-400 rounded-full" />
-            <span className="text-cyan-300">Model prediction</span>
+            <span className="h-0.5 w-2.5 rounded-full bg-cyan-600 dark:bg-cyan-400" />
+            <span>Model prediction</span>
           </span>
           {hasGlorys ? (
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-0.5 bg-indigo-400 rounded-full border-dashed" />
-              <span className="text-indigo-300">GLORYS</span>
+              <span className="h-0.5 w-2.5 rounded-full bg-violet-600 dark:bg-violet-400" />
+              <span>GLORYS</span>
             </span>
           ) : (
-            <span className="text-slate-500 italic">(GLORYS n/a for live)</span>
+            <span className="italic text-neutral-500">(GLORYS n/a for live)</span>
           )}
         </div>
-        <span className="text-amber-400/90 text-[10px]">
-          Target: {selectedDate}
-        </span>
+        <span className="text-[10px] text-amber-700 dark:text-amber-400">Target: {formatDate(selectedDate)}</span>
       </div>
 
-      <div className="h-48 w-full">
+      <div className="min-h-0 w-full flex-1">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={chartData}
-            margin={{ top: 10, right: 15, bottom: 5, left: -10 }}
+            margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
             <XAxis
               dataKey="displayDate"
-              tick={{ fill: "#94a3b8", fontSize: 10 }}
-              axisLine={{ stroke: "#475569" }}
+              tick={{ fill: theme.tick, fontSize: 10 }}
+              axisLine={{ stroke: theme.axis }}
+              tickLine={{ stroke: theme.axis }}
             />
             <YAxis
               type="number"
               domain={[minTemp, maxTemp]}
-              tick={{ fill: "#94a3b8", fontSize: 10 }}
-              tickFormatter={(v) => `${v}°`}
-              axisLine={{ stroke: "#475569" }}
-              width={38}
+              tick={{ fill: theme.tick, fontSize: 10 }}
+              tickFormatter={(v) => `${Number(v).toFixed(1)}°`}
+              axisLine={{ stroke: theme.axis }}
+              tickLine={{ stroke: theme.axis }}
+              width={42}
             />
             <Tooltip content={<TimeSeriesTooltip />} />
             <ReferenceLine
               x={selectedDate.slice(5)}
-              stroke="#f59e0b"
+              stroke={theme.marker}
               strokeDasharray="3 3"
               strokeWidth={1.5}
             />
@@ -163,10 +162,10 @@ export function TimeSeriesChart({ timeseries, selectedDate }: TimeSeriesChartPro
               type="monotone"
               dataKey="pred"
               name="Model prediction"
-              stroke="#22d3ee"
+              stroke={theme.pred}
               strokeWidth={2}
-              dot={{ r: 2, fill: "#22d3ee" }}
-              activeDot={{ r: 4.5, fill: "#06b6d4" }}
+              dot={{ r: 2, fill: theme.pred }}
+              activeDot={{ r: 4.5, fill: theme.predActive }}
               isAnimationActive={false}
             />
             {hasGlorys && (
@@ -174,11 +173,11 @@ export function TimeSeriesChart({ timeseries, selectedDate }: TimeSeriesChartPro
                 type="monotone"
                 dataKey="glorys"
                 name="GLORYS reanalysis"
-                stroke="#a78bfa"
+                stroke={theme.glorys}
                 strokeWidth={1.8}
                 strokeDasharray="3 3"
-                dot={{ r: 2, fill: "#a78bfa" }}
-                activeDot={{ r: 4, fill: "#8b5cf6" }}
+                dot={{ r: 2, fill: theme.glorys }}
+                activeDot={{ r: 4, fill: theme.glorysActive }}
                 isAnimationActive={false}
               />
             )}

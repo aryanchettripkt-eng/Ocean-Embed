@@ -151,8 +151,11 @@ export function createGridTexture(
       const cov = is2DCov ? (covRow ? covRow[c] ?? 0 : 0) : ((coverage as number[])[c] ?? 0);
 
       if (val === null || val === undefined || isNaN(val) || cov === 0) {
+        // No value: keep 2 (insufficient inputs) so it still draws as a ring / hatch; anything else
+        // (land, or water shallower than this depth) is drawn as land. Storing cov 1 here would make
+        // the shader paint the cell as vmin, i.e. invent the coldest temperature.
         pixels[idx + 0] = 0;
-        pixels[idx + 1] = cov; // coverage 0
+        pixels[idx + 1] = cov === 2 ? 2 : 0;
         pixels[idx + 2] = 0;
         pixels[idx + 3] = 255;
       } else {

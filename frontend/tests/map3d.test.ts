@@ -176,3 +176,41 @@ describe("3D Cutaway Explorer Unit Tests (PRD_FRONTEND §3.1b, §7)", () => {
     });
   });
 });
+
+describe("createGridTexture coverage encoding", () => {
+  it("encodes a null value as land (or keeps insufficient inputs), never as a valid vmin cell", async () => {
+    const { createGridTexture } = await import("../src/components/map3d/webglUtils");
+    let uploaded: Uint8Array | null = null;
+    const gl = {
+      TEXTURE_2D: 1,
+      RGBA8: 2,
+      RGBA: 3,
+      UNSIGNED_BYTE: 4,
+      UNPACK_ALIGNMENT: 5,
+      LINEAR: 6,
+      NEAREST: 7,
+      TEXTURE_MIN_FILTER: 8,
+      TEXTURE_MAG_FILTER: 9,
+      TEXTURE_WRAP_S: 10,
+      TEXTURE_WRAP_T: 11,
+      CLAMP_TO_EDGE: 12,
+      createTexture: () => ({}),
+      bindTexture: () => undefined,
+      pixelStorei: () => undefined,
+      texParameteri: () => undefined,
+      texImage2D: (...args: unknown[]) => {
+        uploaded = args[8] as Uint8Array;
+      },
+    } as unknown as WebGL2RenderingContext;
+
+    // One row: valid value, cov 1 with null (e.g. shallower than the depth), cov 2 null, land
+    createGridTexture(gl, 4, 1, [[20, null, null, null]], [[1, 1, 2, 0]], 10, 30);
+
+    expect(uploaded).not.toBeNull();
+    const coverageAt = (c: number) => uploaded![c * 4 + 1];
+    expect(coverageAt(0)).toBe(1);
+    expect(coverageAt(1)).toBe(0);
+    expect(coverageAt(2)).toBe(2);
+    expect(coverageAt(3)).toBe(0);
+  });
+});

@@ -12,7 +12,7 @@ export function HowItWorks() {
 
       <div className={styles.cardsGrid}>
         {/* Step 1 */}
-        <article className={styles.stepCard}>
+        <article className={styles.stepCard} data-reveal>
           <span className={styles.stepNumber}>01</span>
           <h3 className={styles.stepHeading}>Satellites see the surface</h3>
           <p className={styles.stepBody}>
@@ -22,7 +22,7 @@ export function HowItWorks() {
         </article>
 
         {/* Step 2 */}
-        <article className={styles.stepCard}>
+        <article className={styles.stepCard} data-reveal>
           <span className={styles.stepNumber}>02</span>
           <h3 className={styles.stepHeading}>An AI model learns the ocean below</h3>
           <p className={styles.stepBody}>
@@ -32,7 +32,7 @@ export function HowItWorks() {
         </article>
 
         {/* Step 3 */}
-        <article className={styles.stepCard}>
+        <article className={styles.stepCard} data-reveal>
           <span className={styles.stepNumber}>03</span>
           <h3 className={styles.stepHeading}>You explore 15 depths, every day</h3>
           <p className={styles.stepBody}>
@@ -43,7 +43,7 @@ export function HowItWorks() {
       </div>
 
       <div className={styles.teaserRow}>
-        <Link href="/validation" className={styles.teaserLink}>
+        <Link prefetch={false} href="/validation" className={styles.teaserLink}>
           <span>Explore model validation and accuracy metrics against independent ARGO floats</span>
           <span aria-hidden="true">→</span>
         </Link>

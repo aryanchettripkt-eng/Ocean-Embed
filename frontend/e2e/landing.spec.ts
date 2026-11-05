@@ -22,8 +22,8 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
 
     // 2. Main H1 heading and tagline
     const h1 = page.getByRole("heading", { level: 1 });
-    await expect(h1).toHaveText("OCEANSCOPE AI");
-    await expect(page.getByText("BENEATH THE SURFACE", { exact: true })).toBeVisible();
+    await expect(h1).toHaveText("A New Depth of Intelligence — Beneath the Surface");
+    await expect(page.getByText(/A quieter way to understand/)).toBeVisible();
 
     // 3. CTA button is visible
     const cta = page.getByRole("link", { name: /EXPLORE THE OCEAN/i });
@@ -53,7 +53,7 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
     await page.goto("/welcome");
     await expect(page).toHaveURL(/\/(.*)?$/);
     const h1 = page.getByRole("heading", { level: 1 });
-    await expect(h1).toHaveText("OCEANSCOPE AI");
+    await expect(h1).toHaveText("A New Depth of Intelligence — Beneath the Surface");
   });
 
   test("at 390 px mobile viewport there is no horizontal scroll", async ({ page }) => {
@@ -109,7 +109,7 @@ test.describe("OceanScope AI Landing Page Flow (§10, PLAN_LANDING §8, §10)", 
       await page.goto("/");
       // Wait for hero to render
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 15000 });
-      await page.screenshot({ path: `../docs/landing/screenshots/${vp.name}`, fullPage: false });
+      await page.screenshot({ path: test.info().outputPath(vp.name), fullPage: false });
     }
   });
 });
