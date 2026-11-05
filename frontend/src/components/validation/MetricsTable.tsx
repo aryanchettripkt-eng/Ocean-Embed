@@ -94,27 +94,28 @@ export function MetricsTable({
   }, [currentMetrics, sortField, sortOrder, activeTab]);
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-xl space-y-4">
+    <section className="hud-glass space-y-4 rounded-[20px] p-5 sm:p-6">
       {/* Header and Tab Selector */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+      <div className="hud-divider flex flex-col justify-between gap-3 border-b pb-4 sm:flex-row sm:items-center">
         <div className="flex items-center gap-2">
-          <TableIcon className="h-4 w-4 text-cyan-400" />
-          <h3 className="font-semibold text-slate-100 text-sm">
+          <TableIcon aria-hidden="true" className="h-4 w-4 text-cyan-700 dark:text-cyan-300" />
+          <h3 className="text-lg font-medium tracking-tight text-neutral-950 dark:text-white [font-family:var(--font-manrope),sans-serif]">
             Validation Error Breakdown
           </h3>
         </div>
 
         {/* Tab Buttons */}
-        <div className="inline-flex rounded-lg bg-slate-950 p-1 border border-slate-800">
+        <div role="group" aria-label="Breakdown" className="inline-flex gap-0.5 rounded-full bg-black/[0.04] p-0.5 dark:bg-white/[0.05]">
           {(["depth", "season", "region"] as TabType[]).map((tab) => (
             <button
               key={tab}
               type="button"
+              aria-pressed={activeTab === tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-3 py-1 rounded-md text-xs font-medium transition-all capitalize ${
+              className={`h-7 rounded-full px-3 text-xs font-medium capitalize transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
                 activeTab === tab
-                  ? "bg-slate-800 text-cyan-300 font-semibold shadow"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-neutral-900 text-white shadow-sm dark:bg-white dark:text-neutral-950"
+                  : "text-neutral-600 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white"
               }`}
             >
               By {tab}
@@ -124,84 +125,84 @@ export function MetricsTable({
       </div>
 
       {isLoading ? (
-        <div className="h-48 flex items-center justify-center text-slate-500 text-xs">
+        <div className="flex h-48 items-center justify-center text-xs text-neutral-500">
           Loading metrics table...
         </div>
       ) : sortedRows.length === 0 ? (
-        <div className="p-6 text-center text-slate-500 text-xs">
+        <div className="p-6 text-center text-xs text-neutral-500">
           No metrics available for this breakdown.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-800/80">
+        <div className="overflow-x-auto rounded-xl ring-1 ring-inset ring-black/[0.06] dark:ring-white/[0.07]">
           <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-950/80 text-slate-400 font-medium border-b border-slate-800">
+            <thead className="bg-black/[0.03] font-medium text-neutral-500 dark:bg-white/[0.04] dark:text-neutral-400">
               <tr>
                 <th
                   onClick={() => handleSort("group")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white"
                 >
                   <div className="flex items-center gap-1">
                     <span>{activeTab === "depth" ? "Depth" : "Group"}</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("model")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white"
                 >
                   <div className="flex items-center gap-1">
                     <span>Model</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("n")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap text-right"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white text-right"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>N Samples</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("mae_c")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap text-right"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white text-right"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>MAE (°C)</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("rmse_c")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap text-right"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white text-right"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>RMSE (°C)</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("bias_c")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap text-right"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white text-right"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>Bias (°C)</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort("skill_vs_clim_pct")}
-                  className="p-3 cursor-pointer hover:text-slate-200 select-none whitespace-nowrap text-right"
+                  className="cursor-pointer select-none whitespace-nowrap p-3 font-medium hover:text-neutral-900 dark:hover:text-white text-right"
                 >
                   <div className="flex items-center justify-end gap-1">
                     <span>Skill vs Clim</span>
-                    <ArrowUpDown className="h-3 w-3 opacity-60" />
+                    <ArrowUpDown aria-hidden="true" className="h-3 w-3 opacity-60" />
                   </div>
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 font-mono">
+            <tbody className="hud-divider divide-y tabular-nums">
               {sortedRows.map((row, idx) => {
                 const isModel =
                   row.model.toLowerCase().includes("model") ||
@@ -216,38 +217,38 @@ export function MetricsTable({
                 return (
                   <tr
                     key={`${row.model}-${row.depth_m}-${row.group}-${idx}`}
-                    className={`hover:bg-slate-800/40 transition-colors ${
-                      isModel ? "bg-cyan-950/20" : ""
+                    className={`transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] ${
+                      isModel ? "bg-cyan-500/[0.06]" : ""
                     }`}
                   >
-                    <td className="p-3 font-sans font-medium text-slate-200">
+                    <td className="p-3 font-medium text-neutral-900 dark:text-neutral-100">
                       {groupLabel}
                     </td>
-                    <td className="p-3 font-sans">
+                    <td className="p-3">
                       <span
                         className={
                           isModel
-                            ? "text-cyan-300 font-semibold"
-                            : "text-slate-400"
+                            ? "font-semibold text-cyan-800 dark:text-cyan-200"
+                            : "text-neutral-600 dark:text-neutral-400"
                         }
                       >
                         {row.model}
                       </span>
                     </td>
-                    <td className="p-3 text-right text-slate-400">
+                    <td className="p-3 text-right text-neutral-500 dark:text-neutral-400">
                       {row.n.toLocaleString()}
                     </td>
-                    <td className="p-3 text-right text-slate-200">
+                    <td className="p-3 text-right text-neutral-900 dark:text-neutral-100">
                       {row.mae_c !== null && row.mae_c !== undefined
                         ? row.mae_c.toFixed(2)
                         : "n/a"}
                     </td>
-                    <td className="p-3 text-right text-cyan-300 font-semibold">
+                    <td className="p-3 text-right font-semibold text-cyan-700 dark:text-cyan-300">
                       {row.rmse_c !== null && row.rmse_c !== undefined
                         ? row.rmse_c.toFixed(2)
                         : "n/a"}
                     </td>
-                    <td className="p-3 text-right text-slate-300">
+                    <td className="p-3 text-right text-neutral-700 dark:text-neutral-300">
                       {row.bias_c !== null && row.bias_c !== undefined
                         ? (row.bias_c > 0 ? "+" : "") + row.bias_c.toFixed(2)
                         : "n/a"}
@@ -258,8 +259,8 @@ export function MetricsTable({
                         <span
                           className={
                             row.skill_vs_clim_pct > 0
-                              ? "text-emerald-400 font-semibold"
-                              : "text-slate-500"
+                              ? "font-semibold text-emerald-700 dark:text-emerald-300"
+                              : "text-neutral-500"
                           }
                         >
                           {row.skill_vs_clim_pct.toFixed(1)}%
@@ -275,6 +276,6 @@ export function MetricsTable({
           </table>
         </div>
       )}
-    </div>
+    </section>
   );
 }

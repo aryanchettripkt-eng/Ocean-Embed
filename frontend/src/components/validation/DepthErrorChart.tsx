@@ -13,6 +13,9 @@ import {
 } from "recharts";
 import { formatDepth } from "../../lib/format";
 import type { MetricsResponse } from "../../lib/api/client";
+import { useIsDark } from "../../lib/use-dark-mode";
+import { CHART_TOOLTIP_CLASS, chartTheme } from "../panels/chartTheme";
+import { Pulse } from "../common/Motion";
 
 interface DepthErrorChartProps {
   metrics?: MetricsResponse | null;
@@ -36,13 +39,13 @@ function DepthTooltip({ active, payload, label }: CustomTooltipProps) {
   if (!active || label === undefined || !payload) return null;
 
   return (
-    <div className="bg-slate-900/95 border border-slate-700/80 rounded-lg p-3 shadow-xl backdrop-blur-md text-xs space-y-1.5 min-w-[200px]">
-      <div className="font-semibold text-slate-200 border-b border-slate-800 pb-1 flex justify-between">
+    <div className={`${CHART_TOOLTIP_CLASS} min-w-[200px]`}>
+      <div className="flex justify-between border-b border-black/[0.06] pb-1 font-medium text-neutral-900 dark:border-white/[0.08] dark:text-white">
         <span>Depth Tier</span>
-        <span className="text-cyan-400 font-mono">{formatDepth(label)}</span>
+        <span className="tabular-nums">{formatDepth(label)}</span>
       </div>
       {payload.map((entry) => (
-        <div key={entry.name} className="flex items-center justify-between text-slate-300">
+        <div key={entry.name} className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
           <span className="flex items-center gap-1.5">
             <span
               className="w-2 h-2 rounded-full"
@@ -50,7 +53,7 @@ function DepthTooltip({ active, payload, label }: CustomTooltipProps) {
             />
             <span>{entry.name}:</span>
           </span>
-          <span className="font-mono font-medium" style={{ color: entry.color }}>
+          <span className="font-medium tabular-nums text-neutral-950 dark:text-white">
             {entry.value !== null ? `${Number(entry.value).toFixed(2)} °C` : "n/a"}
           </span>
         </div>
@@ -60,6 +63,9 @@ function DepthTooltip({ active, payload, label }: CustomTooltipProps) {
 }
 
 export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
+  const isDark = useIsDark();
+  const theme = chartTheme(isDark);
+  const climColor = isDark ? "#a3a3a3" : "#737373";
   const chartData = useMemo(() => {
     if (!metrics?.rows) return [];
 
@@ -101,7 +107,7 @@ export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
 
   if (isLoading) {
     return (
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 h-80 animate-pulse" />
+      <Pulse className="block h-80 rounded-[20px] bg-black/[0.05] dark:bg-white/[0.05]" />
     );
   }
 
@@ -110,58 +116,56 @@ export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
   }
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-xl space-y-3">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+    <section className="hud-glass space-y-3 rounded-[20px] p-5 sm:p-6">
+      <div className="flex flex-col justify-between gap-1 text-xs sm:flex-row sm:items-end">
         <div>
-          <h3 className="font-semibold text-slate-100 text-sm">
+          <h3 className="text-lg font-medium tracking-tight text-neutral-950 dark:text-white [font-family:var(--font-manrope),sans-serif]">
             Validation RMSE vs Depth (0–1500 m)
           </h3>
-          <p className="text-slate-400 text-[11px]">
-            Lower error is better.
-          </p>
+          <p className="text-[11px] text-neutral-500 dark:text-neutral-400">Lower error is better.</p>
         </div>
-        <div className="text-[11px] font-mono text-cyan-400">
-          Evaluated vs GLORYS12
-        </div>
+        <span className="hud-label">Evaluated vs GLORYS12</span>
       </div>
 
-      <div className="h-72 w-full">
+      <div className="h-72 w-full rounded-xl bg-black/[0.025] p-2 dark:bg-white/[0.03]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             layout="vertical"
             data={chartData}
             margin={{ top: 10, right: 20, bottom: 10, left: 0 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
             <XAxis
               type="number"
               domain={[0, "auto"]}
-              tick={{ fill: "#94a3b8", fontSize: 10 }}
+              tick={{ fill: theme.tick, fontSize: 10 }}
               tickFormatter={(v) => `${v}°C`}
-              axisLine={{ stroke: "#475569" }}
+              axisLine={{ stroke: theme.axis }}
+              tickLine={{ stroke: theme.axis }}
             />
             <YAxis
               type="number"
               dataKey="depth_m"
               reversed={true}
               domain={[0, "dataMax"]}
-              tick={{ fill: "#94a3b8", fontSize: 10 }}
-              tickFormatter={(d) => `${d}m`}
-              axisLine={{ stroke: "#475569" }}
-              width={45}
+              tick={{ fill: theme.tick, fontSize: 10 }}
+              tickFormatter={(d) => formatDepth(d).replace(" ", "\u00a0")}
+              axisLine={{ stroke: theme.axis }}
+              tickLine={{ stroke: theme.axis }}
+              width={52}
             />
             <Tooltip content={<DepthTooltip />} />
             <Legend
-              wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }}
+              wrapperStyle={{ fontSize: "11px", paddingTop: "8px", color: theme.tick }}
               iconType="circle"
             />
             <Line
               type="monotone"
               dataKey="modelRmse"
               name="OceanScope Model"
-              stroke="#22d3ee"
+              stroke={theme.pred}
               strokeWidth={2.5}
-              dot={{ r: 3, fill: "#22d3ee" }}
+              dot={{ r: 3, fill: theme.pred }}
               activeDot={{ r: 5 }}
               isAnimationActive={false}
             />
@@ -169,10 +173,10 @@ export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
               type="monotone"
               dataKey="ridgeRmse"
               name="Ridge Baseline"
-              stroke="#f59e0b"
+              stroke={theme.marker}
               strokeWidth={1.8}
               strokeDasharray="4 4"
-              dot={{ r: 2.5, fill: "#f59e0b" }}
+              dot={{ r: 2.5, fill: theme.marker }}
               activeDot={{ r: 4 }}
               isAnimationActive={false}
             />
@@ -180,16 +184,16 @@ export function DepthErrorChart({ metrics, isLoading }: DepthErrorChartProps) {
               type="monotone"
               dataKey="climRmse"
               name="Climatology Baseline"
-              stroke="#94a3b8"
+              stroke={climColor}
               strokeWidth={1.8}
               strokeDasharray="2 2"
-              dot={{ r: 2, fill: "#94a3b8" }}
+              dot={{ r: 2, fill: climColor }}
               activeDot={{ r: 4 }}
               isAnimationActive={false}
             />
           </LineChart>
         </ResponsiveContainer>
       </div>
-    </div>
+    </section>
   );
 }

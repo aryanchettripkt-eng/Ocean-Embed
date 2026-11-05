@@ -7,7 +7,10 @@ import {
   useMeta,
   useMetrics,
 } from "../../../lib/api/hooks";
-import { Banner } from "../../../components/common/Banner";
+import { PageHero, heroActionClass } from "../../../components/common/PageHero";
+import { manrope } from "../../../components/landing/fonts";
+import Link from "next/link";
+import { Info, Waves } from "lucide-react";
 import { Loading } from "../../../components/common/Loading";
 import { ErrorState } from "../../../components/common/ErrorState";
 import { ErrorBoundary } from "../../../components/common/ErrorBoundary";
@@ -35,7 +38,7 @@ export default function ValidationPage() {
 
   if (metaError || !meta) {
     return (
-      <div className="flex-1 flex items-center justify-center p-6 min-h-[60vh] bg-slate-50 dark:bg-slate-950">
+      <div className="flex min-h-[60vh] flex-1 items-center justify-center bg-neutral-100 p-6 dark:bg-[#0a0c0d]">
         <ErrorState
           title="Could not load validation data"
           message={metaError instanceof Error ? metaError.message : "API unavailable"}
@@ -46,29 +49,36 @@ export default function ValidationPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 py-8 px-4 sm:px-6 lg:px-8 transition-colors">
-      <div className="max-w-6xl mx-auto space-y-8">
-        {/* Synthetic Data Warning Banner */}
-        {meta.synthetic && <Banner type="synthetic" />}
+    <div className={`min-h-screen flex-1 bg-neutral-100 text-neutral-900 dark:bg-[#0a0c0d] dark:text-neutral-100 ${manrope.variable}`}>
+      <PageHero
+        eyebrow="Model Performance & Scientific Integrity"
+        title="Validation & Baseline Benchmarks"
+        actions={
+          <>
+            <Link href="/explore" className={heroActionClass}>
+              <Waves aria-hidden="true" className="h-3.5 w-3.5" /> Open the Explorer
+            </Link>
+            <Link href="/about#method" className={heroActionClass}>
+              How the model works
+            </Link>
+          </>
+        }
+      >
+        Rigorous held-out validation across {meta.depths_m.length} depth tiers in the North Indian Ocean (
+        {meta.region.lon_min}°–{meta.region.lon_max}°E, {meta.region.lat_min}°–{meta.region.lat_max}°N). Every figure
+        and table is sourced directly from precomputed model evaluations and verified against physical reanalyses and
+        in-situ ARGO profiles.
+      </PageHero>
 
-        {/* Page Header */}
-        <div className="space-y-2 border-b border-slate-200 dark:border-slate-800 pb-5">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400">
-            <span>Model Performance &amp; Scientific Integrity</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Validation &amp; Baseline Benchmarks
-          </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400 max-w-3xl leading-relaxed">
-            Rigorous held-out validation across 15 depth tiers in the North Indian Ocean (40°–100°E, 0°–30°N). Every figure and table is sourced directly from precomputed model evaluations and verified against physical reanalyses and in-situ ARGO profiles.
-          </p>
-        </div>
-
+      <div className="relative mx-auto -mt-20 max-w-6xl space-y-6 px-4 pb-16 sm:px-6 lg:px-8">
         {/* GLORYS Reanalysis Caveat */}
         {meta.caveats?.glorys && (
-          <div className="bg-white/90 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-4 text-xs text-slate-700 dark:text-slate-300 leading-relaxed shadow-sm">
-            <strong className="text-cyan-600 dark:text-cyan-300 font-semibold">GLORYS Reference Caveat: </strong>
-            {meta.caveats.glorys}
+          <div className="hud-glass flex items-start gap-3 rounded-2xl px-4 py-3 text-xs leading-relaxed text-neutral-700 dark:text-neutral-300">
+            <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-cyan-700 dark:text-cyan-300" />
+            <p>
+              <strong className="font-medium text-neutral-950 dark:text-white">GLORYS Reference Caveat: </strong>
+              {meta.caveats.glorys}
+            </p>
           </div>
         )}
 
