@@ -189,6 +189,9 @@ def _try_sam(
     try:
         mask = future.result(timeout=SAM_TIMEOUT_S)
     except FutureTimeout:
+        # Still queued behind other SAM calls: drop it, so nobody pays for a mask no one waits
+        # for. A call that already started cannot be stopped and finishes in the background.
+        future.cancel()
         logger.warning(
             "feature=segment sam=timeout sam_ms=%d fallback=threshold request_id=%s",
             (time.monotonic() - started) * 1000,

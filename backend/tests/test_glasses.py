@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.v1.glasses as glasses_module
+import app.api.v1.voice as voice_module
 import app.data.store as store_module
 from app.data import glasses
 from app.main import app
@@ -33,6 +34,7 @@ def glasses_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "VOICE_ENABLED", True)
     monkeypatch.setattr(settings, "META_CLIENT", "mock")
     monkeypatch.setattr(glasses_module, "_limiter", None)
+    monkeypatch.setattr(voice_module, "_limiter", None)
 
 
 def ask(client: TestClient, **form: str) -> tuple[int, dict[str, Any]]:

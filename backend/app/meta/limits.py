@@ -67,8 +67,11 @@ class FeatureLimiter:
             if day != self._day:
                 self._day, self._day_count = day, 0
                 self._ip_day_counts = {}
-                # Drop idle IPs once a day so the table does not grow without bound.
-                self._hits = {k: v for k, v in self._hits.items() if v}
+                # Drop idle IPs once a day so the table does not grow without bound. A deque is
+                # only trimmed when its own IP calls again, so test the newest hit, not emptiness.
+                self._hits = {
+                    k: v for k, v in self._hits.items() if v and v[-1] > now - self.window
+                }
                 hits = self._hits.setdefault(ip, deque())
             ip_count = self._ip_day_counts.get(ip, 0)
             if self.ip_daily_cap is not None and ip_count >= self.ip_daily_cap:

@@ -1,9 +1,9 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -112,10 +112,24 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if allow_all else origins,
     allow_origin_regex=r"^https://.*\.vercel\.app$" if not allow_all else None,
-    allow_credentials=not allow_all,
+    # The API uses no cookies or auth headers, and the frontend never sends credentials.
+    # Allowing them would let any *.vercel.app page (the regex above) make credentialed calls.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next: Any) -> Response:
+    """Headers for every response: no MIME sniffing (postcard bytes come from an upstream
+    model), no framing of API responses, and no Referer leaking query strings."""
+    response: Response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
 
 # GZip middleware for responses > 1 KB
 app.add_middleware(GZipMiddleware, minimum_size=1024)
