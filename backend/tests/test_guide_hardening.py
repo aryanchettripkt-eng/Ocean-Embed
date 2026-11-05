@@ -294,3 +294,125 @@ def test_user_depth_grounds_only_a_depth() -> None:
     assert ungrounded_numbers("At 5000 m it is 2 °C.", src) == [2.0]
     assert ungrounded_numbers("It is 35.7 °C.", src) == [35.7]
     assert ungrounded_numbers("It is 5000.0 there.", src) == [5000.0]
+
+
+# -- one retry on a stalled or dropped chat call (cold start upstream) ------------------------
+
+
+def _retry_client(handler: Any) -> Any:
+    import httpx
+
+    from app.meta.client import HttpMetaModelClient
+
+    return HttpMetaModelClient(
+        "https://meta.invalid", "k", "muse-spark-1.3", transport=httpx.MockTransport(handler)
+    )
+
+
+def test_chat_retries_once_after_a_timeout() -> None:
+    import httpx
+
+    calls: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.extensions["timeout"]["read"])
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("stalled", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    turn = _retry_client(handler).chat(
+        [{"role": "user", "content": "hi"}], None, max_tokens=64, timeout_s=20
+    )
+    assert turn.content == "ok"
+    assert len(calls) == 2
+    # The first attempt gets only part of the budget; the retry gets what is left of the
+    # same 20 s deadline (here almost all of it, since the mock times out at once).
+    assert calls[0] is not None and calls[0] < 20
+    assert calls[1] is not None and calls[1] <= 20
+
+
+def test_chat_retries_once_after_a_dropped_connection() -> None:
+    import httpx
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("reset", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    turn = _retry_client(handler).chat(
+        [{"role": "user", "content": "hi"}], None, max_tokens=64, timeout_s=20
+    )
+    assert turn.content == "ok" and calls == 2
+
+
+def test_chat_gives_up_after_the_second_timeout() -> None:
+    import httpx
+    import pytest
+
+    from app.meta.client import MetaUpstreamError
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    with pytest.raises(MetaUpstreamError, match="timed out"):
+        _retry_client(handler).chat(
+            [{"role": "user", "content": "hi"}], None, max_tokens=64, timeout_s=20
+        )
+    assert calls == 2
+
+
+def test_chat_does_not_retry_when_little_time_is_left() -> None:
+    import httpx
+    import pytest
+
+    from app.meta.client import MetaUpstreamError
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    with pytest.raises(MetaUpstreamError):
+        _retry_client(handler).chat(
+            [{"role": "user", "content": "hi"}], None, max_tokens=64, timeout_s=5
+        )
+    assert calls == 1
+
+
+def test_warm_up_is_skipped_for_the_mock_client(monkeypatch: Any) -> None:
+    from app.meta import client as client_module
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "META_CLIENT", "mock")
+
+    def boom() -> None:
+        raise AssertionError("build_client must not be called for the mock")
+
+    monkeypatch.setattr(client_module, "build_client", boom)
+    client_module.warm_up_chat()
+
+
+def test_warm_up_never_raises(monkeypatch: Any) -> None:
+    from app.meta import client as client_module
+    from app.meta import config as config_module
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "META_CLIENT", "http")
+    monkeypatch.setattr(config_module, "chat_available", lambda: True)
+
+    class Broken:
+        def chat(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(client_module, "build_client", lambda: Broken())
+    client_module.warm_up_chat()  # logs, does not raise

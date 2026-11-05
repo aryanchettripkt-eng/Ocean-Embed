@@ -19,6 +19,7 @@ from app.errors import (
     validation_exception_handler,
 )
 from app.meta.budget import flush_budget
+from app.meta.client import warm_up_chat
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -77,14 +78,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 logger.error("Periodic manifest reload failed: %s", e)
 
     load_task = asyncio.create_task(load_then_reload())
+    # Wake the Meta chat model in the background so the first guide question isn't slow.
+    warmup_task = asyncio.create_task(asyncio.to_thread(warm_up_chat))
 
     yield
 
     load_task.cancel()
-    try:
-        await load_task
-    except asyncio.CancelledError:
-        pass
+    warmup_task.cancel()
+    for task in (load_task, warmup_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     # Save any spend not yet pushed to the budget ledger (app/meta/budget.py).
     try:
         await asyncio.to_thread(flush_budget)
