@@ -39,14 +39,21 @@ BLOCK_DAYS = 16
 COORDS = ("time", "depth", "lat", "lon")
 
 
-def _check_members(config: ExperimentConfig, members: list[xr.Dataset]) -> None:
+def _check_members(
+    config: ExperimentConfig, members: list[xr.Dataset], allow_test: bool = False
+) -> None:
     first = members[0]
     for k, ds in enumerate(members):
         dates = pd.DatetimeIndex(ds["time"].values).normalize()
-        check_no_test_leakage(dates, config.splits.test)
-        val_start, val_end = (pd.Timestamp(d) for d in config.splits.val)
-        if dates.size == 0 or dates.min() < val_start or dates.max() > val_end:
-            raise ValueError(f"Member {k} must hold validation dates only")
+        if allow_test:  # evaluation.argo_test only: test dates and nothing else
+            start, end = (pd.Timestamp(d) for d in config.splits.test)
+            if dates.size == 0 or dates.min() < start or dates.max() > end:
+                raise ValueError(f"Member {k} must hold test dates only")
+        else:
+            check_no_test_leakage(dates, config.splits.test)
+            val_start, val_end = (pd.Timestamp(d) for d in config.splits.val)
+            if dates.size == 0 or dates.min() < val_start or dates.max() > val_end:
+                raise ValueError(f"Member {k} must hold validation dates only")
         for c in COORDS:
             if not np.array_equal(np.asarray(ds[c].values), np.asarray(first[c].values)):
                 raise ValueError(f"Member {k} has different {c} coordinates from member 0")
@@ -58,8 +65,10 @@ def ensemble(
     run_id: str,
     out_dir: Path | None = None,
     weights: list[float] | None = None,
+    allow_test: bool = False,
 ) -> Path:
-    """Write the (weighted) mean of ``predictions`` as ``predictions_<run_id>.zarr``."""
+    """Write the (weighted) mean of ``predictions`` as ``predictions_<run_id>.zarr``.
+    ``allow_test`` (test-year members) is set only by ``evaluation.argo_test``."""
     if len(predictions) < 2:
         raise ValueError("An ensemble needs at least two prediction stores")
     w = np.full(len(predictions), 1.0 / len(predictions))
@@ -68,7 +77,7 @@ def ensemble(
         if w.size != len(predictions) or (w < 0).any() or not np.isclose(w.sum(), 1.0):
             raise ValueError("Weights must be one per member, >= 0 and sum to 1")
     members = [xr.open_zarr(p) for p in predictions]
-    _check_members(config, members)
+    _check_members(config, members, allow_test)
     ids = [str(ds.attrs.get("run_id", Path(p).stem)) for ds, p in zip(members, predictions)]
     logger.info("Ensemble %s of %s", run_id, ", ".join(ids))
 

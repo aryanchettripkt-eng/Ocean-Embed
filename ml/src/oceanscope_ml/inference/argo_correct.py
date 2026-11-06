@@ -43,7 +43,9 @@ level improved, the held-out floats said it got worse, 0.34 -> 0.77 C):
 
 Writes ``<out>/predictions/predictions_<run_id>.zarr`` (same layout as ``inference.predict``,
 ``temp_pred`` corrected, ``temp_glorys`` and ``coverage`` copied) and
-``<out>/metrics/argo_correct_tuning_<run_id>.csv``.
+``<out>/metrics/argo_correct_tuning_<run_id>.csv``, and the plan with the guards in
+``<out>/models/argo_correct_<run_id>.json`` (``load_settings``), which ``evaluation.argo_test``
+applies to the test year unchanged.
 """
 
 from __future__ import annotations
@@ -481,10 +483,40 @@ def run(
     if max_depth_m is not None:
         plan = tuple(None if d > max_depth_m else p for d, p in zip(depths, plan, strict=True))
     logger.info("Using %s", plan_json(plan))
+    save_settings(out / "models", run_id, plan, min_depth_m, max_depth_m, outlier_sigma)
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
     write_store(predictions, res, plan, run_id, dest)
     return dest, plan
+
+
+def save_settings(
+    models_dir: Path,
+    run_id: str,
+    plan: Plan,
+    min_depth_m: float,
+    max_depth_m: float | None,
+    outlier_sigma: float | None,
+) -> Path:
+    """Write the per-depth plan and the guards as ``argo_correct_<run_id>.json``."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    path = models_dir / f"argo_correct_{run_id}.json"
+    meta = {
+        "run_id": run_id,
+        "plan": json.loads(plan_json(plan)),
+        "min_depth_m": min_depth_m,
+        "max_depth_m": max_depth_m,
+        "outlier_sigma": outlier_sigma,
+    }
+    path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return path
+
+
+def load_settings(path: Path) -> tuple[Plan, dict]:
+    """The plan and guards saved by ``save_settings``."""
+    meta = json.loads(Path(path).read_text(encoding="utf-8"))
+    plan = tuple(None if p is None else OIParams(**p) for p in meta["plan"])
+    return plan, meta
 
 
 def _load_holdout(path: Path) -> set[str]:

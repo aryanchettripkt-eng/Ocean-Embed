@@ -155,8 +155,8 @@ def predict_store(
     if dataset._has_argo_channels:
         if not argo_paths or not holdout:
             raise ValueError("This checkpoint uses ARGO input channels: pass --argo and --holdout")
-        if split == "test":
-            raise ValueError("ARGO input channels are not built for the sealed test year")
+        # The test year gets ARGO inputs only through allow_test (evaluation.argo_test, run once
+        # with the owner's go): every non-held-out 2021 profile is an input, as in live use.
         start, end = (pd.Timestamp(d) for d in getattr(config.splits, split))
         window = int(config.inputs["argo_input"].get("window_days", 10))
         argo = argo_inputs_for(

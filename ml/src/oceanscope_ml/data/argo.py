@@ -81,10 +81,16 @@ def csv_to_dataset(text: str) -> xr.Dataset:
 
 
 def fetch_month(
-    month: pd.Period, config: ExperimentConfig, out_dir: Path, retries: int = 5
+    month: pd.Period,
+    config: ExperimentConfig,
+    out_dir: Path,
+    retries: int = 5,
+    allow_test: bool = False,
 ) -> Path:
-    """Download one month to ``out_dir/argo_<YYYY-MM>.nc`` (kept and reused if it exists)."""
-    _refuse_test(month, config)
+    """Download one month to ``out_dir/argo_<YYYY-MM>.nc`` (kept and reused if it exists).
+    Test-period months only with ``allow_test`` (the one-shot 2021 ARGO test script)."""
+    if not allow_test:
+        _refuse_test(month, config)
     path = Path(out_dir) / f"argo_{month}.nc"
     if path.exists():
         return path

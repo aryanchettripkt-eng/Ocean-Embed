@@ -44,8 +44,11 @@ the SW monsoon in the Bay of Bengal):
 ``--max-depth M``: levels deeper than M metres are neither trained on nor corrected (on the
 final half the correction made 643 m and 1062 m slightly worse).
 
-Writes ``<out>/predictions/predictions_<run_id>.zarr`` and
-``<out>/metrics/residual_model_cv_<run_id>.csv``. Every input is available in live mode too.
+Writes ``<out>/predictions/predictions_<run_id>.zarr``,
+``<out>/metrics/residual_model_cv_<run_id>.csv`` and the fitted model,
+``<out>/models/residual_model_<run_id>.txt`` with its settings in ``.json`` (``load_saved``),
+which ``evaluation.argo_test`` applies to the test year unchanged. Every input is available in
+live mode too.
 """
 
 from __future__ import annotations
@@ -550,10 +553,38 @@ def run(
     table.round(6).to_csv(out / "metrics" / f"residual_model_cv_{run_id}.csv", index=False)
     importance = dict(zip(names, model.feature_importance("gain").round(1).tolist()))
     logger.info("Feature importance (gain): %s", importance)
+    save_model(model, out / "models", run_id, features, names, max_depth_m)
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
     return write_store(predictions, surface, res, model, names, run_id, dest, features,
                        max_depth_m)  # fmt: skip
+
+
+def save_model(
+    model: Any,
+    models_dir: Path,
+    run_id: str,
+    features: str,
+    names: list[str],
+    max_depth_m: float | None,
+) -> Path:
+    """Save the booster (``residual_model_<run_id>.txt``) and its settings (``.json``)."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    path = models_dir / f"residual_model_{run_id}.txt"
+    model.save_model(str(path))
+    meta = {"run_id": run_id, "features": features, "names": names, "max_depth_m": max_depth_m}
+    path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return path
+
+
+def load_saved(path: Path) -> tuple[Any, dict[str, Any]]:
+    """The booster saved by ``save_model`` and its settings."""
+    import lightgbm as lgb
+
+    meta = json.loads(Path(path).with_suffix(".json").read_text(encoding="utf-8"))
+    if meta.get("features") not in FEATURE_SETS:
+        raise ValueError(f"{path}: unknown feature set {meta.get('features')!r}")
+    return lgb.Booster(model_file=str(path)), meta
 
 
 def _load_holdout(path: Path) -> set[str]:
