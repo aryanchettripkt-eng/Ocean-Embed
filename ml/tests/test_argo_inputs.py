@@ -159,3 +159,20 @@ def test_train_from_scratch_with_argo_recency_and_year(
         argo_paths=files, holdout=holdout,
     )  # fmt: skip
     assert np.isfinite(xr.open_zarr(dest)["temp_pred"].values).any()
+
+
+def test_finetune_with_warm_day_weighting_runs_and_is_recorded(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+) -> None:
+    config, store, base, files, holdout_path = setup
+    config.inputs.setdefault("argo_input", {})["min_year"] = 2000  # synthetic years
+    holdout = load_holdout(holdout_path)
+    with pytest.raises(ValueError, match="argo_input"):
+        finetune_run(config, [store], base, files, holdout, "base_w0", lam=1.0,
+                     device_choice="cpu", epochs=1, warm_weight=3.0)  # fmt: skip
+    result = finetune_run(
+        config, [store], base, files, holdout, "base_aw", lam=1.0, device_choice="cpu",
+        epochs=1, argo_input=True, warm_weight=3.0,
+    )  # fmt: skip
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["loss"]["warm_weight"] == 3.0

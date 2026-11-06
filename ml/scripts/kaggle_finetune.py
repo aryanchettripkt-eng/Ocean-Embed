@@ -12,7 +12,9 @@ Loss options (both off by default): OCEANSCOPE_FT_HUBER (Huber threshold, normal
 1.0) and OCEANSCOPE_FT_VGRAD (weight of the vertical-gradient term, e.g. 0.5). OCEANSCOPE_TAG is
 appended to the run name, so a loss experiment never overwrites <run>_ai (e.g. TAG=v gives
 main2_aiv). OCEANSCOPE_HALF picks the held-out floats for the ARGO check: all (default), dev or
-final (DECISIONS 2026-11-06: compare runs on dev only).
+final (DECISIONS 2026-11-06: compare runs on dev only). OCEANSCOPE_FT_WARM (e.g. 4) draws warm
+Bay of Bengal training days up to that many times as often (``finetune --warm-weight``; needs
+OCEANSCOPE_FT_ARGO_INPUT=1).
 
 Steps: ARGO 2004-2020 from the Argo ERDDAP (never 2021) -> held-out floats (the committed list,
 checked against a rebuild) -> one fine-tune per lambda -> the lambda with the lowest validation
@@ -34,11 +36,14 @@ ARGO_INPUT = os.environ.get("OCEANSCOPE_FT_ARGO_INPUT", "0") == "1"
 RUN = (f"{BASE}_ai" if ARGO_INPUT else f"{BASE}_ft") + os.environ.get("OCEANSCOPE_TAG", "").strip()
 HUBER = os.environ.get("OCEANSCOPE_FT_HUBER", "").strip()
 VGRAD = float(os.environ.get("OCEANSCOPE_FT_VGRAD", "0") or 0)
+WARM = float(os.environ.get("OCEANSCOPE_FT_WARM", "1") or 1)
 HALF = os.environ.get("OCEANSCOPE_HALF", "all").strip()
 if HALF not in ("dev", "all", "final"):
     raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
-LOSS = (f" --huber-delta {HUBER}" if HUBER else "") + (
-    f" --vgrad-weight {VGRAD:g}" if VGRAD > 0 else ""
+LOSS = (
+    (f" --huber-delta {HUBER}" if HUBER else "")
+    + (f" --vgrad-weight {VGRAD:g}" if VGRAD > 0 else "")
+    + (f" --warm-weight {WARM:g}" if WARM > 1 else "")
 )
 H = "" if HALF == "all" else f"_{HALF}"
 LAMBDAS = [float(x) for x in os.environ.get("OCEANSCOPE_FT_LAMBDAS", "0.03,0.1,0.3").split(",")]

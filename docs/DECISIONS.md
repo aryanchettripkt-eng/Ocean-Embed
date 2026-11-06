@@ -256,3 +256,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - By the rule set before the run (lower on the dev half and better CV), run F does **not** replace ens3w_rm_oi; the two are a tie within noise.
 - Regimes (dev half): warm anomalies still the gap (1.27 vs GLORYS12 1.01), then SW monsoon (0.91 vs 0.78) and positive IOD (0.89 vs 0.70).
 - The one-shot 2021 test (step G) is held while the dev half still shows the model behind GLORYS12, so it is not spent on a run expected to miss.
+
+## 2026-11-06 — Warm-event fine-tune of main3 (main3_aiw), then a re-weighted ensemble
+- **Aryan's choice** (decision card "Pick what to do next about the gap to GLORYS12": "Retrain base model for warm events").
+- `finetune --warm-weight W`: training days are drawn with replacement, weighted from 1 (no warm anomaly) to W (the warmest 1% of days). Warmth is the mean positive GLORYS anomaly (in sigma units, against the train-only climatology) over the Bay of Bengal 50–300 m band, so it uses training targets only, never ARGO and never validation days. Needs the ARGO input channels; stored with the loss settings so a resume with other settings is refused.
+- Run: main3 fine-tuned with ARGO inputs, λ = 1.0, W = 4 → `main3_aiw` (dev-half ARGO check printed by the fine-tune script). Then `kaggle_run_f.py` with members main2_ai, main2_ft, main3, main3_aiw (`ens4`): weights fitted on non-held-out floats, v2 tree, dev half.
+- **Rules set before the run:** ens4w_rm2(_oi) replaces ens3w_rm_oi only if it is lower on the dev half and its tree CV (Bay of Bengal 50–300 m, after correction) is lower too. The 2021 test (step G) is spent only once a run is below GLORYS12 (0.756 °C) on the dev half.

@@ -237,6 +237,49 @@ def validate_argo(
     return rmse, rmse_band, int(n)
 
 
+WARM_BLOCK_DAYS = 120
+WARM_CAP_QUANTILE = 0.99
+
+
+def warm_scores(
+    ds: xr.Dataset, dates: pd.DatetimeIndex, sigma: np.ndarray, band: np.ndarray
+) -> np.ndarray:
+    """Per day: mean positive GLORYS anomaly (in sigma units) over the Bay of Bengal 50-300 m
+    band, from the training targets and the train-only climatology (never ARGO, never val).
+    Zero everywhere when the grid has no band cell."""
+    if not band.any():
+        return np.zeros(len(dates))
+    depth_idx = np.flatnonzero(band.any(axis=(1, 2)))
+    lat_idx = np.flatnonzero(band.any(axis=(0, 2)))
+    lon_idx = np.flatnonzero(band.any(axis=(0, 1)))
+    sub = band[np.ix_(depth_idx, lat_idx, lon_idx)]
+    clim = np.asarray(
+        ds["clim"].isel(depth=depth_idx, lat=lat_idx, lon=lon_idx).values, dtype=np.float32
+    )
+    sig = np.asarray(sigma, dtype=np.float32)[depth_idx][:, None, None]
+    times = pd.DatetimeIndex(ds["time"].values).normalize()
+    pos = times.get_indexer(dates)
+    if (pos < 0).any():
+        raise ValueError("A training date is not in the store")
+    out = np.zeros(len(dates))
+    for b0 in range(0, len(dates), WARM_BLOCK_DAYS):
+        b1 = min(b0 + WARM_BLOCK_DAYS, len(dates))
+        field = ds["thetao"].isel(time=pos[b0:b1], depth=depth_idx, lat=lat_idx, lon=lon_idx)
+        th = np.asarray(field.transpose("time", "depth", "lat", "lon").values, dtype=np.float32)
+        anom = (th - clim[dates[b0:b1].day_of_year.to_numpy() - 1]) / sig[None]
+        warm = np.where(sub[None] & np.isfinite(anom), np.clip(anom, 0.0, None), np.nan)
+        out[b0:b1] = np.nan_to_num(np.nanmean(warm.reshape(b1 - b0, -1), axis=1))
+    return out
+
+
+def warm_weights(scores: np.ndarray, strength: float) -> np.ndarray:
+    """1 on the coolest day, ``strength`` on days at or above the 99th percentile of warmth."""
+    cap = float(np.quantile(scores, WARM_CAP_QUANTILE)) if scores.size else 0.0
+    if cap <= 0:
+        return np.ones_like(scores)
+    return 1.0 + (strength - 1.0) * np.clip(scores / cap, 0.0, 1.0)
+
+
 def _loader(
     dataset: Dataset[dict[str, torch.Tensor]],
     config: ExperimentConfig,
@@ -281,6 +324,7 @@ def finetune_run(
     argo_input: bool = False,
     huber_delta: float | None = None,
     vgrad_weight: float = 0.0,
+    warm_weight: float = 1.0,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
@@ -290,8 +334,22 @@ def finetune_run(
 
     ``huber_delta`` and ``vgrad_weight`` switch on the Huber loss (GLORYS, GREP and ARGO terms)
     and the vertical-gradient term on GLORYS (``models.loss``). Both are off by default.
+
+    ``warm_weight`` W > 1 draws training days with replacement, in proportion to a weight from 1
+    (no warm anomaly) to W (the warmest 1% of days), where warmth is the mean positive GLORYS
+    anomaly over the Bay of Bengal 50-300 m band (``warm_scores``). Aimed at the warm-anomaly
+    errors in the regime table (DECISIONS 2026-11-06). Needs ``argo_input``.
     """
-    loss_settings = {"huber_delta": huber_delta, "vgrad_weight": float(vgrad_weight)}
+    if warm_weight < 1.0:
+        raise ValueError("warm_weight must be >= 1 (1 = off)")
+    if warm_weight > 1.0 and not argo_input:
+        raise ValueError("warm_weight needs argo_input")
+    loss_settings = {
+        "huber_delta": huber_delta,
+        "vgrad_weight": float(vgrad_weight),
+        "warm_weight": float(warm_weight),
+    }
+    no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
     ft_cfg = config.finetune_argo
@@ -337,7 +395,7 @@ def finetune_run(
         if (
             ckpt["lambda"] != lam
             or ckpt["base_checkpoint"] != str(base_checkpoint)
-            or ckpt.get("loss", {"huber_delta": None, "vgrad_weight": 0.0}) != loss_settings
+            or {**no_options, **ckpt.get("loss", {})} != loss_settings
         ):
             raise ValueError(f"Run {run_id} was started with other settings. Use a new --run-id.")
         model.load_state_dict(ckpt["model"])
@@ -399,6 +457,15 @@ def finetune_run(
         )
     if len(train_argo) == 0 or len(val_argo) == 0:
         raise ValueError("No training or validation days with ARGO targets")
+    day_weights: torch.Tensor | None = None
+    if warm_weight > 1.0:
+        assert isinstance(train_argo, Subset)
+        days = _split_dates(stores, train_ds)[np.asarray(train_argo.indices)]
+        scores = warm_scores(stores, days, sigma_np, _bob_band_mask(stores, depths))
+        w = warm_weights(scores, warm_weight)
+        day_weights = torch.as_tensor(w, dtype=torch.float64)
+        logger.info("Warm-day weighting x%g: mean weight %.2f, %d of %d days above 2",
+                    warm_weight, w.mean(), int((w > 2).sum()), w.size)  # fmt: skip
     logger.info("Fine-tune days: %d train, %d val", len(train_argo), len(val_argo))
 
     sigma_d = torch.tensor(sigma_np, dtype=torch.float32, device=device)
@@ -480,7 +547,12 @@ def finetune_run(
     while not state.finished and state.epoch < max_epochs:
         start = time.perf_counter()
         generator = torch.Generator().manual_seed(seed + 1000 + state.epoch)
-        order = torch.randperm(len(train_argo), generator=generator).tolist()
+        if day_weights is not None:
+            order = torch.multinomial(
+                day_weights, len(train_argo), replacement=True, generator=generator
+            ).tolist()
+        else:
+            order = torch.randperm(len(train_argo), generator=generator).tolist()
         if argo_inputs is not None:
             argo_inputs.epoch = state.epoch  # a new draw of hidden profiles each epoch
         model.train()
@@ -570,6 +642,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--vgrad-weight", type=float, default=0.0, help="Weight of the vertical-gradient term"
     )
+    parser.add_argument(
+        "--warm-weight", type=float, default=1.0, help="Draw warm Bay of Bengal days up to Wx"
+    )
     return parser
 
 
@@ -594,6 +669,7 @@ def main() -> None:
         argo_input=args.argo_input,
         huber_delta=args.huber_delta,
         vgrad_weight=args.vgrad_weight,
+        warm_weight=args.warm_weight,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 
