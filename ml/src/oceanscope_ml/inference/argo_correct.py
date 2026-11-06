@@ -35,6 +35,8 @@ level improved, the held-out floats said it got worse, 0.34 -> 0.77 C):
 
 - ``--min-depth M``: levels shallower than M metres are never corrected (their residuals are
   dropped before tuning).
+- ``--max-depth M``: levels deeper than M metres are never corrected either (on the final half
+  the correction made 643 m and 1062 m slightly worse).
 - ``--outlier-sigma K``: at each depth, residuals further than K robust standard deviations
   (1.4826 x the median absolute deviation) from the median are dropped before tuning and
   before the final store, so a few bad profiles or frontal mismatches can't drive the field.
@@ -181,6 +183,14 @@ def drop_shallow(res: Residuals, depths: np.ndarray, min_depth_m: float) -> Resi
     keep = np.isfinite(values).any(axis=1)
     out = Residuals(res.platform, res.day, res.lat, res.lon, values)
     return out.subset(keep)
+
+
+def drop_deep(res: Residuals, depths: np.ndarray, max_depth_m: float) -> Residuals:
+    """Residuals with the levels deeper than ``max_depth_m`` set to NaN."""
+    values = res.values.copy()
+    values[:, depths > max_depth_m] = np.nan
+    keep = np.isfinite(values).any(axis=1)
+    return Residuals(res.platform, res.day, res.lat, res.lon, values).subset(keep)
 
 
 def drop_outliers(res: Residuals, k: float) -> tuple[Residuals, np.ndarray]:
@@ -411,6 +421,7 @@ def run(
     params: OIParams | None = None,
     per_depth: bool = False,
     min_depth_m: float = 0.0,
+    max_depth_m: float | None = None,
     outlier_sigma: float | None = None,
 ) -> tuple[Path, Plan]:
     """Tune (unless ``params`` is given) and write the corrected store; returns its path and
@@ -438,6 +449,9 @@ def run(
     if min_depth_m > 0:
         res = drop_shallow(res, depths, min_depth_m)
         logger.info("Levels shallower than %.1f m are not corrected", min_depth_m)
+    if max_depth_m is not None:
+        res = drop_deep(res, depths, max_depth_m)
+        logger.info("Levels deeper than %.1f m are not corrected", max_depth_m)
     if outlier_sigma is not None:
         res, dropped = drop_outliers(res, outlier_sigma)
         logger.info("Outlier residuals dropped per depth (> %.1f robust sigma): %s",
@@ -464,6 +478,8 @@ def run(
         plan = uniform_plan(params, depths.size)
     if min_depth_m > 0:
         plan = tuple(None if d < min_depth_m else p for d, p in zip(depths, plan, strict=True))
+    if max_depth_m is not None:
+        plan = tuple(None if d > max_depth_m else p for d, p in zip(depths, plan, strict=True))
     logger.info("Using %s", plan_json(plan))
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -496,6 +512,9 @@ def build_cli() -> argparse.ArgumentParser:
         "--min-depth", type=float, default=0.0, help="Never correct levels shallower than this (m)"
     )
     parser.add_argument(
+        "--max-depth", type=float, default=None, help="Never correct levels deeper than this (m)"
+    )
+    parser.add_argument(
         "--outlier-sigma", type=float, default=None, help="Drop residuals beyond K robust sigma"
     )
     return parser
@@ -519,6 +538,7 @@ def main() -> None:
         params=params,
         per_depth=args.per_depth,
         min_depth_m=args.min_depth,
+        max_depth_m=args.max_depth,
         outlier_sigma=args.outlier_sigma,
     )
     print(json.dumps({"store": str(dest), "plan": json.loads(plan_json(used))}))
