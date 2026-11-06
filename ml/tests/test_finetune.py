@@ -205,3 +205,19 @@ def test_held_out_float_never_becomes_a_target(
     )
     assert len(seen) == 2 and all(seen)
     assert all(HELD_OUT not in floats for floats in seen)
+
+
+def test_finetune_with_huber_and_vertical_gradient_runs_and_guards_resume(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],
+) -> None:
+    config, store, base, files, holdout_path = setup
+    holdout = load_holdout(holdout_path)
+    kwargs = dict(lam=1.0, device_choice="cpu", epochs=1, huber_delta=1.0, vgrad_weight=0.5)
+    result = finetune_run(config, [store], base, files, holdout, "base_hv", **kwargs)  # type: ignore[arg-type]
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["loss"] == {"huber_delta": 1.0, "vgrad_weight": 0.5}
+    with pytest.raises(ValueError, match="other settings"):
+        finetune_run(
+            config, [store], base, files, holdout, "base_hv", lam=1.0, device_choice="cpu",
+            epochs=2, huber_delta=None, vgrad_weight=0.5,
+        )  # fmt: skip

@@ -8,6 +8,11 @@ Settings (env): OCEANSCOPE_RUN (base run, default main2), OCEANSCOPE_FT_LAMBDAS 
 "0.03,0.1,0.3"), OCEANSCOPE_FT_EPOCHS (default 6), OCEANSCOPE_PUBLISH=1 to upload at the end.
 OCEANSCOPE_FT_ARGO_INPUT=1 also turns the ARGO input channels on (P4-6); the run is then
 <run>_ai instead of <run>_ft.
+Loss options (both off by default): OCEANSCOPE_FT_HUBER (Huber threshold, normalized units, e.g.
+1.0) and OCEANSCOPE_FT_VGRAD (weight of the vertical-gradient term, e.g. 0.5). OCEANSCOPE_TAG is
+appended to the run name, so a loss experiment never overwrites <run>_ai (e.g. TAG=v gives
+main2_aiv). OCEANSCOPE_HALF picks the held-out floats for the ARGO check: all (default), dev or
+final (DECISIONS 2026-11-06: compare runs on dev only).
 
 Steps: ARGO 2004-2020 from the Argo ERDDAP (never 2021) -> held-out floats (the committed list,
 checked against a rebuild) -> one fine-tune per lambda -> the lambda with the lowest validation
@@ -26,7 +31,16 @@ REPO = "/kaggle/working/ocean-embed"
 ML = f"{REPO}/ml"
 BASE = os.environ.get("OCEANSCOPE_RUN", "main2")
 ARGO_INPUT = os.environ.get("OCEANSCOPE_FT_ARGO_INPUT", "0") == "1"
-RUN = f"{BASE}_ai" if ARGO_INPUT else f"{BASE}_ft"
+RUN = (f"{BASE}_ai" if ARGO_INPUT else f"{BASE}_ft") + os.environ.get("OCEANSCOPE_TAG", "").strip()
+HUBER = os.environ.get("OCEANSCOPE_FT_HUBER", "").strip()
+VGRAD = float(os.environ.get("OCEANSCOPE_FT_VGRAD", "0") or 0)
+HALF = os.environ.get("OCEANSCOPE_HALF", "all").strip()
+if HALF not in ("dev", "all", "final"):
+    raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
+LOSS = (f" --huber-delta {HUBER}" if HUBER else "") + (
+    f" --vgrad-weight {VGRAD:g}" if VGRAD > 0 else ""
+)
+H = "" if HALF == "all" else f"_{HALF}"
 LAMBDAS = [float(x) for x in os.environ.get("OCEANSCOPE_FT_LAMBDAS", "0.03,0.1,0.3").split(",")]
 EPOCHS = int(os.environ.get("OCEANSCOPE_FT_EPOCHS", "6"))
 PUBLISH = os.environ.get("OCEANSCOPE_PUBLISH", "0") == "1"
@@ -46,8 +60,8 @@ if not os.path.isdir(REPO):
         f"git clone -b p3 https://github.com/aryanchettripkt-eng/ocean-embed.git {REPO}",
         cwd="/kaggle/working",
     )
-else:
-    run("git pull origin p3", cwd=REPO)
+else:  # pull the branch the notebook cloned, never merge another one into it
+    run("git pull --ff-only origin $(git rev-parse --abbrev-ref HEAD)", cwd=REPO)
 run(f"{sys.executable} -m pip install -q -e .")
 os.environ["PYTHONPATH"] = f"{ML}/src"
 sys.path.insert(0, f"{ML}/src")
@@ -134,6 +148,7 @@ for lam in LAMBDAS:
         f"--cache-dir {CACHE} --base {base_ckpt} --argo {FILES} --holdout {holdout_path} "
         f"--lambda {lam:g} --run-id {rid} --epochs {EPOCHS} --patience 2 --device cuda"
         + (" --argo-input" if ARGO_INPUT else "")
+        + LOSS
     )
     hist = pd.read_csv(Path(ML) / config.paths.outputs / "metrics" / f"finetune_{rid}.csv")
     print(hist.to_string(index=False))
@@ -163,17 +178,22 @@ run(
 run(
     f"python -m oceanscope_ml.evaluation.argo_validation --config {CFG} --predictions {PRED} "
     f"--store {S} --stats {stats} --argo {' '.join(str(p) for p in val_files)} "
-    f"--holdout {holdout_path} --out-dir {OUT}"
+    f"--holdout {holdout_path} --out-dir {OUT} --half {HALF}"
 )
 run(
     f"python -m oceanscope_ml.evaluation.evaluate --config {CFG} --predictions {PRED} "
     f"--store {S} --stats {stats} --out-dir {OUT}"
 )
-for name in (f"{RUN}_val.csv", f"argo_{RUN}.csv", f"{RUN}_headline.csv"):
+for name in (f"{RUN}_val.csv", f"argo_{RUN}{H}.csv", f"{RUN}{H}_headline.csv"):
     run(f"cat {OUT}/metrics/{name}")
 shutil.copy(holdout_path, OUT / "metrics" / "argo_eval_floats.json")
 
 # 6) Publish (dry run always; upload only with OCEANSCOPE_PUBLISH=1).
+if HALF != "all":  # half-scored files are for comparing runs, not for the site
+    if PUBLISH:
+        raise SystemExit("Publishing needs OCEANSCOPE_HALF=all; nothing was published")
+    print("\nFINE-TUNE DONE (nothing published)")
+    raise SystemExit(0)
 run(f"python -m oceanscope_ml.publish --config {CFG} --out-dir {OUT} --dry-run")
 if PUBLISH:
     run(f"python -m oceanscope_ml.publish --config {CFG} --out-dir {OUT}")

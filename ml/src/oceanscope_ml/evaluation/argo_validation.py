@@ -54,6 +54,10 @@ BOOTSTRAP_DRAWS = 1000
 BOOTSTRAP_SEED = 42
 CI_PERCENTILES = (2.5, 97.5)
 GRID_HALF_CELL_DEG = 0.125
+# Dev/final halves of the held-out floats (DECISIONS 2026-11-06). Runs are compared on the dev
+# half only; the final half is scored once, on the run picked with the dev half.
+HALF_SEED = 2026
+HALVES = ("all", "dev", "final")
 QC_GOOD = (1, 2)
 ARGO_VARIABLES = (
     "platform_number",
@@ -182,6 +186,39 @@ def load_profiles(
     out = df.loc[keep, ["platform_number", "cycle_number", "time", "latitude", "longitude"]]
     out = out.assign(pres=df.loc[keep, "pres"], temp_obs_c=df.loc[keep, "temp"])
     return out.rename(columns={"cycle_number": "cycle", "latitude": "lat", "longitude": "lon"})
+
+
+def float_region(lat: float, lon: float) -> str:
+    if lon >= BAY_OF_BENGAL_MIN_LON and lat >= EQUATORIAL_MAX_LAT:
+        return "bay_of_bengal"
+    if lat < EQUATORIAL_MAX_LAT:
+        return "equatorial"
+    return "arabian_sea"
+
+
+def holdout_halves(profiles: pd.DataFrame, seed: int = HALF_SEED) -> pd.DataFrame:
+    """Split the held-out floats into a dev and a final half, stratified by region.
+
+    A float's region is the region of its median position over the profiles given. Within each
+    region the floats are sorted, shuffled with a fixed seed, and the first ceil(n / 2) go to
+    dev. Returns one row per float: ``platform_number, region, half``.
+    """
+    pos = profiles.groupby("platform_number")[["lat", "lon"]].median()
+    regions = [
+        float_region(float(a), float(o)) for a, o in zip(pos["lat"], pos["lon"], strict=True)
+    ]
+    table = pd.DataFrame({"platform_number": pos.index.astype(str), "region": regions})
+    rng = np.random.default_rng(seed)
+    halves = []
+    for region in sorted(table["region"].unique()):
+        floats = np.sort(table.loc[table["region"] == region, "platform_number"].to_numpy())
+        order = rng.permutation(floats.size)
+        n_dev = int(np.ceil(floats.size / 2))
+        for rank, k in enumerate(order):
+            halves.append((floats[k], "dev" if rank < n_dev else "final"))
+    half = dict(halves)
+    table["half"] = table["platform_number"].map(half)
+    return table.sort_values(["region", "platform_number"]).reset_index(drop=True)
 
 
 def match_profiles(
@@ -384,10 +421,17 @@ def run(
     holdout_path: Path,
     stats_path: Path | None = None,
     out_dir: Path | None = None,
+    half: str = "all",
 ) -> dict[str, Path]:
-    """Validate one run against held-out floats; write the three metric files, return paths."""
+    """Validate one run against held-out floats; write the three metric files, return paths.
+
+    With ``half`` = "dev" or "final" only that half of the held-out floats is scored and the
+    files are named ``<run_id>_<half>`` (see ``holdout_halves``)."""
+    if half not in HALVES:
+        raise ValueError(f"half must be one of {HALVES}")
     pred = xr.open_zarr(predictions)
     run_id = str(pred.attrs["run_id"])
+    label = run_id if half == "all" else f"{run_id}_{half}"
     dates = pd.DatetimeIndex(pred["time"].values).normalize()
     check_no_test_leakage(dates, config.splits.test)
     val_start, val_end = (pd.Timestamp(d) for d in config.splits.val)
@@ -398,24 +442,36 @@ def run(
 
     profiles = load_profiles(argo_paths, _load_holdout(holdout_path), val_start, val_end)
     logger.info("Held-out profile levels in the validation window: %d", len(profiles))
+    halves = None
+    if half != "all":
+        halves = holdout_halves(profiles)
+        keep = set(halves.loc[halves["half"] == half, "platform_number"])
+        profiles = profiles[profiles["platform_number"].isin(keep)]
+        counts = halves[halves["half"] == half].groupby("region").size().to_dict()
+        logger.info("Scoring the %s half: %d floats %s", half, len(keep), counts)
     references = open_parts(store_paths, stats_path)[["grep_mean", "armor3d"]]
     result = validate(profiles, pred, references)
 
     metrics_dir = Path(out_dir or config.paths.outputs) / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     paths = {
-        "argo": metrics_dir / f"argo_{run_id}.csv",
-        "argo_matches": metrics_dir / f"argo_matches_{run_id}.parquet",
-        "headline": metrics_dir / f"{run_id}_headline.csv",
+        "argo": metrics_dir / f"argo_{label}.csv",
+        "argo_matches": metrics_dir / f"argo_matches_{label}.parquet",
+        "headline": metrics_dir / f"{label}_headline.csv",
     }
+    if halves is not None:
+        paths["halves"] = metrics_dir / "argo_eval_halves.csv"
+        halves.to_csv(paths["halves"], index=False)
     result.per_depth.to_csv(paths["argo"], index=False)
     result.matches.to_parquet(paths["argo_matches"], index=False)
     result.headline.to_csv(paths["headline"], index=False)
 
     verdict = headline_verdict(result.headline, "val")
-    label = {True: "Met", False: "Not met", None: "Not yet evaluated"}[verdict]
     logger.info(
-        "Run %s: %d matched observations, headline (val) %s", run_id, len(result.matches), label
+        "Run %s: %d matched observations, headline (val) %s",
+        label,
+        len(result.matches),
+        {True: "Met", False: "Not met", None: "Not yet evaluated"}[verdict],
     )
     return paths
 
@@ -429,6 +485,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--argo", nargs="+", required=True, help="ARGO profile NetCDF files")
     parser.add_argument("--holdout", required=True, help="argo_eval_floats.json")
     parser.add_argument("--out-dir", default=None, help="Outputs dir (default paths.outputs)")
+    parser.add_argument(
+        "--half", default="all", choices=HALVES, help="Score only the dev or final half"
+    )
     return parser
 
 
@@ -444,6 +503,7 @@ def main() -> None:
         Path(args.holdout),
         stats_path=Path(args.stats) if args.stats else None,
         out_dir=Path(args.out_dir) if args.out_dir else None,
+        half=args.half,
     )
 
 

@@ -279,13 +279,19 @@ def finetune_run(
     epochs: int | None = None,
     patience: int = 3,
     argo_input: bool = False,
+    huber_delta: float | None = None,
+    vgrad_weight: float = 0.0,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
     With ``argo_input`` the ARGO input channels (P4-6) are turned on: the base model's first
     layer is widened with zero weights for them, and the ARGO targets are the profiles hidden
     from the inputs (``oceanscope_ml.data.argo_inputs``), never the ones the sample sees.
+
+    ``huber_delta`` and ``vgrad_weight`` switch on the Huber loss (GLORYS, GREP and ARGO terms)
+    and the vertical-gradient term on GLORYS (``models.loss``). Both are off by default.
     """
+    loss_settings = {"huber_delta": huber_delta, "vgrad_weight": float(vgrad_weight)}
     if argo_input:
         enable_argo_input(config)
     ft_cfg = config.finetune_argo
@@ -328,7 +334,11 @@ def finetune_run(
     state = FineTuneState()
     if last_path.exists():
         ckpt = torch.load(last_path, map_location=device, weights_only=False)
-        if ckpt["lambda"] != lam or ckpt["base_checkpoint"] != str(base_checkpoint):
+        if (
+            ckpt["lambda"] != lam
+            or ckpt["base_checkpoint"] != str(base_checkpoint)
+            or ckpt.get("loss", {"huber_delta": None, "vgrad_weight": 0.0}) != loss_settings
+        ):
             raise ValueError(f"Run {run_id} was started with other settings. Use a new --run-id.")
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -435,6 +445,7 @@ def finetune_run(
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
                 "argo_input": argo_input,
+                "loss": loss_settings,
             },
             best_path,
         )
@@ -449,6 +460,7 @@ def finetune_run(
                 "state": asdict(state),
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
+                "loss": loss_settings,
                 "channel_names": channels,
                 "config_hash": config_hash,
                 "run_id": run_id,
@@ -488,7 +500,12 @@ def finetune_run(
                 batch["has_grep"],
                 depth_weights,
                 aux_weight,
-            ) + lam * masked_weighted_mse(pred, batch["argo_y"], batch["argo_mask"], depth_weights)
+                huber_delta=huber_delta,
+                vgrad_weight=vgrad_weight,
+                sigma_d=sigma_d,
+            ) + lam * masked_weighted_mse(
+                pred, batch["argo_y"], batch["argo_mask"], depth_weights, huber_delta
+            )
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -547,6 +564,12 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--argo-input", action="store_true", help="Turn the ARGO input channels on (P4-6)"
     )
+    parser.add_argument(
+        "--huber-delta", type=float, default=None, help="Huber loss threshold (normalized units)"
+    )
+    parser.add_argument(
+        "--vgrad-weight", type=float, default=0.0, help="Weight of the vertical-gradient term"
+    )
     return parser
 
 
@@ -569,6 +592,8 @@ def main() -> None:
         epochs=args.epochs,
         patience=args.patience,
         argo_input=args.argo_input,
+        huber_delta=args.huber_delta,
+        vgrad_weight=args.vgrad_weight,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 
