@@ -25,6 +25,9 @@ dependencies = [
     "Pillow>=10.0.0",
     # P6-2 publish step: uploads the run's outputs to the Hugging Face dataset repo.
     "huggingface_hub>=0.20.0",
+    # Conditional ARGO residual correction (inference.residual_model): small gradient-boosted
+    # trees on the model's errors at the floats. Free, CPU-only, preinstalled on Kaggle.
+    "lightgbm>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +68,7 @@ module = [
     "cdsapi.*",
     "earthaccess.*",
     "sklearn.*",
+    "lightgbm.*",
     "torch.*",
 ]
 ignore_missing_imports = true

@@ -4,11 +4,13 @@ Usage (from ml/):
 
     python -m oceanscope_ml.inference.ensemble --config configs/experiment.yaml \
         --predictions <predictions_a.zarr> <predictions_b.zarr> ... --run-id <name> \
-        [--out-dir outputs]
+        [--out-dir outputs] [--weights w1,w2,...]
 
 All members must have the same time, depth, lat and lon coordinates. ``temp_pred`` is the plain
 mean of the members, ``coverage`` is 1 only where every member is valid, and ``temp_glorys`` is
-copied from the first member. The layout matches ``inference.predict``, so the ARGO check, the
+copied from the first member. With ``--weights`` (one per member, >= 0, summing to 1; see
+``inference.ensemble_weights``) ``temp_pred`` is the weighted mean instead. The layout matches
+``inference.predict``, so the ARGO check, the
 ARGO correction and ``evaluation.evaluate`` read the result like any run. Test-period dates are
 refused (the 2021 test year stays sealed).
 
@@ -51,11 +53,20 @@ def _check_members(config: ExperimentConfig, members: list[xr.Dataset]) -> None:
 
 
 def ensemble(
-    config: ExperimentConfig, predictions: list[Path], run_id: str, out_dir: Path | None = None
+    config: ExperimentConfig,
+    predictions: list[Path],
+    run_id: str,
+    out_dir: Path | None = None,
+    weights: list[float] | None = None,
 ) -> Path:
-    """Write the mean of ``predictions`` as ``predictions_<run_id>.zarr``; returns its path."""
+    """Write the (weighted) mean of ``predictions`` as ``predictions_<run_id>.zarr``."""
     if len(predictions) < 2:
         raise ValueError("An ensemble needs at least two prediction stores")
+    w = np.full(len(predictions), 1.0 / len(predictions))
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)
+        if w.size != len(predictions) or (w < 0).any() or not np.isclose(w.sum(), 1.0):
+            raise ValueError("Weights must be one per member, >= 0 and sum to 1")
     members = [xr.open_zarr(p) for p in predictions]
     _check_members(config, members)
     ids = [str(ds.attrs.get("run_id", Path(p).stem)) for ds, p in zip(members, predictions)]
@@ -75,14 +86,14 @@ def ensemble(
         b1 = min(b0 + BLOCK_DAYS, n_time)
         total = None
         valid = None
-        for ds in members:
+        for wk, ds in zip(w, members, strict=True):
             block = ds.isel(time=slice(b0, b1))
-            temp = block["temp_pred"].transpose(*COORDS).values.astype(float)
+            temp = wk * block["temp_pred"].transpose(*COORDS).values.astype(float)
             ok = block["coverage"].transpose("time", "lat", "lon").values == 1
             total = temp if total is None else total + temp
             valid = ok if valid is None else valid & ok
         assert total is not None and valid is not None
-        mean = total / len(members)
+        mean = total
         mean = np.where(valid[:, None], mean, np.nan)
         block_out = xr.Dataset(
             {
@@ -94,7 +105,13 @@ def ensemble(
         logger.info("Averaged %d / %d days", b1, n_time)
 
     group = zarr.open_group(str(dest), mode="r+")
-    group.attrs.update({"run_id": run_id, "ensemble_members": json.dumps(ids)})
+    group.attrs.update(
+        {
+            "run_id": run_id,
+            "ensemble_members": json.dumps(ids),
+            "ensemble_weights": json.dumps([round(float(x), 6) for x in w]),
+        }
+    )
     group.attrs.pop("base_run_id", None)
     group.attrs.pop("argo_correction", None)
     zarr.consolidate_metadata(str(dest))
@@ -107,6 +124,7 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--predictions", nargs="+", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--out-dir", default=None, help="Outputs dir (default paths.outputs)")
+    parser.add_argument("--weights", default=None, help="Comma-separated, one per member")
     return parser
 
 
@@ -118,6 +136,7 @@ def main() -> None:
         [Path(p) for p in args.predictions],
         args.run_id,
         out_dir=Path(args.out_dir) if args.out_dir else None,
+        weights=[float(x) for x in args.weights.split(",")] if args.weights else None,
     )
     print(json.dumps({"store": str(dest)}))
 
