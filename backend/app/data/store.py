@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import date as dt_date
-from typing import Any, Literal
+from typing import Any, Literal, ParamSpec, TypeVar
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+import zarr
 
 from app.data.grid import compute_area_weights, get_region_mask, snap_coordinate
 from app.data.loader import DataLoader
@@ -75,8 +80,56 @@ from app.schemas.models import (
     Splits,
     TimeseriesResponse,
 )
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+# Fewer chunks in flight per read keeps each request's peak memory small (settings.py).
+zarr.config.set({"async.concurrency": max(1, settings.ZARR_ASYNC_CONCURRENCY)})
+
+
+class _ReadGate:
+    """Lets at most `limit` threads read the prediction store at once.
+
+    Re-entrant per thread, so a gated method may call another gated method (for example
+    get_region_summary -> get_field_grid) without waiting on itself.
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._sem = threading.BoundedSemaphore(max(1, limit))
+        self._local = threading.local()
+
+    @contextmanager
+    def hold(self) -> Iterator[None]:
+        depth = getattr(self._local, "depth", 0)
+        if depth == 0:
+            self._sem.acquire()
+        self._local.depth = depth + 1
+        try:
+            yield
+        finally:
+            self._local.depth = depth
+            if depth == 0:
+                self._sem.release()
+
+
+_read_gate = _ReadGate(settings.DATA_READ_CONCURRENCY)
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _gated(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run a store method inside the read gate."""
+
+    @functools.wraps(method)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _read_gate.hold():
+            return method(*args, **kwargs)
+
+    return wrapper
 
 
 DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -198,6 +251,11 @@ class OutputStore:
 
         if not active_loader.is_loaded or active_loader.manifest is None:
             raise DataNotLoadedError(active_loader.load_error or "Data store is not loaded")
+
+    @staticmethod
+    def reading() -> AbstractContextManager[None]:
+        """Context manager for code outside this class that reads prediction arrays."""
+        return _read_gate.hold()
 
     def get_predictions_dataset(self) -> xr.Dataset:
         """Open predictions zarr store lazily."""
@@ -376,6 +434,7 @@ class OutputStore:
 
         return max(live_end_dates)
 
+    @_gated
     def get_meta(self) -> MetaResponse:
         """Return dataset metadata, coordinates, caveats, and cached color ranges."""
         self._ensure_loaded()
@@ -438,6 +497,7 @@ class OutputStore:
             features=features,
         )
 
+    @_gated
     def get_map(
         self,
         date: str,
@@ -512,6 +572,7 @@ class OutputStore:
             stats=stats,
         )
 
+    @_gated
     def get_section(
         self,
         date: str,
@@ -597,6 +658,7 @@ class OutputStore:
             coverage=coverage_list,
         )
 
+    @_gated
     def get_profile(self, lat: float, lon: float, date: str) -> ProfileResponse:
         """Return 15-depth vertical temperature profile for lat, lon, date (PRD_BACKEND §4.4)."""
         split = self.get_date_split(date)
@@ -645,6 +707,7 @@ class OutputStore:
             error=error_list,
         )
 
+    @_gated
     def get_timeseries(
         self,
         lat: float,
@@ -730,6 +793,7 @@ class OutputStore:
         if len(test_range) == 2 and test_range[0] <= date_str <= test_range[1]:
             raise TestNotEvaluatedError("Dates in the sealed test period are not available yet")
 
+    @_gated
     def get_field_grid(
         self,
         date: str,
@@ -778,6 +842,7 @@ class OutputStore:
             coverage=cov_2d,
         )
 
+    @_gated
     def get_region_summary(
         self,
         date: str,
