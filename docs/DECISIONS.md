@@ -231,3 +231,8 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Regime table** (`evaluation.regimes`) and **matchup audit** (`evaluation.matchup_audit`): reading aids only; they never pick a run or a setting. The primary matchup stays the same day; ±1 day and the 3-day mean are sensitivity rows.
 - Known limitation: in run E the per-depth correction is tuned on top of the tree-corrected store with floats the tree was fitted on, so its tuning scores are optimistic. The dev-half check is unaffected.
 - Approved by Aryan ("did you add the new suggestions too?", after the feasibility reply listing 1, 8, 2 and 9 for run E), 2026-11-06.
+
+## 2026-11-06 — Dev-half pick for the final-half score: ens3w_rm_oi
+- Bay of Bengal 50–300 m, dev half (6 floats), validation years: ens3 0.867, ens3_oi 0.829, ens3w 0.862, ens3w_rm 0.836, **ens3w_rm_oi 0.816** (CI 0.700–0.881), main2_aiv 0.878, main2_ai 0.885; GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639. Picked by the rule set before the runs: lowest dev-half RMSE. The lead over ens3_oi (0.013 °C) is within the noise.
+- Caveat found: ensemble weights and the tree model are fitted on non-held-out floats that the ARGO-input members (main2_ai, main3) also see as inputs, so their fit scores are optimistic (weights went 0.1 / 0.0 / 0.9 but only moved the dev score from 0.867 to 0.862). The dev and final halves are never inputs, so their scores are unaffected.
+- The final half is scored once on ens3w_rm_oi (`scripts/kaggle_final_half.py`), with ens3 on the same floats for reference only.
