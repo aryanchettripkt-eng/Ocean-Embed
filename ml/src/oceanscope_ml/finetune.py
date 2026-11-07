@@ -242,11 +242,19 @@ WARM_CAP_QUANTILE = 0.99
 
 
 def warm_scores(
-    ds: xr.Dataset, dates: pd.DatetimeIndex, sigma: np.ndarray, band: np.ndarray
+    ds: xr.Dataset,
+    dates: pd.DatetimeIndex,
+    sigma: np.ndarray,
+    band: np.ndarray,
+    detrend: bool = False,
 ) -> np.ndarray:
     """Per day: mean positive GLORYS anomaly (in sigma units) over the Bay of Bengal 50-300 m
     band, from the training targets and the train-only climatology (never ARGO, never val).
-    Zero everywhere when the grid has no band cell."""
+    Zero everywhere when the grid has no band cell.
+
+    With ``detrend`` the score is instead how far the day's mean band anomaly (signed) sits above
+    the mean of that year's days, so a warming trend against the 1993-2017 climatology does not
+    make whole recent years "warm" (main3_aiw: 3142 of 4264 days had weight above 2)."""
     if not band.any():
         return np.zeros(len(dates))
     depth_idx = np.flatnonzero(band.any(axis=(1, 2)))
@@ -267,8 +275,12 @@ def warm_scores(
         field = ds["thetao"].isel(time=pos[b0:b1], depth=depth_idx, lat=lat_idx, lon=lon_idx)
         th = np.asarray(field.transpose("time", "depth", "lat", "lon").values, dtype=np.float32)
         anom = (th - clim[dates[b0:b1].day_of_year.to_numpy() - 1]) / sig[None]
-        warm = np.where(sub[None] & np.isfinite(anom), np.clip(anom, 0.0, None), np.nan)
-        out[b0:b1] = np.nan_to_num(np.nanmean(warm.reshape(b1 - b0, -1), axis=1))
+        ok = sub[None] & np.isfinite(anom)
+        cells = np.where(ok, anom if detrend else np.clip(anom, 0.0, None), np.nan)
+        out[b0:b1] = np.nan_to_num(np.nanmean(cells.reshape(b1 - b0, -1), axis=1))
+    if detrend:
+        years = pd.Series(out).groupby(dates.year.to_numpy()).transform("mean").to_numpy()
+        out = np.clip(out - years, 0.0, None)
     return out
 
 
@@ -325,6 +337,7 @@ def finetune_run(
     huber_delta: float | None = None,
     vgrad_weight: float = 0.0,
     warm_weight: float = 1.0,
+    warm_detrend: bool = False,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
@@ -338,7 +351,8 @@ def finetune_run(
     ``warm_weight`` W > 1 draws training days with replacement, in proportion to a weight from 1
     (no warm anomaly) to W (the warmest 1% of days), where warmth is the mean positive GLORYS
     anomaly over the Bay of Bengal 50-300 m band (``warm_scores``). Aimed at the warm-anomaly
-    errors in the regime table (DECISIONS 2026-11-06). Needs ``argo_input``.
+    errors in the regime table (DECISIONS 2026-11-06). Needs ``argo_input``. ``warm_detrend``
+    judges warmth against each year's own mean instead (``warm_scores``).
     """
     if warm_weight < 1.0:
         raise ValueError("warm_weight must be >= 1 (1 = off)")
@@ -349,6 +363,8 @@ def finetune_run(
         "vgrad_weight": float(vgrad_weight),
         "warm_weight": float(warm_weight),
     }
+    if warm_detrend:  # only recorded when on, so older checkpoints still match
+        loss_settings["warm_detrend"] = True
     no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
@@ -461,7 +477,8 @@ def finetune_run(
     if warm_weight > 1.0:
         assert isinstance(train_argo, Subset)
         days = _split_dates(stores, train_ds)[np.asarray(train_argo.indices)]
-        scores = warm_scores(stores, days, sigma_np, _bob_band_mask(stores, depths))
+        scores = warm_scores(stores, days, sigma_np, _bob_band_mask(stores, depths),
+                             detrend=warm_detrend)  # fmt: skip
         w = warm_weights(scores, warm_weight)
         day_weights = torch.as_tensor(w, dtype=torch.float64)
         logger.info("Warm-day weighting x%g: mean weight %.2f, %d of %d days above 2",
@@ -645,6 +662,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--warm-weight", type=float, default=1.0, help="Draw warm Bay of Bengal days up to Wx"
     )
+    parser.add_argument(
+        "--warm-detrend", action="store_true", help="Judge warmth against each year's own mean"
+    )
     return parser
 
 
@@ -670,6 +690,7 @@ def main() -> None:
         huber_delta=args.huber_delta,
         vgrad_weight=args.vgrad_weight,
         warm_weight=args.warm_weight,
+        warm_detrend=args.warm_detrend,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 

@@ -14,7 +14,8 @@ appended to the run name, so a loss experiment never overwrites <run>_ai (e.g. T
 main2_aiv). OCEANSCOPE_HALF picks the held-out floats for the ARGO check: all (default), dev or
 final (DECISIONS 2026-11-06: compare runs on dev only). OCEANSCOPE_FT_WARM (e.g. 4) draws warm
 Bay of Bengal training days up to that many times as often (``finetune --warm-weight``; needs
-OCEANSCOPE_FT_ARGO_INPUT=1).
+OCEANSCOPE_FT_ARGO_INPUT=1). OCEANSCOPE_FT_WARM_DETREND=1 judges warmth against each year's own
+mean, so the warming trend does not make whole recent years count as warm.
 
 Steps: ARGO 2004-2020 from the Argo ERDDAP (never 2021) -> held-out floats (the committed list,
 checked against a rebuild) -> one fine-tune per lambda -> the lambda with the lowest validation
@@ -37,6 +38,7 @@ RUN = (f"{BASE}_ai" if ARGO_INPUT else f"{BASE}_ft") + os.environ.get("OCEANSCOP
 HUBER = os.environ.get("OCEANSCOPE_FT_HUBER", "").strip()
 VGRAD = float(os.environ.get("OCEANSCOPE_FT_VGRAD", "0") or 0)
 WARM = float(os.environ.get("OCEANSCOPE_FT_WARM", "1") or 1)
+WARM_DETREND = os.environ.get("OCEANSCOPE_FT_WARM_DETREND", "0") == "1"
 HALF = os.environ.get("OCEANSCOPE_HALF", "all").strip()
 if HALF not in ("dev", "all", "final"):
     raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
@@ -44,6 +46,7 @@ LOSS = (
     (f" --huber-delta {HUBER}" if HUBER else "")
     + (f" --vgrad-weight {VGRAD:g}" if VGRAD > 0 else "")
     + (f" --warm-weight {WARM:g}" if WARM > 1 else "")
+    + (" --warm-detrend" if WARM > 1 and WARM_DETREND else "")
 )
 H = "" if HALF == "all" else f"_{HALF}"
 LAMBDAS = [float(x) for x in os.environ.get("OCEANSCOPE_FT_LAMBDAS", "0.03,0.1,0.3").split(",")]

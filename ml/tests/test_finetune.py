@@ -250,3 +250,20 @@ def test_warm_scores_use_only_positive_band_anomalies() -> None:
     band[1, 1, 1] = True
     s = warm_scores(ds, times, np.array([1.0, 2.0]), band)
     np.testing.assert_allclose(s, [0.0, 1.0, 0.0, 0.0])
+
+
+def test_detrended_warm_scores_ignore_a_warm_year() -> None:
+    from oceanscope_ml.finetune import warm_scores
+
+    times = pd.DatetimeIndex(["2000-01-01", "2000-01-02", "2001-01-01", "2001-01-02"])
+    band = np.ones((1, 1, 1), dtype=bool)
+    thetao = np.array([0.0, 1.0, 3.0, 3.0], dtype=np.float32).reshape(4, 1, 1, 1)
+    ds = xr.Dataset(
+        {"thetao": (("time", "depth", "lat", "lon"), thetao),
+         "clim": (("dayofyear", "depth", "lat", "lon"), np.zeros((366, 1, 1, 1), np.float32))},
+        coords={"time": times, "depth": [100.0], "lat": [10.0], "lon": [85.0]},
+    )  # fmt: skip
+    plain = warm_scores(ds, times, np.array([1.0]), band)
+    detr = warm_scores(ds, times, np.array([1.0]), band, detrend=True)
+    np.testing.assert_allclose(plain, [0.0, 1.0, 3.0, 3.0])
+    np.testing.assert_allclose(detr, [0.0, 0.5, 0.0, 0.0])
