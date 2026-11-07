@@ -76,11 +76,18 @@ def member_errors(
     return err[ok], band[ok]
 
 
+def _grid_rmse(err: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    gram = err.T @ err / err.shape[0]
+    mse = np.einsum("gi,ij,gj->g", grid, gram, grid)
+    return np.sqrt(np.clip(mse, 0.0, None))
+
+
 def choose(err: np.ndarray, band: np.ndarray, step: float) -> tuple[np.ndarray, pd.DataFrame]:
     grid = simplex_grid(err.shape[1], step)
-    e = err @ grid.T  # [n, G]
-    rmse = np.sqrt(np.mean(e**2, axis=0))
-    rmse_band = np.sqrt(np.mean(e[band] ** 2, axis=0)) if band.any() else np.full(len(grid), np.nan)
+    # MSE(w) = w' (E'E / n) w: the k x k Gram matrix instead of an [n, grid] error matrix, which
+    # with five members (10,626 grid points) no longer fits in memory.
+    rmse = _grid_rmse(err, grid)
+    rmse_band = _grid_rmse(err[band], grid) if band.any() else np.full(len(grid), np.nan)
     table = pd.DataFrame(grid, columns=[f"w{k}" for k in range(err.shape[1])])
     table["rmse_c"] = rmse
     table["bob_band_rmse_c"] = rmse_band

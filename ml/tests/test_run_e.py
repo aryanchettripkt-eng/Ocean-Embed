@@ -176,3 +176,11 @@ def test_time_window_rows_cover_every_shift() -> None:
     assert set(table["window"]) == {"-1 day", "same day", "+1 day", "3-day mean"}
     same = table[(table["window"] == "same day") & (table["group"] == "all")].set_index("product")
     assert same.loc["model", "rmse_c"] < same.loc["armor3d", "rmse_c"]
+
+
+def test_grid_rmse_matches_the_direct_error_for_five_members() -> None:
+    rng = np.random.default_rng(0)
+    err = rng.normal(size=(2000, 5))
+    grid = ew.simplex_grid(5, 0.1)
+    direct = np.sqrt(np.mean((err @ grid.T) ** 2, axis=0))
+    np.testing.assert_allclose(ew._grid_rmse(err, grid), direct, rtol=1e-10)
