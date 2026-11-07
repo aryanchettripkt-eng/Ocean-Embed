@@ -267,3 +267,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - H (main3, ARGO inputs, λ = 1.0, W = 4): best epoch 1, val ARGO RMSE on non-held-out floats 0.706 → 0.696 °C (Bay of Bengal 50–300 m 0.892 → 0.878). Dev half, Bay of Bengal 50–300 m: **main3_aiw 0.860** (CI 0.780–0.924) vs main3 0.867. A small gain.
 - Flaw found: the weighting counted 3142 of 4264 ARGO-era training days as warm (weight above 2), because the 2004–2017 ocean is warmer than the 1993–2017 climatology. It mostly up-weighted recent years, not warm events.
 - `finetune --warm-detrend` (`OCEANSCOPE_FT_WARM_DETREND=1`): warmth is how far the day's mean band anomaly sits above that year's mean, so only warm events within a year get the extra weight. Off by default; main3_aiw is unchanged. A second run (main3_aiwd) waits for the ens4 result (step I).
+
+## 2026-11-07 — ens4 result (step I): no change of pick
+- Weights on non-held-out floats: main2_ai 0.0, main2_ft 0.0, main3 0.3, main3_aiw 0.7 (fit RMSE 0.681 → 0.647 °C). Tree CV, Bay of Bengal 50–300 m: 0.717 → 0.669 (run F 0.677). The per-depth correction again found nothing to add.
+- Dev half, Bay of Bengal 50–300 m: **ens4w_rm2 0.827** (CI 0.705–0.894) vs ens3w_rm_oi 0.816 and ens3w_rm2 0.821. GLORYS12 0.756. Not lower on the dev half, so by the rule set before the run it does not replace ens3w_rm_oi.
+- Warm anomalies did not move (1.30 vs 1.27 in run F; GLORYS12 1.01), nor did SW monsoon (0.92) or positive IOD (0.90). Five rounds of changes (corrections, weights, tree features, warm-day fine-tune) have all landed at 0.82 ± 0.01 on the dev half.
+- Likely reason: GLORYS12 assimilates the held-out floats' own profiles, and its advantage is largest exactly where those profiles carry information the surface fields do not (warm subsurface events). Our model never sees them.

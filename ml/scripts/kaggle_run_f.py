@@ -202,7 +202,7 @@ print(band.pivot_table(index=["regime", "value"], columns="product", values="rms
 
 # 6) Summary: Bay of Bengal 50-300 m RMSE on the chosen half, every run vs the references.
 print(f"\nSUMMARY: Bay of Bengal 50-300 m, held-out floats ({HALF} half), validation years")
-print(f"(run E, dev half: {RUN}w_rm_oi 0.816 C, GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639)")
+print(f"(run E, dev half: ens3w_rm_oi 0.816 C, GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639)")
 summary = []
 for rid in checked:
     h = pd.read_csv(M / f"{rid}{H}_headline.csv")
