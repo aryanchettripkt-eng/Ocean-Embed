@@ -281,3 +281,7 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Bug fixed on the way:** `argo_inputs_for` refused any end date in the test year, so the 2021 test would have stopped at its first ARGO-input member. It now reaches the test year only with `allow_test` (passed by `predict_store` only when `allow_test` is set), and reads the test year separately from December 2020.
 - Run J: main3, ARGO inputs, 30-day window, λ ∈ {3, 10} (the one with the lowest validation ARGO RMSE on non-held-out floats is kept) → `main3_aix30`. Run K: `kaggle_run_f.py` with members main2_ai, main2_ft, main3, main3_aiw, main3_aix30 (`ens5`), tree window 30 days.
 - **Rules set before the run:** as for ens4. ens5w_rm2 replaces ens3w_rm_oi only if lower on the dev half and its tree CV is lower; the 2021 test is spent only once a run is below GLORYS12 (0.756 °C) on the dev half.
+
+## 2026-11-07 — Run J result: main3_aix30
+- main3 fine-tuned with ARGO inputs over a 30-day window: λ 3 best epoch 5, λ 10 best epoch 6 (the cap), both 0.687 °C validation ARGO RMSE on non-held-out floats (base 0.709); λ 3 kept (first of the tie). Bay of Bengal 50–300 m on those floats 0.888 → 0.866.
+- Dev half, Bay of Bengal 50–300 m: **main3_aix30 0.840** (CI 0.735–0.933), against main3 0.867 and main3_aiw 0.860; GLORYS12 0.756. The best single member so far. Both λ were still improving at 6 epochs.
