@@ -71,7 +71,7 @@ logger = logging.getLogger("oceanscope_ml.evaluation.argo_test")
 
 PERIOD = "test"
 MIN_REFERENCE_COVER = 0.95
-WINDOW_DAYS = 10  # ARGO residuals before the first test day (the correction's window)
+WINDOW_DAYS = 31  # ARGO residuals before the first test day (the longest correction window)
 
 
 def check_may_run(metrics_dir: Path, run_id: str, go: bool) -> None:
@@ -132,7 +132,8 @@ def apply_tree(
     surface = rm._surface(store_paths, stats_path, pred) if store_paths else None
     res = input_residuals(config, pred_path, argo_paths, holdout)
     return rm.write_store(pred_path, surface, res, model, list(meta["names"]), run_id, dest,
-                          str(meta["features"]), meta.get("max_depth_m"))  # fmt: skip
+                          str(meta["features"]), meta.get("max_depth_m"),
+                          int(meta.get("window_days", rm.WINDOW_DAYS)))  # fmt: skip
 
 
 def apply_oi(

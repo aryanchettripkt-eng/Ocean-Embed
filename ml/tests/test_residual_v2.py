@@ -136,3 +136,14 @@ def test_v2_reads_surface_trends_and_climatology_from_the_stores(
     for f in ("sst", "sla", "wind", "pred_anom_c", "sst_d14", "sla_d28", "near_res_c"):
         assert f in names
     assert "thetao" not in names
+
+
+def test_nearby_features_follow_the_window() -> None:
+    res = rm.Residuals(np.array(["a"]), np.array([80]), np.array([10.0]), np.array([85.0]),
+                       np.array([[1.0]]))  # fmt: skip
+    dist, age = rm._nearest_other(res, 100, np.array([10.0]), np.array([85.0]), None)
+    assert dist[0] == rm.FAR_DEG and age[0] == rm.WINDOW_DAYS
+    dist, age = rm._nearest_other(res, 100, np.array([10.0]), np.array([85.0]), None, 30)
+    assert dist[0] == pytest.approx(0.0) and age[0] == 20
+    val, _ = rm._near_residual(res, 100, np.array([10.0]), np.array([85.0]), None, 30)
+    assert val[0, 0] == pytest.approx(1.0)

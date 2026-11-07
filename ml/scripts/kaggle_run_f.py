@@ -18,7 +18,8 @@ Steps (DECISIONS 2026-11-06, run F; nothing is published, nothing reads 2021):
 
 Settings (env): OCEANSCOPE_MEMBERS (default main2_ai,main2_ft,main3), OCEANSCOPE_RUN (default
 ens3), OCEANSCOPE_HALF (default dev), OCEANSCOPE_MIN_DEPTH (default 1.0),
-OCEANSCOPE_OUTLIER_SIGMA (default 4), OCEANSCOPE_MAX_DEPTH (default 600).
+OCEANSCOPE_OUTLIER_SIGMA (default 4), OCEANSCOPE_MAX_DEPTH (default 600),
+OCEANSCOPE_TREE_WINDOW (days the tree's nearby-float features look back, default 10).
 """
 
 import json
@@ -39,6 +40,7 @@ HALF = os.environ.get("OCEANSCOPE_HALF", "dev").strip()
 MIN_DEPTH = float(os.environ.get("OCEANSCOPE_MIN_DEPTH", "1.0") or 0)
 OUTLIER = os.environ.get("OCEANSCOPE_OUTLIER_SIGMA", "4").strip()
 MAX_DEPTH = float(os.environ.get("OCEANSCOPE_MAX_DEPTH", "600") or 0)
+TREE_WINDOW = int(os.environ.get("OCEANSCOPE_TREE_WINDOW", "10") or 10)
 DEEP = f" --max-depth {MAX_DEPTH:g}" if MAX_DEPTH > 0 else ""
 if HALF not in ("dev", "all", "final"):
     raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
@@ -157,7 +159,7 @@ else:
 run(
     f"python -m oceanscope_ml.inference.residual_model --config {CFG} "
     f"--predictions {WSTORE} --store {S} --stats {stats} --argo {FILES} --holdout {holdout} "
-    f"--run-id {RUN}w_rm2 --out-dir {OUT} --features v2{DEEP}"
+    f"--run-id {RUN}w_rm2 --out-dir {OUT} --features v2{DEEP} --window-days {TREE_WINDOW}"
 )
 run(
     f"python -m oceanscope_ml.inference.argo_correct --config {CFG} "
@@ -202,7 +204,7 @@ print(band.pivot_table(index=["regime", "value"], columns="product", values="rms
 
 # 6) Summary: Bay of Bengal 50-300 m RMSE on the chosen half, every run vs the references.
 print(f"\nSUMMARY: Bay of Bengal 50-300 m, held-out floats ({HALF} half), validation years")
-print(f"(run E, dev half: ens3w_rm_oi 0.816 C, GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639)")
+print("(run E, dev half: ens3w_rm_oi 0.816 C, GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639)")
 summary = []
 for rid in checked:
     h = pd.read_csv(M / f"{rid}{H}_headline.csv")

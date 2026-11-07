@@ -47,7 +47,9 @@ from oceanscope_ml.data.argo_inputs import (
     argo_inputs_for,
     enable_argo_input,
     expand_input_weights,
+    set_argo_window,
 )
+from oceanscope_ml.data.argo_inputs import argo_window as argo_window_of
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -338,6 +340,7 @@ def finetune_run(
     vgrad_weight: float = 0.0,
     warm_weight: float = 1.0,
     warm_detrend: bool = False,
+    argo_window: int | None = None,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
@@ -353,6 +356,10 @@ def finetune_run(
     anomaly over the Bay of Bengal 50-300 m band (``warm_scores``). Aimed at the warm-anomaly
     errors in the regime table (DECISIONS 2026-11-06). Needs ``argo_input``. ``warm_detrend``
     judges warmth against each year's own mean instead (``warm_scores``).
+
+    ``argo_window`` (days, with ``argo_input``) replaces the config's ARGO input window
+    (``inputs.argo_input.window_days``, 10). The window is saved in the checkpoints as
+    ``argo_window_days``, and ``predict.load_checkpoint`` applies it.
     """
     if warm_weight < 1.0:
         raise ValueError("warm_weight must be >= 1 (1 = off)")
@@ -365,9 +372,15 @@ def finetune_run(
     }
     if warm_detrend:  # only recorded when on, so older checkpoints still match
         loss_settings["warm_detrend"] = True
+    if argo_window is not None:
+        if not argo_input:
+            raise ValueError("argo_window needs argo_input")
+        loss_settings["argo_window"] = int(argo_window)
     no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
+        if argo_window is not None:
+            set_argo_window(config, argo_window)
     ft_cfg = config.finetune_argo
     max_epochs = int(epochs if epochs is not None else ft_cfg.get("epochs", 10))
     lr = float(ft_cfg.get("lr", 1e-4))
@@ -381,6 +394,8 @@ def finetune_run(
 
     base = torch.load(base_checkpoint, map_location=device, weights_only=False)
     base_state = base["model"]
+    if argo_input and argo_window is None and base.get("argo_window_days"):
+        set_argo_window(config, int(base["argo_window_days"]))  # keep the base model's window
     if argo_input and base["channel_names"] != channels:
         if base["channel_names"] != [c for c in channels if not c.startswith("argo_")]:
             raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO channels")
@@ -529,6 +544,7 @@ def finetune_run(
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
                 "argo_input": argo_input,
+                "argo_window_days": argo_window_of(config) if argo_input else None,
                 "loss": loss_settings,
             },
             best_path,
@@ -545,6 +561,7 @@ def finetune_run(
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
                 "loss": loss_settings,
+                "argo_window_days": argo_window_of(config) if argo_input else None,
                 "channel_names": channels,
                 "config_hash": config_hash,
                 "run_id": run_id,
@@ -663,6 +680,9 @@ def build_cli() -> argparse.ArgumentParser:
         "--warm-weight", type=float, default=1.0, help="Draw warm Bay of Bengal days up to Wx"
     )
     parser.add_argument(
+        "--argo-window", type=int, default=None, help="ARGO input window in days (default 10)"
+    )
+    parser.add_argument(
         "--warm-detrend", action="store_true", help="Judge warmth against each year's own mean"
     )
     return parser
@@ -691,6 +711,7 @@ def main() -> None:
         vgrad_weight=args.vgrad_weight,
         warm_weight=args.warm_weight,
         warm_detrend=args.warm_detrend,
+        argo_window=args.argo_window,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 

@@ -33,7 +33,12 @@ import zarr
 from torch.utils.data import DataLoader, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
-from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input, enable_year_input
+from oceanscope_ml.data.argo_inputs import (
+    argo_inputs_for,
+    enable_argo_input,
+    enable_year_input,
+    set_argo_window,
+)
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -59,6 +64,8 @@ def load_checkpoint(
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     if any(str(n).startswith("argo_") for n in ckpt["channel_names"]):
         enable_argo_input(config)  # a run fine-tuned with ARGO input channels (P4-6)
+        if ckpt.get("argo_window_days"):  # a run trained with another window than the config's
+            set_argo_window(config, int(ckpt["argo_window_days"]))
     if "year" in ckpt["channel_names"] and "year" not in config.inputs.get("extra", []):
         enable_year_input(config)
     channels = channel_names(config)
@@ -168,6 +175,7 @@ def predict_store(
             list(config.depths_m),
             start=start - pd.Timedelta(days=window),
             end=end,
+            allow_test=allow_test,
         )
         dataset.set_argo(argo, "predict")  # every non-held-out profile is an input
     times = pd.to_datetime(ds["time"].values)

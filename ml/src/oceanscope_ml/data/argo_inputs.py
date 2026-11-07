@@ -185,6 +185,21 @@ class ArgoInputs:
         return ArgoSample(planes, target, target_mask)
 
 
+def set_argo_window(config: ExperimentConfig, days: int) -> None:
+    """Set ``inputs.argo_input.window_days`` in a loaded config (never in experiment.yaml, whose
+    hash the built stores check). A checkpoint records the window it was trained with."""
+    if days < 1:
+        raise ValueError("The ARGO window must be at least one day")
+    inputs = config.inputs
+    argo_cfg = dict(inputs.get("argo_input", {}) or {})
+    argo_cfg["window_days"] = int(days)
+    inputs["argo_input"] = argo_cfg
+
+
+def argo_window(config: ExperimentConfig) -> int:
+    return int((config.inputs.get("argo_input") or {}).get("window_days", 10))
+
+
 def enable_argo_input(config: ExperimentConfig) -> None:
     """Turn the ARGO input channels on in a loaded config (``inputs.argo_input.enabled``)."""
     inputs = config.inputs
@@ -232,15 +247,17 @@ def argo_inputs_for(
     depths_m: list[float],
     start: pd.Timestamp | None = None,
     end: pd.Timestamp | None = None,
+    allow_test: bool = False,
 ) -> ArgoInputs:
     """ARGO input profiles of non-held-out floats, from ``start`` (default: the window before
-    the training start) to ``end`` (default: the end of validation). Never the test period."""
+    the training start) to ``end`` (default: the end of validation). Never the test period,
+    unless ``allow_test`` (``predict_store`` for ``evaluation.argo_test`` only)."""
     argo_cfg = config.inputs.get("argo_input", {}) or {}
     window = int(argo_cfg.get("window_days", 10))
     first = pd.Timestamp(config.splits.train[0]) - pd.Timedelta(days=window)
     start = max(start or first, pd.Timestamp(f"{int(argo_cfg.get('min_year', 2004))}-01-01"))
     end = end or pd.Timestamp(config.splits.val[1])
-    if end >= pd.Timestamp(config.splits.test[0]):
+    if end >= pd.Timestamp(config.splits.test[0]) and not allow_test:
         raise ValueError("ARGO inputs never read the sealed test period (PRD_AI_ML §0)")
     # One year at a time keeps memory small (and a float's cycle numbers stay unique per read).
     pieces = []
@@ -269,7 +286,7 @@ def _split_at(
     """[lo, hi] cut at the train and val starts, so each split's profiles are read on their own."""
     cuts = sorted(
         pd.Timestamp(getattr(config.splits, name)[0])
-        for name in ("train", "val")
+        for name in ("train", "val", "test")
         if lo < pd.Timestamp(getattr(config.splits, name)[0]) <= hi
     )
     edges = [lo, *cuts]

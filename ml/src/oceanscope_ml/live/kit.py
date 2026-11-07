@@ -178,6 +178,12 @@ def build_kit(
     for name, path in paths.items():
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         names = [str(n) for n in ckpt["channel_names"]]
+        window = ckpt.get("argo_window_days")
+        if uses_argo(names) and window and int(window) != argo_window_days(config):
+            raise ValueError(
+                f"{path} uses a {window}-day ARGO window; live mode fetches "
+                f"{argo_window_days(config)} days. Widen the live ARGO fetch before using it."
+            )
         member_config(config, names)  # raises on a channel list the config cannot make
         ckpt_run_id = str(ckpt.get("run_id", path.parent.name))
         file = "best.pt" if single else f"members/{name}.pt"

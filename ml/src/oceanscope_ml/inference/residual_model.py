@@ -135,13 +135,18 @@ def _chord_deg(chord: np.ndarray) -> np.ndarray:
 
 
 def _nearest_other(
-    res: Residuals, day: int, lat: np.ndarray, lon: np.ndarray, own: np.ndarray | None
+    res: Residuals,
+    day: int,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    own: np.ndarray | None,
+    window_days: int = WINDOW_DAYS,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Great-circle distance (deg) and age (days) of the nearest profile in the window
     up to ``day``; ``own`` (one float id per point) leaves each point's own float out."""
-    sel = (res.day <= day) & (res.day > day - WINDOW_DAYS)
+    sel = (res.day <= day) & (res.day > day - window_days)
     dist = np.full(lat.size, FAR_DEG)
-    age = np.full(lat.size, float(WINDOW_DAYS))
+    age = np.full(lat.size, float(window_days))
     if not sel.any() or lat.size == 0:
         return dist, age
     r_lat, r_lon = res.lat[sel], res.lon[sel]
@@ -160,7 +165,7 @@ def _nearest_other(
         d, k = cKDTree(r[other]).query(q[pts])
         d = _chord_deg(d)
         dist[pts] = np.minimum(d, FAR_DEG)
-        age[pts] = np.where(d < FAR_DEG, r_age[other][k], WINDOW_DAYS)
+        age[pts] = np.where(d < FAR_DEG, r_age[other][k], window_days)
     return dist, age
 
 
@@ -193,7 +198,12 @@ def _clim_at(surface: xr.Dataset | None, day: pd.Timestamp) -> np.ndarray | None
 
 
 def _near_residual(
-    res: Residuals, day: int, lat: np.ndarray, lon: np.ndarray, own: np.ndarray | None
+    res: Residuals,
+    day: int,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    own: np.ndarray | None,
+    window_days: int = WINDOW_DAYS,
 ) -> tuple[np.ndarray, np.ndarray]:
     """[m, D] weighted mean of the residuals of the profiles in the window up to ``day`` and
     [m, D] sum of their weights. ``own`` (one float id per point) leaves each point's own float
@@ -201,7 +211,7 @@ def _near_residual(
     n_depth = res.values.shape[1]
     val = np.full((lat.size, n_depth), np.nan)
     wsum = np.zeros((lat.size, n_depth))
-    sel = (res.day <= day) & (res.day > day - WINDOW_DAYS)
+    sel = (res.day <= day) & (res.day > day - window_days)
     if not sel.any() or lat.size == 0:
         return val, wsum
     r = _unit(res.lat[sel], res.lon[sel])
@@ -313,13 +323,14 @@ def _day_features(
     surface: xr.Dataset | None,
     own: np.ndarray | None,
     names: list[str] | None,
+    window_days: int = WINDOW_DAYS,
 ) -> tuple[np.ndarray, list[str]]:
     """Feature rows for m points on one day; the names are fixed by the first call."""
     surf = _surface_fields(surface, day)
-    dist, age = _nearest_other(res, day_num, lat, lon, own)
+    dist, age = _nearest_other(res, day_num, lat, lon, own, window_days)
     extra: dict[str, np.ndarray] = {}
     if features == "v2":
-        near = _near_residual(res, day_num, lat, lon, own)
+        near = _near_residual(res, day_num, lat, lon, own, window_days)
         extra = _v2_columns(depths, model, _clim_at(surface, day), _surface_lagged(surface, day),
                             cells, near)  # fmt: skip
     if names is None:
@@ -333,6 +344,7 @@ def training_rows(
     surface: xr.Dataset | None,
     features: str = "v1",
     max_depth_m: float | None = None,
+    window_days: int = WINDOW_DAYS,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Feature matrix X, target r, float id and Bay-of-Bengal-band flag for every residual
     level, plus the feature names."""
@@ -353,7 +365,7 @@ def training_rows(
         model = temp[:, i_lat[idx], i_lon[idx]].T.astype(float)
         x, names = _day_features(features, res, int(d), day, depths, model, res.lat[idx],
                                  res.lon[idx], (i_lat[idx], i_lon[idx]), surface,
-                                 res.platform[idx], names)  # fmt: skip
+                                 res.platform[idx], names, window_days)  # fmt: skip
         y = res.values[idx].reshape(-1)
         band = ((res.lon[idx] >= BAY_OF_BENGAL_MIN_LON) & (res.lat[idx] >= EQUATORIAL_MAX_LAT))[
             :, None
@@ -441,6 +453,7 @@ def write_store(
     dest: Path,
     features: str = "v1",
     max_depth_m: float | None = None,
+    window_days: int = WINDOW_DAYS,
 ) -> Path:
     """Copy the prediction store to ``dest`` with the learnt correction added on valid cells
     (none on levels deeper than ``max_depth_m``)."""
@@ -470,7 +483,8 @@ def write_store(
             lat, lon = lat_g[valid], lon_g[valid]
             p = temp[k][:, valid].T
             x, _ = _day_features(features, res, int(days[b0 + k]), day, depths, p, lat, lon,
-                                 (i_g[valid], j_g[valid]), surface, None, names)  # fmt: skip
+                                 (i_g[valid], j_g[valid]), surface, None, names,
+                                 window_days)  # fmt: skip
             c = model.predict(x).reshape(p.shape)
             c = np.where(np.isfinite(p) & ~deep[None, :], c, 0.0)
             temp[k][:, valid] += c.T
@@ -522,6 +536,7 @@ def run(
     out_dir: Path | None = None,
     features: str = "v1",
     max_depth_m: float | None = None,
+    window_days: int = WINDOW_DAYS,
 ) -> Path:
     """Fit the residual model on non-held-out floats and write the corrected store."""
     if features not in FEATURE_SETS:
@@ -542,7 +557,8 @@ def run(
         raise AssertionError("A held-out float reached the residual model")
     logger.info("Residuals: %d profiles from %d non-held-out floats", len(res),
                 np.unique(res.platform).size)  # fmt: skip
-    x, y, groups, band, names = training_rows(res, pred, surface, features, max_depth_m)
+    x, y, groups, band, names = training_rows(res, pred, surface, features, max_depth_m,
+                                              window_days)  # fmt: skip
     logger.info("Training rows: %d, features: %s", y.size, names)
     model, table = fit(x, y, groups, band, names)
     for _, row in table.iterrows():
@@ -553,11 +569,11 @@ def run(
     table.round(6).to_csv(out / "metrics" / f"residual_model_cv_{run_id}.csv", index=False)
     importance = dict(zip(names, model.feature_importance("gain").round(1).tolist()))
     logger.info("Feature importance (gain): %s", importance)
-    save_model(model, out / "models", run_id, features, names, max_depth_m)
+    save_model(model, out / "models", run_id, features, names, max_depth_m, window_days)
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
     return write_store(predictions, surface, res, model, names, run_id, dest, features,
-                       max_depth_m)  # fmt: skip
+                       max_depth_m, window_days)  # fmt: skip
 
 
 def save_model(
@@ -567,12 +583,19 @@ def save_model(
     features: str,
     names: list[str],
     max_depth_m: float | None,
+    window_days: int = WINDOW_DAYS,
 ) -> Path:
     """Save the booster (``residual_model_<run_id>.txt``) and its settings (``.json``)."""
     models_dir.mkdir(parents=True, exist_ok=True)
     path = models_dir / f"residual_model_{run_id}.txt"
     model.save_model(str(path))
-    meta = {"run_id": run_id, "features": features, "names": names, "max_depth_m": max_depth_m}
+    meta = {
+        "run_id": run_id,
+        "features": features,
+        "names": names,
+        "max_depth_m": max_depth_m,
+        "window_days": int(window_days),
+    }
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return path
 
@@ -607,6 +630,8 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--features", choices=FEATURE_SETS, default="v1")
     parser.add_argument("--max-depth", type=float, default=None,
                         help="No training or correction below this depth (m)")  # fmt: skip
+    parser.add_argument("--window-days", type=int, default=WINDOW_DAYS,
+                        help="Look-back of the nearby-float features (days)")  # fmt: skip
     return parser
 
 
@@ -624,6 +649,7 @@ def main() -> None:
         out_dir=Path(args.out_dir) if args.out_dir else None,
         features=args.features,
         max_depth_m=args.max_depth,
+        window_days=args.window_days,
     )
     print(dest)
 
