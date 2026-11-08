@@ -295,3 +295,7 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 ## 2026-11-08 — Keep chasing GLORYS12 after run L
 - **Aryan's choice** (decision card "Decide what to do if run L still doesn't beat GLORYS12": "Keep chasing GLORYS12"). Run L: main3 fine-tuned with ARGO inputs, 30-day window, λ 3, up to 14 epochs (`main3_aix30L`).
 - If L misses, the next round is a bigger change (larger model, new inputs) rather than more ensembling or correction, since six rounds of those have all landed at about 0.82 on the dev half.
+
+## 2026-11-08 — Run L result: longer training does not help
+- main3 fine-tuned with ARGO inputs, 30-day window, λ 3, up to 14 epochs: best epoch 7, val ARGO RMSE on non-held-out floats 0.686 °C (J: 0.687; base 0.709). Early stopping ended it at epoch 9; the curve is flat from epoch 3.
+- Dev half, Bay of Bengal 50–300 m: **main3_aix30L 0.853** (CI 0.748–0.948) vs main3_aix30 0.840; GLORYS12 0.756 (gap 0.097, CI 0.050–0.148). No change of pick; the fine-tune route has reached its limit.
