@@ -291,3 +291,7 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Weights on non-held-out floats: main2_ai 0.0, main2_ft 0.0, main3 0.25, main3_aiw 0.6, main3_aix30 0.15. Tree (30-day window) CV, Bay of Bengal 50–300 m: 0.716 → 0.671 (ens4 0.669). The per-depth correction again found nothing to add, so ens5w_rm2_oi equals ens5w_rm2.
 - Dev half, Bay of Bengal 50–300 m: **ens5w_rm2 0.823** (CI 0.700–0.890) vs ens3w_rm_oi 0.816; GLORYS12 0.756. Not lower on the dev half and CV not lower than ens4, so by the rule set before the run it does not replace ens3w_rm_oi. The 2021 test stays held.
 - Warm anomalies 1.28 (GLORYS12 1.01), SW monsoon 0.92, positive IOD 0.89. The best single member (main3_aix30, 0.840) got only 0.15 of the weight; the ensemble lands at 0.82 again, the sixth round in a row.
+
+## 2026-11-08 — Keep chasing GLORYS12 after run L
+- **Aryan's choice** (decision card "Decide what to do if run L still doesn't beat GLORYS12": "Keep chasing GLORYS12"). Run L: main3 fine-tuned with ARGO inputs, 30-day window, λ 3, up to 14 epochs (`main3_aix30L`).
+- If L misses, the next round is a bigger change (larger model, new inputs) rather than more ensembling or correction, since six rounds of those have all landed at about 0.82 on the dev half.
