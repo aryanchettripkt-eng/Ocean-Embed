@@ -39,6 +39,7 @@ from oceanscope_ml.data.argo_inputs import (
     enable_year_input,
     set_argo_window,
 )
+from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -66,6 +67,8 @@ def load_checkpoint(
         enable_argo_input(config)  # a run fine-tuned with ARGO input channels (P4-6)
         if ckpt.get("argo_window_days"):  # a run trained with another window than the config's
             set_argo_window(config, int(ckpt["argo_window_days"]))
+    if any(is_armor_channel(n) for n in ckpt["channel_names"]):
+        enable_armor_input(config)  # fine-tuned with ARMOR3D input channels (DECISIONS 2026-11-08)
     if "year" in ckpt["channel_names"] and "year" not in config.inputs.get("extra", []):
         enable_year_input(config)
     channels = channel_names(config)
@@ -178,6 +181,12 @@ def predict_store(
             allow_test=allow_test,
         )
         dataset.set_argo(argo, "predict")  # every non-held-out profile is an input
+    if dataset._has_armor_channels:
+        if split == "train":
+            raise ValueError("ARMOR3D-input checkpoints predict the validation or test split only")
+        # The part stores hold ARMOR3D for the validation years, and the test year only with
+        # allow_test (evaluation.argo_test).
+        dataset.set_armor(ArmorInputs(config, ds, dataset.sigma_d, allow_test=allow_test))
     times = pd.to_datetime(ds["time"].values)
     sample_idx = np.arange(0, len(dataset._positions), stride)  # dataset index of each day
     positions = np.asarray(dataset._positions)[sample_idx]

@@ -50,6 +50,7 @@ from oceanscope_ml.data.argo_inputs import (
     set_argo_window,
 )
 from oceanscope_ml.data.argo_inputs import argo_window as argo_window_of
+from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -341,6 +342,8 @@ def finetune_run(
     warm_weight: float = 1.0,
     warm_detrend: bool = False,
     argo_window: int | None = None,
+    armor_input: bool = False,
+    armor_paths: list[Path] | None = None,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
@@ -360,6 +363,11 @@ def finetune_run(
     ``argo_window`` (days, with ``argo_input``) replaces the config's ARGO input window
     (``inputs.argo_input.window_days``, 10). The window is saved in the checkpoints as
     ``argo_window_days``, and ``predict.load_checkpoint`` applies it.
+
+    ``armor_input`` (needs ``argo_input``) adds the ARMOR3D input channels
+    (``oceanscope_ml.data.armor_inputs``, DECISIONS 2026-11-08), widened in with zero weights
+    like the ARGO ones. Training days are the ones with an ARMOR3D field: the side stores in
+    ``armor_paths`` for the training years, the part stores for the validation years.
     """
     if warm_weight < 1.0:
         raise ValueError("warm_weight must be >= 1 (1 = off)")
@@ -376,11 +384,19 @@ def finetune_run(
         if not argo_input:
             raise ValueError("argo_window needs argo_input")
         loss_settings["argo_window"] = int(argo_window)
+    if armor_input:
+        if not argo_input:
+            raise ValueError("armor_input needs argo_input")
+        if not armor_paths:
+            raise ValueError("armor_input needs the ARMOR3D side stores of the training years")
+        loss_settings["armor_input"] = True
     no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
         if argo_window is not None:
             set_argo_window(config, argo_window)
+    if armor_input:
+        enable_armor_input(config)
     ft_cfg = config.finetune_argo
     max_epochs = int(epochs if epochs is not None else ft_cfg.get("epochs", 10))
     lr = float(ft_cfg.get("lr", 1e-4))
@@ -396,9 +412,12 @@ def finetune_run(
     base_state = base["model"]
     if argo_input and argo_window is None and base.get("argo_window_days"):
         set_argo_window(config, int(base["argo_window_days"]))  # keep the base model's window
-    if argo_input and base["channel_names"] != channels:
-        if base["channel_names"] != [c for c in channels if not c.startswith("argo_")]:
-            raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO channels")
+    if (argo_input or armor_input) and base["channel_names"] != channels:
+        added = [c for c in channels if c not in base["channel_names"]]
+        kept = [c for c in channels if c in base["channel_names"]]
+        new_ok = all(c.startswith("argo_") or is_armor_channel(c) for c in added)
+        if kept != base["channel_names"] or not new_ok:
+            raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO/ARMOR3D channels")
         base_state = expand_input_weights(base_state, base["channel_names"], channels)
     elif base["channel_names"] != channels:
         raise ValueError(f"{base_checkpoint} was trained with a different channel list")
@@ -409,8 +428,8 @@ def finetune_run(
     model = build_model(config, len(channels)).to(device)
     model.load_state_dict(base_state)
     weight_decay = float(config.train.get("weight_decay", 1e-4))
-    if argo_input:
-        # The new ARGO weights start at zero; the first layer learns 10x faster to pick them up.
+    if argo_input or armor_input:
+        # The new input weights start at zero; the first layer learns 10x faster to pick them up.
         first = [p for n, p in model.named_parameters() if n.startswith("encoders.0.0.")]
         rest = [p for n, p in model.named_parameters() if not n.startswith("encoders.0.0.")]
         groups = [{"params": first, "lr": 10 * lr}, {"params": rest, "lr": lr}]
@@ -473,12 +492,18 @@ def finetune_run(
         train_ds.set_argo(argo_inputs, "train")
         val_ds.set_argo(argo_inputs, "val")
         train_dates, val_dates = _split_dates(stores, train_ds), _split_dates(stores, val_ds)
-        train_argo = Subset(
-            train_ds, [i for i, d in enumerate(train_dates) if argo_inputs.has_profiles(d)]
-        )
-        val_argo = Subset(
-            val_ds, [i for i, d in enumerate(val_dates) if argo_inputs.has_profiles(d)]
-        )
+        armor: ArmorInputs | None = None
+        if armor_input:
+            armor = ArmorInputs(config, stores, sigma_np, side_paths=armor_paths)
+            train_ds.set_armor(armor)
+            val_ds.set_armor(armor)
+
+        def usable(day: pd.Timestamp) -> bool:
+            assert argo_inputs is not None
+            return argo_inputs.has_profiles(day) and (armor is None or armor.has(day))
+
+        train_argo = Subset(train_ds, [i for i, d in enumerate(train_dates) if usable(d)])
+        val_argo = Subset(val_ds, [i for i, d in enumerate(val_dates) if usable(d)])
     else:
         train_argo = ArgoTargetDataset(
             train_ds, _split_dates(stores, train_ds), targets_for("train"), n_lat, n_lon
@@ -545,6 +570,7 @@ def finetune_run(
                 "base_checkpoint": str(base_checkpoint),
                 "argo_input": argo_input,
                 "argo_window_days": argo_window_of(config) if argo_input else None,
+                "armor_input": armor_input,
                 "loss": loss_settings,
             },
             best_path,
@@ -685,6 +711,12 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--warm-detrend", action="store_true", help="Judge warmth against each year's own mean"
     )
+    parser.add_argument(
+        "--armor-input", action="store_true", help="Add ARMOR3D input channels (needs --argo-input)"
+    )
+    parser.add_argument(
+        "--armor-store", nargs="+", default=None, help="ARMOR3D side stores (or their folders)"
+    )
     return parser
 
 
@@ -712,6 +744,8 @@ def main() -> None:
         warm_weight=args.warm_weight,
         warm_detrend=args.warm_detrend,
         argo_window=args.argo_window,
+        armor_input=args.armor_input,
+        armor_paths=[Path(p) for p in args.armor_store] if args.armor_store else None,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 

@@ -54,6 +54,7 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.argo_inputs import ArgoInputs, enable_argo_input, enable_year_input
+from oceanscope_ml.data.armor_inputs import is_armor_channel
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -183,6 +184,11 @@ def build_kit(
             raise ValueError(
                 f"{path} uses a {window}-day ARGO window; live mode fetches "
                 f"{argo_window_days(config)} days. Widen the live ARGO fetch before using it."
+            )
+        if any(is_armor_channel(n) for n in names):
+            raise ValueError(
+                f"{path} uses ARMOR3D input channels; live mode has no ARMOR3D feed yet "
+                "(DECISIONS 2026-11-08)."
             )
         member_config(config, names)  # raises on a channel list the config cannot make
         ckpt_run_id = str(ckpt.get("run_id", path.parent.name))

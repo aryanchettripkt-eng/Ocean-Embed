@@ -21,6 +21,7 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.argo_inputs import ArgoInputs
+from oceanscope_ml.data.armor_inputs import ArmorInputs
 from oceanscope_ml.data.cache import build_cache, open_cache
 from oceanscope_ml.data.channels import ARGO_EXTRA_NAMES, ChannelSpec, channel_list
 from oceanscope_ml.data.parts import open_parts
@@ -130,6 +131,9 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         self._has_argo_channels = any(c.kind == "argo" for c in self.channels)
         self.argo: ArgoInputs | None = None
         self.argo_mode = "predict"
+        # ARMOR3D input channels (DECISIONS 2026-11-08) come from ArmorInputs: see set_armor.
+        self._has_armor_channels = any(c.kind == "armor" for c in self.channels)
+        self.armor: ArmorInputs | None = None
 
         with self._open_store() as ds:
             _check_store_matches_config(ds, config)
@@ -194,7 +198,7 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         channel_stats: dict[str, Any] = ds.attrs["norm_stats"]["channels"]
         table: dict[str, tuple[Any, Any]] = {}
         for channel in self.channels:
-            if channel.kind == "extra" or channel.kind == "argo":
+            if channel.kind in ("extra", "argo", "armor"):
                 continue
             key = channel.source
             if key in table:
@@ -284,6 +288,12 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         self.argo = argo
         self.argo_mode = mode
 
+    def set_armor(self, armor: ArmorInputs) -> None:
+        """Attach the ARMOR3D fields that feed the ARMOR3D channels."""
+        if not self._has_armor_channels:
+            raise ValueError("ARMOR3D input channels are off in this config (inputs.armor3d_input)")
+        self.armor = armor
+
     # ------------------------------------------------------------- dataset API
 
     def __len__(self) -> int:
@@ -331,9 +341,18 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             if self.argo is None:
                 raise ValueError("ARGO input channels are on but no profiles are set (set_argo)")
             argo_sample = self.argo.sample(day, self.argo_mode, index)
+        armor_planes = None
+        if self._has_armor_channels:
+            if self.armor is None:
+                raise ValueError("ARMOR3D input channels are on but no fields are set (set_armor)")
+            armor_planes = self.armor.planes(day)
         planes = []
         for c in self.channels:
-            if c.kind == "argo":
+            if c.kind == "armor":
+                assert armor_planes is not None
+                k = c.depth_index if c.depth_index is not None else len(self.config.depths_m)
+                planes.append(armor_planes[k])
+            elif c.kind == "argo":
                 assert argo_sample is not None
                 k = c.depth_index if c.depth_index is not None else self._argo_extra(c.name)
                 planes.append(argo_sample.planes[k])

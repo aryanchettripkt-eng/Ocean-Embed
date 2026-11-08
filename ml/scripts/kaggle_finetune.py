@@ -18,6 +18,9 @@ OCEANSCOPE_FT_ARGO_INPUT=1). OCEANSCOPE_FT_WARM_DETREND=1 judges warmth against 
 mean, so the warming trend does not make whole recent years count as warm.
 OCEANSCOPE_FT_ARGO_WINDOW (e.g. 30): days of recent floats the ARGO input channels see (default 10,
 needs OCEANSCOPE_FT_ARGO_INPUT=1); saved in the checkpoint, so predict uses the same window.
+OCEANSCOPE_FT_ARMOR=1 adds the ARMOR3D input channels (DECISIONS 2026-11-08; needs
+OCEANSCOPE_FT_ARGO_INPUT=1): attach the ARMOR3D fetch notebooks (``armor3d_<year>.zarr``, from
+kaggle_armor3d_fetch.py) for the training years; the part stores give the validation years.
 
 Steps: ARGO 2004-2020 from the Argo ERDDAP (never 2021) -> held-out floats (the committed list,
 checked against a rebuild) -> one fine-tune per lambda -> the lambda with the lowest validation
@@ -42,6 +45,9 @@ VGRAD = float(os.environ.get("OCEANSCOPE_FT_VGRAD", "0") or 0)
 WARM = float(os.environ.get("OCEANSCOPE_FT_WARM", "1") or 1)
 WARM_DETREND = os.environ.get("OCEANSCOPE_FT_WARM_DETREND", "0") == "1"
 ARGO_WINDOW = os.environ.get("OCEANSCOPE_FT_ARGO_WINDOW", "").strip()
+ARMOR = os.environ.get("OCEANSCOPE_FT_ARMOR", "0") == "1"
+if ARMOR and not ARGO_INPUT:
+    raise SystemExit("OCEANSCOPE_FT_ARMOR=1 needs OCEANSCOPE_FT_ARGO_INPUT=1")
 HALF = os.environ.get("OCEANSCOPE_HALF", "all").strip()
 if HALF not in ("dev", "all", "final"):
     raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
@@ -95,7 +101,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 config = load_config(f"{ML}/{CFG}")
 
 # 1) Inputs: part stores, the base run's outputs, stats and best.pt.
-stores, base_outputs, stats, base_ckpt = [], None, None, None
+stores, base_outputs, stats, base_ckpt, armor_side = [], None, None, None, []
 for root, dirs, files in os.walk("/kaggle/input"):
     if "fixtures" in root:
         dirs[:] = []
@@ -109,6 +115,9 @@ for root, dirs, files in os.walk("/kaggle/input"):
     elif root.endswith("stats.zarr"):
         stats = root
         dirs[:] = []
+    elif os.path.basename(root).startswith("armor3d_") and root.endswith(".zarr"):
+        armor_side.append(root)
+        dirs[:] = []
     elif root.endswith(".zarr"):
         dirs[:] = []
     elif root.endswith(f"checkpoints/{BASE}") and "best.pt" in files:
@@ -119,6 +128,15 @@ print("Base outputs:", base_outputs, "\nStats:", stats, "\nBase checkpoint:", ba
 if not stores or base_outputs is None or stats is None or base_ckpt is None:
     raise SystemExit(f"Attach the part stores and the saved version of the {BASE} run.")
 S = " ".join(stores)
+ARMOR_ARGS = ""
+if ARMOR:
+    years = sorted(os.path.basename(p)[len("armor3d_") : -len(".zarr")] for p in armor_side)
+    print(f"ARMOR3D side stores: {len(armor_side)} ({', '.join(years)})")
+    if not armor_side:
+        raise SystemExit("OCEANSCOPE_FT_ARMOR=1: attach the ARMOR3D fetch notebooks")
+    if len(set(years)) != len(years):
+        raise SystemExit(f"The same ARMOR3D year is attached twice: {years}")
+    ARMOR_ARGS = " --armor-input --armor-store " + " ".join(sorted(armor_side))
 
 # 2) ARGO profiles, 2004-2020 (input-era floats start in 2004; 2021 is sealed).
 months = pd.period_range("2004-01", "2020-12", freq="M")
@@ -161,6 +179,7 @@ for lam in LAMBDAS:
         f"--lambda {lam:g} --run-id {rid} --epochs {EPOCHS} --patience 2 --device cuda"
         + (" --argo-input" if ARGO_INPUT else "")
         + LOSS
+        + ARMOR_ARGS
     )
     hist = pd.read_csv(Path(ML) / config.paths.outputs / "metrics" / f"finetune_{rid}.csv")
     print(hist.to_string(index=False))
