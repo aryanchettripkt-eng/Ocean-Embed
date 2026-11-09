@@ -30,6 +30,11 @@ Steps:
    values at fewer than 95% of the matchups (GREP ends in 2020) is reported as n/a and left out
    of the verdict, as DECISIONS 2026-10-25 says for the 2021 headline.
 
+Single-model mode (``--single <name>=<checkpoint>``, DECISIONS 2026-11-09): one fine-tuned
+model, no ensemble and no corrections, predicted and scored as ``<name>_test`` the same way. It is
+for a model picked on the dev half on its own (main3_aix30a, ARMOR3D inputs; its 2021 ARMOR3D
+inputs come from the part stores, read only with ``allow_test``).
+
 Refuses without ``--owner-go`` and when ``metrics/<run_id>_test_headline.csv`` already exists.
 Writes ``metrics/<id>_test_headline.csv``, ``argo_<id>_test.csv``,
 ``argo_matches_<id>_test.parquet`` for both scored runs, and ``argo_test_<run_id>.json``.
@@ -294,14 +299,59 @@ def run_argo_test(
     return summary
 
 
+def run_single_test(
+    config: ExperimentConfig,
+    run_id: str,
+    checkpoint: Path,
+    store_paths: list[Path],
+    argo_paths: list[Path],
+    holdout_path: Path,
+    *,
+    go: bool,
+    stats_path: Path | None = None,
+    out_dir: Path | None = None,
+    device_choice: str = "auto",
+) -> dict[str, Any]:
+    """Predict 2021 with one model and score it against all held-out floats, once."""
+    out = Path(out_dir or config.paths.outputs)
+    metrics_dir = out / "metrics"
+    check_may_run(metrics_dir, run_id, go)
+    holdout = _load_holdout(holdout_path)
+    pred = predict_store(
+        config,
+        store_paths,
+        checkpoint,
+        out_dir=out / "argo_test",
+        stats_path=stats_path,
+        device_choice=device_choice,
+        run_id=f"{run_id}_test",
+        split="test",
+        allow_test=True,
+        argo_paths=argo_paths,
+        holdout=holdout,
+    )
+    start, end = test_window(config)
+    profiles = load_profiles(argo_paths, holdout, start, end)
+    logger.info("Held-out profile levels in 2021: %d from %d floats", len(profiles),
+                profiles["platform_number"].nunique())  # fmt: skip
+    references = open_parts(store_paths, stats_path)[["grep_mean", "armor3d"]]
+    result = score_store(config, pred, profiles, references, metrics_dir)
+    summary = {"run_id": run_id, "checkpoint": str(checkpoint), "results": [result]}
+    (metrics_dir / f"argo_test_{run_id}.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    return summary
+
+
 def build_cli() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Score a corrected ensemble on 2021 ARGO, once.")
     parser.add_argument("--config", default="configs/experiment.yaml")
-    parser.add_argument("--member", action="append", required=True, help="name=checkpoint")
-    parser.add_argument("--weights", required=True, help="Comma-separated, one per member")
+    parser.add_argument("--single", default=None, help="name=checkpoint: one model, no ensemble")
+    parser.add_argument("--member", action="append", default=[], help="name=checkpoint")
+    parser.add_argument("--weights", default=None, help="Comma-separated, one per member")
     parser.add_argument("--base-id", default="ens3")
-    parser.add_argument("--residual-model", required=True)
-    parser.add_argument("--oi-settings", required=True)
+    parser.add_argument("--residual-model", default=None)
+    parser.add_argument("--oi-settings", default=None)
     parser.add_argument("--store", nargs="+", required=True)
     parser.add_argument("--stats", default=None)
     parser.add_argument("--argo", nargs="+", required=True, help="Monthly ARGO files, 2020-12..")
@@ -316,6 +366,26 @@ def build_cli() -> argparse.ArgumentParser:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = build_cli().parse_args()
+    if args.single:
+        name, _, path = args.single.partition("=")
+        if not path or args.member or args.residual_model or args.oi_settings:
+            raise SystemExit("--single name=checkpoint takes no members or corrections")
+        summary = run_single_test(
+            load_config(args.config),
+            name,
+            Path(path),
+            [Path(p) for p in args.store],
+            [Path(p) for p in args.argo],
+            Path(args.holdout),
+            go=args.owner_go,
+            stats_path=Path(args.stats) if args.stats else None,
+            out_dir=Path(args.out_dir) if args.out_dir else None,
+            device_choice=args.device,
+        )
+        print(json.dumps(summary, indent=2))
+        return
+    if not (args.member and args.weights and args.residual_model and args.oi_settings):
+        raise SystemExit("Pass --member, --weights, --residual-model and --oi-settings")
     members = {}
     for m in args.member:
         name, _, path = m.partition("=")

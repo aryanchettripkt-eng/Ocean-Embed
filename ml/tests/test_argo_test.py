@@ -144,6 +144,43 @@ def test_run_argo_test_applies_the_saved_corrections_and_scores_once(
                          holdout, **kw)  # fmt: skip
 
 
+def test_single_model_is_scored_once_without_corrections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(CONFIG_PATH)
+    _, depths = _store(tmp_path / "shape")
+    held = ["5900001", "5900002"]
+    holdout = tmp_path / "holdout.json"
+    holdout.write_text('{"held_out_floats": ' + str(held).replace("'", '"') + "}")
+    calls: list[dict] = []
+
+    def fake_predict(config, store_paths, ckpt, **kw):  # noqa: ANN001, ANN003, ANN202
+        calls.append(kw)
+        return _test_member(tmp_path / "members", "main3_aix30a", 0.1)
+
+    shape = (TEST_DAYS.size, depths.size, LAT.size, LON.size)
+    dims = ("time", "depth", "lat", "lon")
+    refs = xr.Dataset(
+        {"grep_mean": (dims, np.full(shape, np.nan)),
+         "armor3d": (dims, np.broadcast_to(_truth(depths)[None, :, None, None] + 0.5, shape))},
+        coords={"time": TEST_DAYS, "depth": depths, "lat": LAT, "lon": LON},
+    )  # fmt: skip
+    monkeypatch.setattr(at, "predict_store", fake_predict)
+    monkeypatch.setattr(at, "load_profiles", lambda *a: _held_obs(depths, held))
+    monkeypatch.setattr(at, "open_parts", lambda paths, stats=None: refs)
+    args = (config, "main3_aix30a", tmp_path / "m.pt", [], [], holdout)
+    with pytest.raises(PermissionError):
+        at.run_single_test(*args, go=False, out_dir=tmp_path / "out")
+    summary = at.run_single_test(*args, go=True, out_dir=tmp_path / "out")
+    assert len(calls) == 1 and calls[0]["split"] == "test" and calls[0]["allow_test"]
+    assert calls[0]["holdout"] == set(held) and calls[0]["run_id"] == "main3_aix30a_test"
+    assert summary["results"][0]["label"] == "main3_aix30a_test"
+    head = pd.read_csv(tmp_path / "out" / "metrics" / "main3_aix30a_test_headline.csv")
+    assert head.set_index("product").loc["model", "rmse_c"] == pytest.approx(BIAS_C + 0.1, abs=0.02)
+    with pytest.raises(FileExistsError):
+        at.run_single_test(*args, go=True, out_dir=tmp_path / "out")
+
+
 def test_reference_with_partial_cover_is_left_out() -> None:
     n = 100
     band = pd.DataFrame({"temp_glorys_c": np.ones(n), "temp_armor3d_c": np.ones(n),

@@ -320,3 +320,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - By the rules set before the run it replaces ens3w_rm_oi (0.816) as the pick on the dev half. It is the first run below GLORYS12 on the dev half, so the one-shot 2021 test may now be spent, on Aryan's go only.
 - Caveat (as recorded for round M): ARMOR3D assimilates the held-out floats, so this score compares with GLORYS12 on equal terms but is not skill independent of those floats. The model is still behind ARMOR3D itself, which it takes as input. The dev half has only 6 Bay of Bengal floats.
 
+
+## 2026-11-09 — Run N: our best recipe on top of the ARMOR3D model
+- **Aryan's ask** (thread, after run M): give the ARMOR3D model the same improvements as our best, then test. Read as: the ens3w_rm_oi recipe (weighted ensemble → tree correction → guarded per-depth ARGO correction) with main3_aix30a added as a member.
+- Run N: `kaggle_run_f.py` with members main2_ai, main2_ft, main3, main3_aiw, main3_aix30, main3_aix30a (`ens6`), tree window 30 days, dev half. Nothing reads 2021.
+- **Rules set before the run:** ens6 (or ens6w_rm2 / ens6w_rm2_oi) replaces main3_aix30a only if lower than 0.727 °C on the dev half. The winner is the one that takes the single 2021 test, on Aryan's go. `evaluation.argo_test --single` (and `OCEANSCOPE_SINGLE` in `kaggle_argo_test.py`) can score a single model if main3_aix30a stays the pick.
+- Expectation, stated in advance: the tree and per-depth corrections learn from the same non-held-out floats that ARMOR3D already assimilates, so the gain may be small; in run K the weights also favoured the strongest member.

@@ -14,6 +14,10 @@ Inputs (Add Input -> Your Work -> Notebooks, finished versions):
   ``predictions_<PICK>.zarr`` (whose attributes give the members and weights),
   ``models/residual_model_<tree run>.txt`` + ``.json`` and ``models/argo_correct_<PICK>.json``.
 
+Single model (DECISIONS 2026-11-09): with OCEANSCOPE_SINGLE=main3_aix30a the inputs are the part
+stores, the stats version and that model's fine-tune notebook (``checkpoints/main3_aix30a_l3``);
+no ensemble, tree or correction, and OCEANSCOPE_PICK / OCEANSCOPE_BASE are ignored.
+
 Settings (env):
 - OCEANSCOPE_OWNER_GO=1: required. Aryan types it; without it the script stops before reading 2021.
 - OCEANSCOPE_PICK: the corrected run picked on the validation years (default ens3w_rm2_oi)
@@ -34,6 +38,9 @@ ML = f"{REPO}/ml"
 PICK = os.environ.get("OCEANSCOPE_PICK", "ens3w_rm2_oi").strip()
 BASE = os.environ.get("OCEANSCOPE_BASE", "ens3").strip()
 GO = os.environ.get("OCEANSCOPE_OWNER_GO", "") == "1"
+SINGLE = os.environ.get("OCEANSCOPE_SINGLE", "").strip()
+if SINGLE:
+    PICK = SINGLE
 OVERRIDES = dict(
     o.split("=", 1) for o in os.environ.get("OCEANSCOPE_MEMBER_PICKS", "").split(",") if "=" in o
 )
@@ -110,13 +117,14 @@ print("Stores:", *stores, sep="\n  ")
 print("Stats:", stats)
 if not stores or stats is None:
     raise SystemExit("Attach the part stores and the main2 training version (stats.zarr).")
-if len(picked) != 1:
-    raise SystemExit(f"Need exactly one predictions_{PICK}.zarr (the run F version); {picked}")
-attrs = json.loads((picked[0] / ".zattrs").read_text())
-member_ids = json.loads(attrs["ensemble_members"])
-weights = json.loads(attrs["ensemble_weights"])
-tree_run = str(attrs["base_run_id"])
-print(f"{PICK}: members {member_ids}, weights {weights}, tree run {tree_run}")
+if not SINGLE:
+    if len(picked) != 1:
+        raise SystemExit(f"Need exactly one predictions_{PICK}.zarr (the run F version); {picked}")
+    attrs = json.loads((picked[0] / ".zattrs").read_text())
+    member_ids = json.loads(attrs["ensemble_members"])
+    weights = json.loads(attrs["ensemble_weights"])
+    tree_run = str(attrs["base_run_id"])
+    print(f"{PICK}: members {member_ids}, weights {weights}, tree run {tree_run}")
 
 
 def one(fname):
@@ -126,9 +134,10 @@ def one(fname):
     return paths[0]
 
 
-tree_model = one(f"residual_model_{tree_run}.txt")
-one(f"residual_model_{tree_run}.json")
-oi_settings = one(f"argo_correct_{PICK}.json")
+if not SINGLE:
+    tree_model = one(f"residual_model_{tree_run}.txt")
+    one(f"residual_model_{tree_run}.json")
+    oi_settings = one(f"argo_correct_{PICK}.json")
 
 
 def pick(name):
@@ -153,7 +162,16 @@ def pick(name):
     return ckpts[rid][0]
 
 
-members = " ".join(f"--member {m}={pick(m)}" for m in member_ids)
+if SINGLE:
+    model_args = f"--single {SINGLE}={pick(SINGLE)}"
+    labels = [f"{SINGLE}_test"]
+else:
+    members = " ".join(f"--member {m}={pick(m)}" for m in member_ids)
+    model_args = (
+        f"{members} --weights {','.join(f'{w:g}' for w in weights)} --base-id {BASE} "
+        f"--residual-model {tree_model} --oi-settings {oi_settings}"
+    )
+    labels = [f"{PICK}_test", f"{BASE}_test"]
 
 # 2) ARGO months: December 2020 (the correction's window) to December 2021.
 months = pd.period_range("2020-12", "2021-12", freq="M")
@@ -163,18 +181,17 @@ holdout = Path(ML) / "configs" / "argo_eval_floats.json"
 
 # 3) The test itself (refuses a second time in the same output folder).
 run(
-    f"python -m oceanscope_ml.evaluation.argo_test --config {CFG} {members} "
-    f"--weights {','.join(f'{w:g}' for w in weights)} --base-id {BASE} "
-    f"--residual-model {tree_model} --oi-settings {oi_settings} --store {' '.join(stores)} "
+    f"python -m oceanscope_ml.evaluation.argo_test --config {CFG} {model_args} "
+    f"--store {' '.join(stores)} "
     f"--stats {stats} --argo {' '.join(str(p) for p in argo_files)} --holdout {holdout} "
     f"--out-dir {OUT} --owner-go"
 )
 
 M = OUT / "metrics"
-for label in (f"{PICK}_test", f"{BASE}_test"):
+for label in labels:
     run(f"cat {M / f'argo_{label}.csv'}")
 print("\nRESULT: Bay of Bengal 50-300 m, all held-out floats, 2021 (scored once)")
-for label in (f"{PICK}_test", f"{BASE}_test"):
+for label in labels:
     h = pd.read_csv(M / f"{label}_headline.csv")
     print(f"\n{label}")
     print(h.drop(columns=["period"]).round(3).to_string(index=False))
