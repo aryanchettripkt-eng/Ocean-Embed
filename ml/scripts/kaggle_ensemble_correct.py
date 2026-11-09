@@ -11,8 +11,15 @@ Settings (env):
 - OCEANSCOPE_RUN: ensemble name (default ens3); the corrected one is <name>_oi
 - OCEANSCOPE_SINGLE: one member to also correct per depth on its own, for comparison
   (default main2_ai; empty to skip); it is written as <member>_oid
+- OCEANSCOPE_MIN_DEPTH: levels shallower than this (m) are never corrected (default 1.0, so the
+  0.5 m level is left alone; 0 turns it off)
+- OCEANSCOPE_OUTLIER_SIGMA: residuals beyond this many robust sigmas are dropped before the
+  correction (default 4; empty turns it off)
+- OCEANSCOPE_HALF: which held-out floats score the runs: dev (default), all, or final. Runs are
+  compared on dev only; final is scored once, on the run picked with dev (DECISIONS 2026-11-06)
 
-Nothing is published by this script.
+Each member is ARGO-checked too, so the members can be compared and the ensemble spread can be
+checked against the errors (``evaluation.spread_skill``). Nothing is published by this script.
 """
 
 import os
@@ -29,6 +36,15 @@ MEMBERS = [
 ]
 RUN = os.environ.get("OCEANSCOPE_RUN", "ens3")
 SINGLE = os.environ.get("OCEANSCOPE_SINGLE", "main2_ai").strip()
+MIN_DEPTH = float(os.environ.get("OCEANSCOPE_MIN_DEPTH", "1.0") or 0)
+OUTLIER = os.environ.get("OCEANSCOPE_OUTLIER_SIGMA", "4").strip()
+HALF = os.environ.get("OCEANSCOPE_HALF", "dev").strip()
+if HALF not in ("dev", "all", "final"):
+    raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
+GUARDS = (f" --min-depth {MIN_DEPTH:g}" if MIN_DEPTH > 0 else "") + (
+    f" --outlier-sigma {OUTLIER}" if OUTLIER else ""
+)
+print(f"Correction guards:{GUARDS or ' none'}; scoring the {HALF} half of the held-out floats")
 OUT = Path("/kaggle/working/outputs_ens")
 ARGO_DIR = Path("/kaggle/working/argo")
 CFG = "configs/experiment.yaml"
@@ -44,8 +60,8 @@ if not os.path.isdir(REPO):
         f"git clone -b p3 https://github.com/aryanchettripkt-eng/ocean-embed.git {REPO}",
         cwd="/kaggle/working",
     )
-else:
-    run("git pull origin p3", cwd=REPO)
+else:  # pull the branch the notebook cloned, never merge another one into it
+    run("git pull --ff-only origin $(git rev-parse --abbrev-ref HEAD)", cwd=REPO)
 run(f"{sys.executable} -m pip install -q -e .")
 os.environ["PYTHONPATH"] = f"{ML}/src"
 sys.path.insert(0, f"{ML}/src")
@@ -126,28 +142,53 @@ if SINGLE:
 for src, rid in jobs:
     run(
         f"python -m oceanscope_ml.inference.argo_correct --config {CFG} --predictions {src} "
-        f"--argo {FILES} --holdout {holdout} --run-id {rid} --out-dir {OUT} --per-depth"
+        f"--argo {FILES} --holdout {holdout} --run-id {rid} --out-dir {OUT} --per-depth{GUARDS}"
     )
 
-# 4) ARGO check on the held-out floats and validation against GLORYS.
+# 4) ARGO check on the chosen half of the held-out floats (members too), and validation
+#    against GLORYS for the new stores.
 checked = [RUN, f"{RUN}_oi"] + ([f"{SINGLE}_oid"] if SINGLE else [])
-for rid in checked:
-    pred = P / f"predictions_{rid}.zarr"
+stores_by_run = {m: Path(PREDS[m]) for m in MEMBERS}
+stores_by_run.update({rid: P / f"predictions_{rid}.zarr" for rid in checked})
+H = "" if HALF == "all" else f"_{HALF}"
+for rid, pred in stores_by_run.items():
     run(
         f"python -m oceanscope_ml.evaluation.argo_validation --config {CFG} --predictions {pred} "
-        f"--store {S} --stats {stats} --argo {FILES} --holdout {holdout} --out-dir {OUT}"
+        f"--store {S} --stats {stats} --argo {FILES} --holdout {holdout} --out-dir {OUT} "
+        f"--half {HALF}"
     )
+for rid in checked:
     run(
-        f"python -m oceanscope_ml.evaluation.evaluate --config {CFG} --predictions {pred} "
-        f"--store {S} --stats {stats} --out-dir {OUT}"
+        f"python -m oceanscope_ml.evaluation.evaluate --config {CFG} "
+        f"--predictions {stores_by_run[rid]} --store {S} --stats {stats} --out-dir {OUT}"
     )
 M = OUT / "metrics"
+
+# 5) Ensemble spread vs error at the same floats (is the spread a usable uncertainty?).
+run(
+    "python -m oceanscope_ml.evaluation.spread_skill --matches "
+    + " ".join(str(M / f"argo_matches_{m}{H}.parquet") for m in MEMBERS)
+    + f" --run-id {RUN}{H} --out-dir {OUT}"
+)
+
 names = [f"argo_correct_depths_{RUN}_oi.csv"]
 if SINGLE:
     names.append(f"argo_correct_depths_{SINGLE}_oid.csv")
 for rid in checked:
-    names += [f"{rid}_headline.csv", f"argo_{rid}.csv", f"{rid}_val.csv"]
+    names += [f"argo_{rid}{H}.csv", f"{rid}_val.csv"]
+names.append(f"spread_skill_{RUN}{H}.csv")
 for name in names:
     if (M / name).exists():
         run(f"cat {M / name}")
+
+# 6) One summary: Bay of Bengal 50-300 m RMSE on the chosen half, every run vs the references.
+print(f"\nSUMMARY: Bay of Bengal 50-300 m, held-out floats ({HALF} half), validation years")
+summary = []
+for rid in stores_by_run:
+    h = pd.read_csv(M / f"{rid}{H}_headline.csv")
+    h = h[h["period"] == "val"].set_index("product")
+    row = {"run": rid, "n_floats": h.loc["model", "n_floats"], "model": h.loc["model", "rmse_c"]}
+    row.update({p: h.loc[p, "rmse_c"] for p in ("glorys12", "grep", "armor3d") if p in h.index})
+    summary.append(row)
+print(pd.DataFrame(summary).round(3).to_string(index=False))
 print("\nENSEMBLE + CORRECTION DONE (nothing published)")

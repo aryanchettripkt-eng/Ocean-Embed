@@ -4,9 +4,10 @@
 names it returns, so inference can rebuild the same tensor. Nothing else may hardcode the order.
 
 Order (§5.1): dynamic channels (core + forcing) for each history day, oldest to newest; then
-long-history frames; then index channels; then ARGO channels; then static channels; then extra
-channels. With the default config (ARGO and indices off) this gives 122 channels. The §5.1
-figure of 143 assumes ARGO and indices are on.
+long-history frames; then index channels; then ARGO channels; then ARMOR3D channels
+(``inputs.armor3d_input``, DECISIONS 2026-11-08); then static channels; then extra channels.
+With the default config (ARGO and indices off) this gives 122 channels. The §5.1 figure of 143
+assumes ARGO and indices are on.
 """
 
 from __future__ import annotations
@@ -103,6 +104,18 @@ def _argo_channels(inputs: dict[str, Any], depths_m: list[float]) -> list[Channe
     return channels
 
 
+def _armor_channels(inputs: dict[str, Any], depths_m: list[float]) -> list[ChannelSpec]:
+    armor_cfg = inputs.get("armor3d_input", {}) or {}
+    if not bool(armor_cfg.get("enabled", False)):
+        return []
+    channels = [
+        ChannelSpec(name=f"armor3d_anom@{depth:g}m", kind="armor", source="armor3d", depth_index=i)
+        for i, depth in enumerate(depths_m)
+    ]
+    channels.append(ChannelSpec(name="armor3d_mask", kind="armor", source="armor3d_mask"))
+    return channels
+
+
 def _static_channels(inputs: dict[str, Any], depths_m: list[float]) -> list[ChannelSpec]:
     channels: list[ChannelSpec] = []
     for var in inputs.get("static", []):
@@ -140,6 +153,7 @@ def channel_list(config: ExperimentConfig) -> list[ChannelSpec]:
         + _long_history_channels(inputs)
         + _index_channels(inputs)
         + _argo_channels(inputs, depths)
+        + _armor_channels(inputs, depths)
         + _static_channels(inputs, depths)
         + _extra_channels(inputs)
     )

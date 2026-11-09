@@ -159,3 +159,69 @@ def test_train_from_scratch_with_argo_recency_and_year(
         argo_paths=files, holdout=holdout,
     )  # fmt: skip
     assert np.isfinite(xr.open_zarr(dest)["temp_pred"].values).any()
+
+
+def test_finetune_with_warm_day_weighting_runs_and_is_recorded(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+) -> None:
+    config, store, base, files, holdout_path = setup
+    config.inputs.setdefault("argo_input", {})["min_year"] = 2000  # synthetic years
+    holdout = load_holdout(holdout_path)
+    with pytest.raises(ValueError, match="argo_input"):
+        finetune_run(config, [store], base, files, holdout, "base_w0", lam=1.0,
+                     device_choice="cpu", epochs=1, warm_weight=3.0)  # fmt: skip
+    result = finetune_run(
+        config, [store], base, files, holdout, "base_aw", lam=1.0, device_choice="cpu",
+        epochs=1, argo_input=True, warm_weight=3.0,
+    )  # fmt: skip
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["loss"]["warm_weight"] == 3.0
+
+
+def test_finetune_with_a_longer_argo_window_records_it_for_predict(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+) -> None:
+    import copy
+
+    from oceanscope_ml.data.argo_inputs import argo_window
+
+    config, store, base, files, holdout_path = setup
+    config.inputs.setdefault("argo_input", {})["min_year"] = 2000  # synthetic years
+    fresh = copy.deepcopy(config)
+    holdout = load_holdout(holdout_path)
+    result = finetune_run(
+        config, [store], base, files, holdout, "base_a20", lam=3.0, device_choice="cpu",
+        epochs=1, argo_input=True, argo_window=20,
+    )  # fmt: skip
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["argo_window_days"] == 20 and best["loss"]["argo_window"] == 20
+    assert argo_window(fresh) == 10
+    load_checkpoint(fresh, result.best_path, torch.device("cpu"))
+    assert argo_window(fresh) == 20
+    with pytest.raises(ValueError, match="other settings"):
+        finetune_run(config, [store], base, files, holdout, "base_a20", lam=3.0,
+                     device_choice="cpu", epochs=2, argo_input=True, argo_window=30)  # fmt: skip
+
+
+def test_argo_inputs_reach_the_test_year_only_when_allowed(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oceanscope_ml.data import argo_inputs as ai
+
+    config = setup[0]
+    config.inputs.setdefault("argo_input", {})["min_year"] = 1990  # synthetic years
+    test_end = pd.Timestamp(config.splits.test[1])
+    with pytest.raises(ValueError, match="sealed test"):
+        ai.argo_inputs_for(config, [], set(), None, None, [], end=test_end)  # type: ignore[arg-type]
+    reads: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    monkeypatch.setattr(
+        ai, "read_levels", lambda paths, a, b: reads.append((a, b)) or pd.DataFrame()
+    )
+    monkeypatch.setattr(ai, "profile_levels", lambda levels, depths, holdout: pd.DataFrame())
+    monkeypatch.setattr(ai, "ArgoInputs", lambda *a, **k: "ok")
+    start = pd.Timestamp(config.splits.test[0]) - pd.Timedelta(days=10)
+    out = ai.argo_inputs_for(config, [], set(), None, None, [], start=start, end=test_end,  # type: ignore[arg-type]
+                             allow_test=True)  # fmt: skip
+    assert out == "ok"
+    assert any(a == pd.Timestamp(config.splits.test[0]) for a, _ in reads)  # cut at the test start

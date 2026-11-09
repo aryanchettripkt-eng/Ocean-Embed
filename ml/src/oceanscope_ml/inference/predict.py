@@ -33,7 +33,18 @@ import zarr
 from torch.utils.data import DataLoader, Subset
 
 from oceanscope_ml.config import ExperimentConfig, load_config
-from oceanscope_ml.data.argo_inputs import argo_inputs_for, enable_argo_input, enable_year_input
+from oceanscope_ml.data.argo_inputs import (
+    argo_inputs_for,
+    enable_argo_input,
+    enable_year_input,
+    set_argo_window,
+)
+from oceanscope_ml.data.armor_inputs import (
+    ArmorInputs,
+    enable_armor_input,
+    is_armor_channel,
+    wrap_armor_blend,
+)
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -59,6 +70,10 @@ def load_checkpoint(
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
     if any(str(n).startswith("argo_") for n in ckpt["channel_names"]):
         enable_argo_input(config)  # a run fine-tuned with ARGO input channels (P4-6)
+        if ckpt.get("argo_window_days"):  # a run trained with another window than the config's
+            set_argo_window(config, int(ckpt["argo_window_days"]))
+    if any(is_armor_channel(n) for n in ckpt["channel_names"]):
+        enable_armor_input(config)  # fine-tuned with ARMOR3D input channels (DECISIONS 2026-11-08)
     if "year" in ckpt["channel_names"] and "year" not in config.inputs.get("extra", []):
         enable_year_input(config)
     channels = channel_names(config)
@@ -66,7 +81,9 @@ def load_checkpoint(
         raise ValueError(
             f"Checkpoint {checkpoint} was trained with a different channel list than the config"
         )
-    model = build_model(config, len(channels)).to(device)
+    model: torch.nn.Module = build_model(config, len(channels)).to(device)
+    if ckpt.get("armor_blend"):
+        model = wrap_armor_blend(model, channels).to(device)  # DECISIONS 2026-11-09
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, str(ckpt.get("run_id", checkpoint.parent.name))
@@ -155,8 +172,8 @@ def predict_store(
     if dataset._has_argo_channels:
         if not argo_paths or not holdout:
             raise ValueError("This checkpoint uses ARGO input channels: pass --argo and --holdout")
-        if split == "test":
-            raise ValueError("ARGO input channels are not built for the sealed test year")
+        # The test year gets ARGO inputs only through allow_test (evaluation.argo_test, run once
+        # with the owner's go): every non-held-out 2021 profile is an input, as in live use.
         start, end = (pd.Timestamp(d) for d in getattr(config.splits, split))
         window = int(config.inputs["argo_input"].get("window_days", 10))
         argo = argo_inputs_for(
@@ -168,8 +185,15 @@ def predict_store(
             list(config.depths_m),
             start=start - pd.Timedelta(days=window),
             end=end,
+            allow_test=allow_test,
         )
         dataset.set_argo(argo, "predict")  # every non-held-out profile is an input
+    if dataset._has_armor_channels:
+        if split == "train":
+            raise ValueError("ARMOR3D-input checkpoints predict the validation or test split only")
+        # The part stores hold ARMOR3D for the validation years, and the test year only with
+        # allow_test (evaluation.argo_test).
+        dataset.set_armor(ArmorInputs(config, ds, dataset.sigma_d, allow_test=allow_test))
     times = pd.to_datetime(ds["time"].values)
     sample_idx = np.arange(0, len(dataset._positions), stride)  # dataset index of each day
     positions = np.asarray(dataset._positions)[sample_idx]

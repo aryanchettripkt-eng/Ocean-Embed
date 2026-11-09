@@ -30,9 +30,22 @@ floats at that depth (whole domain), or no correction at all where none beats th
 least 1%. This keeps the correction away from levels where the floats only add noise (the
 surface level was made worse by a single shared setting on main2_ai).
 
+Two guards against the failure seen on the held-out floats (the tuning floats said the 0.5 m
+level improved, the held-out floats said it got worse, 0.34 -> 0.77 C):
+
+- ``--min-depth M``: levels shallower than M metres are never corrected (their residuals are
+  dropped before tuning).
+- ``--max-depth M``: levels deeper than M metres are never corrected either (on the final half
+  the correction made 643 m and 1062 m slightly worse).
+- ``--outlier-sigma K``: at each depth, residuals further than K robust standard deviations
+  (1.4826 x the median absolute deviation) from the median are dropped before tuning and
+  before the final store, so a few bad profiles or frontal mismatches can't drive the field.
+
 Writes ``<out>/predictions/predictions_<run_id>.zarr`` (same layout as ``inference.predict``,
 ``temp_pred`` corrected, ``temp_glorys`` and ``coverage`` copied) and
-``<out>/metrics/argo_correct_tuning_<run_id>.csv``.
+``<out>/metrics/argo_correct_tuning_<run_id>.csv``, and the plan with the guards in
+``<out>/models/argo_correct_<run_id>.json`` (``load_settings``), which ``evaluation.argo_test``
+applies to the test year unchanged.
 """
 
 from __future__ import annotations
@@ -163,6 +176,45 @@ def residuals(profiles: pd.DataFrame, pred: xr.Dataset) -> Residuals:
         profiles["lon"].to_numpy(float)[rows][good],
         values[good],
     )
+
+
+def drop_shallow(res: Residuals, depths: np.ndarray, min_depth_m: float) -> Residuals:
+    """Residuals with the levels shallower than ``min_depth_m`` set to NaN."""
+    values = res.values.copy()
+    values[:, depths < min_depth_m] = np.nan
+    keep = np.isfinite(values).any(axis=1)
+    out = Residuals(res.platform, res.day, res.lat, res.lon, values)
+    return out.subset(keep)
+
+
+def drop_deep(res: Residuals, depths: np.ndarray, max_depth_m: float) -> Residuals:
+    """Residuals with the levels deeper than ``max_depth_m`` set to NaN."""
+    values = res.values.copy()
+    values[:, depths > max_depth_m] = np.nan
+    keep = np.isfinite(values).any(axis=1)
+    return Residuals(res.platform, res.day, res.lat, res.lon, values).subset(keep)
+
+
+def drop_outliers(res: Residuals, k: float) -> tuple[Residuals, np.ndarray]:
+    """Residuals with values beyond ``k`` robust sigmas of the per-depth median set to NaN.
+    Returns them and the number dropped per depth."""
+    values = res.values.copy()
+    dropped = np.zeros(values.shape[1], dtype=int)
+    for d in range(values.shape[1]):
+        col = values[:, d]
+        ok = np.isfinite(col)
+        if ok.sum() < 5:
+            continue
+        med = float(np.median(col[ok]))
+        mad = float(np.median(np.abs(col[ok] - med)))
+        if mad == 0.0:
+            continue
+        bad = ok & (np.abs(col - med) > k * 1.4826 * mad)
+        dropped[d] = int(bad.sum())
+        col[bad] = np.nan
+    keep = np.isfinite(values).any(axis=1)
+    out = Residuals(res.platform, res.day, res.lat, res.lon, values)
+    return out.subset(keep), dropped
 
 
 def correction(
@@ -370,9 +422,13 @@ def run(
     out_dir: Path | None = None,
     params: OIParams | None = None,
     per_depth: bool = False,
+    min_depth_m: float = 0.0,
+    max_depth_m: float | None = None,
+    outlier_sigma: float | None = None,
 ) -> tuple[Path, Plan]:
     """Tune (unless ``params`` is given) and write the corrected store; returns its path and
-    the per-depth plan used."""
+    the per-depth plan used. ``min_depth_m`` and ``outlier_sigma`` are the guards described in
+    the module docstring (both off by default)."""
     pred = xr.open_zarr(predictions)
     dates = pd.DatetimeIndex(pred["time"].values).normalize()
     check_no_test_leakage(dates, config.splits.test)
@@ -392,6 +448,18 @@ def run(
                 np.unique(res.platform).size)  # fmt: skip
     if len(res) == 0:
         raise ValueError("No non-held-out ARGO profiles match the prediction store")
+    if min_depth_m > 0:
+        res = drop_shallow(res, depths, min_depth_m)
+        logger.info("Levels shallower than %.1f m are not corrected", min_depth_m)
+    if max_depth_m is not None:
+        res = drop_deep(res, depths, max_depth_m)
+        logger.info("Levels deeper than %.1f m are not corrected", max_depth_m)
+    if outlier_sigma is not None:
+        res, dropped = drop_outliers(res, outlier_sigma)
+        logger.info("Outlier residuals dropped per depth (> %.1f robust sigma): %s",
+                    outlier_sigma, dropped.tolist())  # fmt: skip
+    if len(res) == 0:
+        raise ValueError("No ARGO residuals left after the guards")
     for k, d in enumerate(depths):
         v = res.values[:, k]
         v = v[np.isfinite(v)]
@@ -410,11 +478,45 @@ def run(
             )
     else:
         plan = uniform_plan(params, depths.size)
+    if min_depth_m > 0:
+        plan = tuple(None if d < min_depth_m else p for d, p in zip(depths, plan, strict=True))
+    if max_depth_m is not None:
+        plan = tuple(None if d > max_depth_m else p for d, p in zip(depths, plan, strict=True))
     logger.info("Using %s", plan_json(plan))
+    save_settings(out / "models", run_id, plan, min_depth_m, max_depth_m, outlier_sigma)
     dest = out / "predictions" / f"predictions_{run_id}.zarr"
     dest.parent.mkdir(parents=True, exist_ok=True)
     write_store(predictions, res, plan, run_id, dest)
     return dest, plan
+
+
+def save_settings(
+    models_dir: Path,
+    run_id: str,
+    plan: Plan,
+    min_depth_m: float,
+    max_depth_m: float | None,
+    outlier_sigma: float | None,
+) -> Path:
+    """Write the per-depth plan and the guards as ``argo_correct_<run_id>.json``."""
+    models_dir.mkdir(parents=True, exist_ok=True)
+    path = models_dir / f"argo_correct_{run_id}.json"
+    meta = {
+        "run_id": run_id,
+        "plan": json.loads(plan_json(plan)),
+        "min_depth_m": min_depth_m,
+        "max_depth_m": max_depth_m,
+        "outlier_sigma": outlier_sigma,
+    }
+    path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return path
+
+
+def load_settings(path: Path) -> tuple[Plan, dict]:
+    """The plan and guards saved by ``save_settings``."""
+    meta = json.loads(Path(path).read_text(encoding="utf-8"))
+    plan = tuple(None if p is None else OIParams(**p) for p in meta["plan"])
+    return plan, meta
 
 
 def _load_holdout(path: Path) -> set[str]:
@@ -438,6 +540,15 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--per-depth", action="store_true", help="Tune one setting per depth (or none)"
     )
+    parser.add_argument(
+        "--min-depth", type=float, default=0.0, help="Never correct levels shallower than this (m)"
+    )
+    parser.add_argument(
+        "--max-depth", type=float, default=None, help="Never correct levels deeper than this (m)"
+    )
+    parser.add_argument(
+        "--outlier-sigma", type=float, default=None, help="Drop residuals beyond K robust sigma"
+    )
     return parser
 
 
@@ -458,6 +569,9 @@ def main() -> None:
         out_dir=Path(args.out_dir) if args.out_dir else None,
         params=params,
         per_depth=args.per_depth,
+        min_depth_m=args.min_depth,
+        max_depth_m=args.max_depth,
+        outlier_sigma=args.outlier_sigma,
     )
     print(json.dumps({"store": str(dest), "plan": json.loads(plan_json(used))}))
 

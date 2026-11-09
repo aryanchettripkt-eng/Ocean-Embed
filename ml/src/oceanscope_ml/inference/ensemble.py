@@ -4,11 +4,13 @@ Usage (from ml/):
 
     python -m oceanscope_ml.inference.ensemble --config configs/experiment.yaml \
         --predictions <predictions_a.zarr> <predictions_b.zarr> ... --run-id <name> \
-        [--out-dir outputs]
+        [--out-dir outputs] [--weights w1,w2,...]
 
 All members must have the same time, depth, lat and lon coordinates. ``temp_pred`` is the plain
 mean of the members, ``coverage`` is 1 only where every member is valid, and ``temp_glorys`` is
-copied from the first member. The layout matches ``inference.predict``, so the ARGO check, the
+copied from the first member. With ``--weights`` (one per member, >= 0, summing to 1; see
+``inference.ensemble_weights``) ``temp_pred`` is the weighted mean instead. The layout matches
+``inference.predict``, so the ARGO check, the
 ARGO correction and ``evaluation.evaluate`` read the result like any run. Test-period dates are
 refused (the 2021 test year stays sealed).
 
@@ -37,27 +39,45 @@ BLOCK_DAYS = 16
 COORDS = ("time", "depth", "lat", "lon")
 
 
-def _check_members(config: ExperimentConfig, members: list[xr.Dataset]) -> None:
+def _check_members(
+    config: ExperimentConfig, members: list[xr.Dataset], allow_test: bool = False
+) -> None:
     first = members[0]
     for k, ds in enumerate(members):
         dates = pd.DatetimeIndex(ds["time"].values).normalize()
-        check_no_test_leakage(dates, config.splits.test)
-        val_start, val_end = (pd.Timestamp(d) for d in config.splits.val)
-        if dates.size == 0 or dates.min() < val_start or dates.max() > val_end:
-            raise ValueError(f"Member {k} must hold validation dates only")
+        if allow_test:  # evaluation.argo_test only: test dates and nothing else
+            start, end = (pd.Timestamp(d) for d in config.splits.test)
+            if dates.size == 0 or dates.min() < start or dates.max() > end:
+                raise ValueError(f"Member {k} must hold test dates only")
+        else:
+            check_no_test_leakage(dates, config.splits.test)
+            val_start, val_end = (pd.Timestamp(d) for d in config.splits.val)
+            if dates.size == 0 or dates.min() < val_start or dates.max() > val_end:
+                raise ValueError(f"Member {k} must hold validation dates only")
         for c in COORDS:
             if not np.array_equal(np.asarray(ds[c].values), np.asarray(first[c].values)):
                 raise ValueError(f"Member {k} has different {c} coordinates from member 0")
 
 
 def ensemble(
-    config: ExperimentConfig, predictions: list[Path], run_id: str, out_dir: Path | None = None
+    config: ExperimentConfig,
+    predictions: list[Path],
+    run_id: str,
+    out_dir: Path | None = None,
+    weights: list[float] | None = None,
+    allow_test: bool = False,
 ) -> Path:
-    """Write the mean of ``predictions`` as ``predictions_<run_id>.zarr``; returns its path."""
+    """Write the (weighted) mean of ``predictions`` as ``predictions_<run_id>.zarr``.
+    ``allow_test`` (test-year members) is set only by ``evaluation.argo_test``."""
     if len(predictions) < 2:
         raise ValueError("An ensemble needs at least two prediction stores")
+    w = np.full(len(predictions), 1.0 / len(predictions))
+    if weights is not None:
+        w = np.asarray(weights, dtype=float)
+        if w.size != len(predictions) or (w < 0).any() or not np.isclose(w.sum(), 1.0):
+            raise ValueError("Weights must be one per member, >= 0 and sum to 1")
     members = [xr.open_zarr(p) for p in predictions]
-    _check_members(config, members)
+    _check_members(config, members, allow_test)
     ids = [str(ds.attrs.get("run_id", Path(p).stem)) for ds, p in zip(members, predictions)]
     logger.info("Ensemble %s of %s", run_id, ", ".join(ids))
 
@@ -75,14 +95,14 @@ def ensemble(
         b1 = min(b0 + BLOCK_DAYS, n_time)
         total = None
         valid = None
-        for ds in members:
+        for wk, ds in zip(w, members, strict=True):
             block = ds.isel(time=slice(b0, b1))
-            temp = block["temp_pred"].transpose(*COORDS).values.astype(float)
+            temp = wk * block["temp_pred"].transpose(*COORDS).values.astype(float)
             ok = block["coverage"].transpose("time", "lat", "lon").values == 1
             total = temp if total is None else total + temp
             valid = ok if valid is None else valid & ok
         assert total is not None and valid is not None
-        mean = total / len(members)
+        mean = total
         mean = np.where(valid[:, None], mean, np.nan)
         block_out = xr.Dataset(
             {
@@ -94,7 +114,13 @@ def ensemble(
         logger.info("Averaged %d / %d days", b1, n_time)
 
     group = zarr.open_group(str(dest), mode="r+")
-    group.attrs.update({"run_id": run_id, "ensemble_members": json.dumps(ids)})
+    group.attrs.update(
+        {
+            "run_id": run_id,
+            "ensemble_members": json.dumps(ids),
+            "ensemble_weights": json.dumps([round(float(x), 6) for x in w]),
+        }
+    )
     group.attrs.pop("base_run_id", None)
     group.attrs.pop("argo_correction", None)
     zarr.consolidate_metadata(str(dest))
@@ -107,6 +133,7 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument("--predictions", nargs="+", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--out-dir", default=None, help="Outputs dir (default paths.outputs)")
+    parser.add_argument("--weights", default=None, help="Comma-separated, one per member")
     return parser
 
 
@@ -118,6 +145,7 @@ def main() -> None:
         [Path(p) for p in args.predictions],
         args.run_id,
         out_dir=Path(args.out_dir) if args.out_dir else None,
+        weights=[float(x) for x in args.weights.split(",")] if args.weights else None,
     )
     print(json.dumps({"store": str(dest)}))
 

@@ -47,6 +47,15 @@ from oceanscope_ml.data.argo_inputs import (
     argo_inputs_for,
     enable_argo_input,
     expand_input_weights,
+    set_argo_window,
+)
+from oceanscope_ml.data.argo_inputs import argo_window as argo_window_of
+from oceanscope_ml.data.armor_inputs import (
+    ArmorBlend,
+    ArmorInputs,
+    enable_armor_input,
+    is_armor_channel,
+    wrap_armor_blend,
 )
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
@@ -237,6 +246,61 @@ def validate_argo(
     return rmse, rmse_band, int(n)
 
 
+WARM_BLOCK_DAYS = 120
+WARM_CAP_QUANTILE = 0.99
+
+
+def warm_scores(
+    ds: xr.Dataset,
+    dates: pd.DatetimeIndex,
+    sigma: np.ndarray,
+    band: np.ndarray,
+    detrend: bool = False,
+) -> np.ndarray:
+    """Per day: mean positive GLORYS anomaly (in sigma units) over the Bay of Bengal 50-300 m
+    band, from the training targets and the train-only climatology (never ARGO, never val).
+    Zero everywhere when the grid has no band cell.
+
+    With ``detrend`` the score is instead how far the day's mean band anomaly (signed) sits above
+    the mean of that year's days, so a warming trend against the 1993-2017 climatology does not
+    make whole recent years "warm" (main3_aiw: 3142 of 4264 days had weight above 2)."""
+    if not band.any():
+        return np.zeros(len(dates))
+    depth_idx = np.flatnonzero(band.any(axis=(1, 2)))
+    lat_idx = np.flatnonzero(band.any(axis=(0, 2)))
+    lon_idx = np.flatnonzero(band.any(axis=(0, 1)))
+    sub = band[np.ix_(depth_idx, lat_idx, lon_idx)]
+    clim = np.asarray(
+        ds["clim"].isel(depth=depth_idx, lat=lat_idx, lon=lon_idx).values, dtype=np.float32
+    )
+    sig = np.asarray(sigma, dtype=np.float32)[depth_idx][:, None, None]
+    times = pd.DatetimeIndex(ds["time"].values).normalize()
+    pos = times.get_indexer(dates)
+    if (pos < 0).any():
+        raise ValueError("A training date is not in the store")
+    out = np.zeros(len(dates))
+    for b0 in range(0, len(dates), WARM_BLOCK_DAYS):
+        b1 = min(b0 + WARM_BLOCK_DAYS, len(dates))
+        field = ds["thetao"].isel(time=pos[b0:b1], depth=depth_idx, lat=lat_idx, lon=lon_idx)
+        th = np.asarray(field.transpose("time", "depth", "lat", "lon").values, dtype=np.float32)
+        anom = (th - clim[dates[b0:b1].day_of_year.to_numpy() - 1]) / sig[None]
+        ok = sub[None] & np.isfinite(anom)
+        cells = np.where(ok, anom if detrend else np.clip(anom, 0.0, None), np.nan)
+        out[b0:b1] = np.nan_to_num(np.nanmean(cells.reshape(b1 - b0, -1), axis=1))
+    if detrend:
+        years = pd.Series(out).groupby(dates.year.to_numpy()).transform("mean").to_numpy()
+        out = np.clip(out - years, 0.0, None)
+    return out
+
+
+def warm_weights(scores: np.ndarray, strength: float) -> np.ndarray:
+    """1 on the coolest day, ``strength`` on days at or above the 99th percentile of warmth."""
+    cap = float(np.quantile(scores, WARM_CAP_QUANTILE)) if scores.size else 0.0
+    if cap <= 0:
+        return np.ones_like(scores)
+    return 1.0 + (strength - 1.0) * np.clip(scores / cap, 0.0, 1.0)
+
+
 def _loader(
     dataset: Dataset[dict[str, torch.Tensor]],
     config: ExperimentConfig,
@@ -279,15 +343,71 @@ def finetune_run(
     epochs: int | None = None,
     patience: int = 3,
     argo_input: bool = False,
+    huber_delta: float | None = None,
+    vgrad_weight: float = 0.0,
+    warm_weight: float = 1.0,
+    warm_detrend: bool = False,
+    argo_window: int | None = None,
+    armor_input: bool = False,
+    armor_paths: list[Path] | None = None,
+    armor_blend: bool = False,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
     With ``argo_input`` the ARGO input channels (P4-6) are turned on: the base model's first
     layer is widened with zero weights for them, and the ARGO targets are the profiles hidden
     from the inputs (``oceanscope_ml.data.argo_inputs``), never the ones the sample sees.
+
+    ``huber_delta`` and ``vgrad_weight`` switch on the Huber loss (GLORYS, GREP and ARGO terms)
+    and the vertical-gradient term on GLORYS (``models.loss``). Both are off by default.
+
+    ``warm_weight`` W > 1 draws training days with replacement, in proportion to a weight from 1
+    (no warm anomaly) to W (the warmest 1% of days), where warmth is the mean positive GLORYS
+    anomaly over the Bay of Bengal 50-300 m band (``warm_scores``). Aimed at the warm-anomaly
+    errors in the regime table (DECISIONS 2026-11-06). Needs ``argo_input``. ``warm_detrend``
+    judges warmth against each year's own mean instead (``warm_scores``).
+
+    ``argo_window`` (days, with ``argo_input``) replaces the config's ARGO input window
+    (``inputs.argo_input.window_days``, 10). The window is saved in the checkpoints as
+    ``argo_window_days``, and ``predict.load_checkpoint`` applies it.
+
+    ``armor_input`` (needs ``argo_input``) adds the ARMOR3D input channels
+    (``oceanscope_ml.data.armor_inputs``, DECISIONS 2026-11-08), widened in with zero weights
+    like the ARGO ones. Training days are the ones with an ARMOR3D field: the side stores in
+    ``armor_paths`` for the training years, the part stores for the validation years.
     """
+    if warm_weight < 1.0:
+        raise ValueError("warm_weight must be >= 1 (1 = off)")
+    if warm_weight > 1.0 and not argo_input:
+        raise ValueError("warm_weight needs argo_input")
+    loss_settings = {
+        "huber_delta": huber_delta,
+        "vgrad_weight": float(vgrad_weight),
+        "warm_weight": float(warm_weight),
+    }
+    if warm_detrend:  # only recorded when on, so older checkpoints still match
+        loss_settings["warm_detrend"] = True
+    if argo_window is not None:
+        if not argo_input:
+            raise ValueError("argo_window needs argo_input")
+        loss_settings["argo_window"] = int(argo_window)
+    if armor_input:
+        if not argo_input:
+            raise ValueError("armor_input needs argo_input")
+        if not armor_paths:
+            raise ValueError("armor_input needs the ARMOR3D side stores of the training years")
+        loss_settings["armor_input"] = True
+    if armor_blend:
+        if not armor_input:
+            raise ValueError("armor_blend needs armor_input")
+        loss_settings["armor_blend"] = True
+    no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
+        if argo_window is not None:
+            set_argo_window(config, argo_window)
+    if armor_input:
+        enable_armor_input(config)
     ft_cfg = config.finetune_argo
     max_epochs = int(epochs if epochs is not None else ft_cfg.get("epochs", 10))
     lr = float(ft_cfg.get("lr", 1e-4))
@@ -301,9 +421,14 @@ def finetune_run(
 
     base = torch.load(base_checkpoint, map_location=device, weights_only=False)
     base_state = base["model"]
-    if argo_input and base["channel_names"] != channels:
-        if base["channel_names"] != [c for c in channels if not c.startswith("argo_")]:
-            raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO channels")
+    if argo_input and argo_window is None and base.get("argo_window_days"):
+        set_argo_window(config, int(base["argo_window_days"]))  # keep the base model's window
+    if (argo_input or armor_input) and base["channel_names"] != channels:
+        added = [c for c in channels if c not in base["channel_names"]]
+        kept = [c for c in channels if c in base["channel_names"]]
+        new_ok = all(c.startswith("argo_") or is_armor_channel(c) for c in added)
+        if kept != base["channel_names"] or not new_ok:
+            raise ValueError(f"{base_checkpoint} channels differ beyond the ARGO/ARMOR3D channels")
         base_state = expand_input_weights(base_state, base["channel_names"], channels)
     elif base["channel_names"] != channels:
         raise ValueError(f"{base_checkpoint} was trained with a different channel list")
@@ -311,14 +436,26 @@ def finetune_run(
         logger.warning("Base checkpoint config hash differs from the current config")
 
     set_seed(int(config.train.get("seed", 42)))
-    model = build_model(config, len(channels)).to(device)
+    model: torch.nn.Module = build_model(config, len(channels)).to(device)
     model.load_state_dict(base_state)
+    if armor_blend:
+        # Output starts halfway between the base model and ARMOR3D (DECISIONS 2026-11-09).
+        model = wrap_armor_blend(model, channels).to(device)
     weight_decay = float(config.train.get("weight_decay", 1e-4))
-    if argo_input:
-        # The new ARGO weights start at zero; the first layer learns 10x faster to pick them up.
-        first = [p for n, p in model.named_parameters() if n.startswith("encoders.0.0.")]
-        rest = [p for n, p in model.named_parameters() if not n.startswith("encoders.0.0.")]
+    if argo_input or armor_input:
+        # The new input weights start at zero; the first layer learns 10x faster to pick them up.
+        # The blend weights (one per depth) learn 100x faster, without weight decay.
+        named = list(model.named_parameters())
+        first = [p for n, p in named if n.removeprefix("net.").startswith("encoders.0.0.")]
+        blend = [p for n, p in named if n == "blend_logit"]
+        rest = [
+            p
+            for n, p in named
+            if n != "blend_logit" and not n.removeprefix("net.").startswith("encoders.0.0.")
+        ]
         groups = [{"params": first, "lr": 10 * lr}, {"params": rest, "lr": lr}]
+        if blend:
+            groups.append({"params": blend, "lr": 100 * lr, "weight_decay": 0.0})
         optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=weight_decay)
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -328,7 +465,11 @@ def finetune_run(
     state = FineTuneState()
     if last_path.exists():
         ckpt = torch.load(last_path, map_location=device, weights_only=False)
-        if ckpt["lambda"] != lam or ckpt["base_checkpoint"] != str(base_checkpoint):
+        if (
+            ckpt["lambda"] != lam
+            or ckpt["base_checkpoint"] != str(base_checkpoint)
+            or {**no_options, **ckpt.get("loss", {})} != loss_settings
+        ):
             raise ValueError(f"Run {run_id} was started with other settings. Use a new --run-id.")
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -374,12 +515,18 @@ def finetune_run(
         train_ds.set_argo(argo_inputs, "train")
         val_ds.set_argo(argo_inputs, "val")
         train_dates, val_dates = _split_dates(stores, train_ds), _split_dates(stores, val_ds)
-        train_argo = Subset(
-            train_ds, [i for i, d in enumerate(train_dates) if argo_inputs.has_profiles(d)]
-        )
-        val_argo = Subset(
-            val_ds, [i for i, d in enumerate(val_dates) if argo_inputs.has_profiles(d)]
-        )
+        armor: ArmorInputs | None = None
+        if armor_input:
+            armor = ArmorInputs(config, stores, sigma_np, side_paths=armor_paths)
+            train_ds.set_armor(armor)
+            val_ds.set_armor(armor)
+
+        def usable(day: pd.Timestamp) -> bool:
+            assert argo_inputs is not None
+            return argo_inputs.has_profiles(day) and (armor is None or armor.has(day))
+
+        train_argo = Subset(train_ds, [i for i, d in enumerate(train_dates) if usable(d)])
+        val_argo = Subset(val_ds, [i for i, d in enumerate(val_dates) if usable(d)])
     else:
         train_argo = ArgoTargetDataset(
             train_ds, _split_dates(stores, train_ds), targets_for("train"), n_lat, n_lon
@@ -389,6 +536,16 @@ def finetune_run(
         )
     if len(train_argo) == 0 or len(val_argo) == 0:
         raise ValueError("No training or validation days with ARGO targets")
+    day_weights: torch.Tensor | None = None
+    if warm_weight > 1.0:
+        assert isinstance(train_argo, Subset)
+        days = _split_dates(stores, train_ds)[np.asarray(train_argo.indices)]
+        scores = warm_scores(stores, days, sigma_np, _bob_band_mask(stores, depths),
+                             detrend=warm_detrend)  # fmt: skip
+        w = warm_weights(scores, warm_weight)
+        day_weights = torch.as_tensor(w, dtype=torch.float64)
+        logger.info("Warm-day weighting x%g: mean weight %.2f, %d of %d days above 2",
+                    warm_weight, w.mean(), int((w > 2).sum()), w.size)  # fmt: skip
     logger.info("Fine-tune days: %d train, %d val", len(train_argo), len(val_argo))
 
     sigma_d = torch.tensor(sigma_np, dtype=torch.float32, device=device)
@@ -421,6 +578,9 @@ def finetune_run(
             argo_band,
             n_obs,
         )
+        if isinstance(model, ArmorBlend):
+            w = model.weights().cpu().numpy()
+            logger.info("ARMOR3D blend weight per depth: %s", np.array2string(w, precision=2))
         return row
 
     def save_best() -> None:
@@ -435,6 +595,10 @@ def finetune_run(
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
                 "argo_input": argo_input,
+                "argo_window_days": argo_window_of(config) if argo_input else None,
+                "armor_input": armor_input,
+                "armor_blend": armor_blend,
+                "loss": loss_settings,
             },
             best_path,
         )
@@ -449,6 +613,8 @@ def finetune_run(
                 "state": asdict(state),
                 "lambda": lam,
                 "base_checkpoint": str(base_checkpoint),
+                "loss": loss_settings,
+                "argo_window_days": argo_window_of(config) if argo_input else None,
                 "channel_names": channels,
                 "config_hash": config_hash,
                 "run_id": run_id,
@@ -468,7 +634,12 @@ def finetune_run(
     while not state.finished and state.epoch < max_epochs:
         start = time.perf_counter()
         generator = torch.Generator().manual_seed(seed + 1000 + state.epoch)
-        order = torch.randperm(len(train_argo), generator=generator).tolist()
+        if day_weights is not None:
+            order = torch.multinomial(
+                day_weights, len(train_argo), replacement=True, generator=generator
+            ).tolist()
+        else:
+            order = torch.randperm(len(train_argo), generator=generator).tolist()
         if argo_inputs is not None:
             argo_inputs.epoch = state.epoch  # a new draw of hidden profiles each epoch
         model.train()
@@ -488,7 +659,12 @@ def finetune_run(
                 batch["has_grep"],
                 depth_weights,
                 aux_weight,
-            ) + lam * masked_weighted_mse(pred, batch["argo_y"], batch["argo_mask"], depth_weights)
+                huber_delta=huber_delta,
+                vgrad_weight=vgrad_weight,
+                sigma_d=sigma_d,
+            ) + lam * masked_weighted_mse(
+                pred, batch["argo_y"], batch["argo_mask"], depth_weights, huber_delta
+            )
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -547,6 +723,30 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--argo-input", action="store_true", help="Turn the ARGO input channels on (P4-6)"
     )
+    parser.add_argument(
+        "--huber-delta", type=float, default=None, help="Huber loss threshold (normalized units)"
+    )
+    parser.add_argument(
+        "--vgrad-weight", type=float, default=0.0, help="Weight of the vertical-gradient term"
+    )
+    parser.add_argument(
+        "--warm-weight", type=float, default=1.0, help="Draw warm Bay of Bengal days up to Wx"
+    )
+    parser.add_argument(
+        "--argo-window", type=int, default=None, help="ARGO input window in days (default 10)"
+    )
+    parser.add_argument(
+        "--warm-detrend", action="store_true", help="Judge warmth against each year's own mean"
+    )
+    parser.add_argument(
+        "--armor-input", action="store_true", help="Add ARMOR3D input channels (needs --argo-input)"
+    )
+    parser.add_argument(
+        "--armor-store", nargs="+", default=None, help="ARMOR3D side stores (or their folders)"
+    )
+    parser.add_argument(
+        "--armor-blend", action="store_true", help="Blend the output with ARMOR3D (learned weight)"
+    )
     return parser
 
 
@@ -569,6 +769,14 @@ def main() -> None:
         epochs=args.epochs,
         patience=args.patience,
         argo_input=args.argo_input,
+        huber_delta=args.huber_delta,
+        vgrad_weight=args.vgrad_weight,
+        warm_weight=args.warm_weight,
+        warm_detrend=args.warm_detrend,
+        argo_window=args.argo_window,
+        armor_input=args.armor_input,
+        armor_paths=[Path(p) for p in args.armor_store] if args.armor_store else None,
+        armor_blend=args.armor_blend,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 

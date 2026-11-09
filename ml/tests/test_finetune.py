@@ -205,3 +205,65 @@ def test_held_out_float_never_becomes_a_target(
     )
     assert len(seen) == 2 and all(seen)
     assert all(HELD_OUT not in floats for floats in seen)
+
+
+def test_finetune_with_huber_and_vertical_gradient_runs_and_guards_resume(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],
+) -> None:
+    config, store, base, files, holdout_path = setup
+    holdout = load_holdout(holdout_path)
+    kwargs = dict(lam=1.0, device_choice="cpu", epochs=1, huber_delta=1.0, vgrad_weight=0.5)
+    result = finetune_run(config, [store], base, files, holdout, "base_hv", **kwargs)  # type: ignore[arg-type]
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["loss"] == {"huber_delta": 1.0, "vgrad_weight": 0.5, "warm_weight": 1.0}
+    with pytest.raises(ValueError, match="other settings"):
+        finetune_run(
+            config, [store], base, files, holdout, "base_hv", lam=1.0, device_choice="cpu",
+            epochs=2, huber_delta=None, vgrad_weight=0.5,
+        )  # fmt: skip
+
+
+def test_warm_weights_scale_from_one_to_the_strength_and_cap() -> None:
+    from oceanscope_ml.finetune import warm_weights
+
+    scores = np.linspace(0.0, 1.0, 101)
+    w = warm_weights(scores, 4.0)
+    assert w[0] == 1.0 and w[-1] == pytest.approx(4.0) and np.all(np.diff(w) >= 0)
+    assert np.all(warm_weights(np.zeros(5), 4.0) == 1.0)
+
+
+def test_warm_scores_use_only_positive_band_anomalies() -> None:
+    from oceanscope_ml.finetune import warm_scores
+
+    times = pd.date_range("2000-01-01", periods=4, freq="D")
+    depths, lat, lon = np.array([10.0, 100.0]), np.array([4.0, 10.0]), np.array([70.0, 85.0])
+    thetao = np.zeros((4, 2, 2, 2), dtype=np.float32)
+    thetao[1, 1, 1, 1] = 2.0  # warm, in the band (100 m, 10N 85E)
+    thetao[2, 1, 1, 1] = -2.0  # cold: counts as 0
+    thetao[3, 0, 1, 1] = 5.0  # warm but at 10 m: outside the band
+    ds = xr.Dataset(
+        {"thetao": (("time", "depth", "lat", "lon"), thetao),
+         "clim": (("dayofyear", "depth", "lat", "lon"), np.zeros((366, 2, 2, 2), np.float32))},
+        coords={"time": times, "depth": depths, "lat": lat, "lon": lon},
+    )  # fmt: skip
+    band = np.zeros((2, 2, 2), dtype=bool)
+    band[1, 1, 1] = True
+    s = warm_scores(ds, times, np.array([1.0, 2.0]), band)
+    np.testing.assert_allclose(s, [0.0, 1.0, 0.0, 0.0])
+
+
+def test_detrended_warm_scores_ignore_a_warm_year() -> None:
+    from oceanscope_ml.finetune import warm_scores
+
+    times = pd.DatetimeIndex(["2000-01-01", "2000-01-02", "2001-01-01", "2001-01-02"])
+    band = np.ones((1, 1, 1), dtype=bool)
+    thetao = np.array([0.0, 1.0, 3.0, 3.0], dtype=np.float32).reshape(4, 1, 1, 1)
+    ds = xr.Dataset(
+        {"thetao": (("time", "depth", "lat", "lon"), thetao),
+         "clim": (("dayofyear", "depth", "lat", "lon"), np.zeros((366, 1, 1, 1), np.float32))},
+        coords={"time": times, "depth": [100.0], "lat": [10.0], "lon": [85.0]},
+    )  # fmt: skip
+    plain = warm_scores(ds, times, np.array([1.0]), band)
+    detr = warm_scores(ds, times, np.array([1.0]), band, detrend=True)
+    np.testing.assert_allclose(plain, [0.0, 1.0, 3.0, 3.0])
+    np.testing.assert_allclose(detr, [0.0, 0.5, 0.0, 0.0])
