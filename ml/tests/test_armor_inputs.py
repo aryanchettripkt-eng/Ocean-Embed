@@ -121,7 +121,7 @@ def test_planes_are_scaled_anomalies_and_the_test_year_is_sealed(
     clim = ds["clim"].isel(dayofyear=val_day.day_of_year - 1).values
     glorys = ds["thetao"].sel(time=val_day).values
     want = (glorys + OFFSET_C - clim) / sigma[:, None, None]
-    assert np.allclose(planes[:n][:, ocean], want[:, ocean], atol=1e-3)
+    assert np.allclose(planes[:n][:, ocean], want[:, ocean], rtol=2e-3, atol=1e-3)  # float16
     assert planes[n][ocean].all() and not planes[n][~ocean].any()
     assert not armor.planes(off_day).any()
 

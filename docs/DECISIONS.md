@@ -308,3 +308,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - The test year reaches ARMOR3D inputs only with `allow_test` (the one-shot 2021 test). `live.kit` refuses ARMOR3D-input checkpoints: live mode has no ARMOR3D feed yet.
 - Run M: main3 + ARGO inputs (30-day window, λ 3, as run J) + ARMOR3D inputs → `main3_aix30a`. Compared with main3_aix30 (0.840 dev half), which differs only by the ARMOR3D channels.
 - **Rules set before the run:** main3_aix30a (or an ensemble/tree built on it) replaces ens3w_rm_oi only if lower on the dev half (and, for a corrected run, its tree CV is lower). The 2021 test is spent only once a run is below GLORYS12 (0.756 °C) on the dev half, and only on Aryan's go.
+
+## 2026-11-09 — Run M stalled: ARMOR3D planes are now cached once
+- Run M (first attempt) found all 14 side stores and selected 1421 train / 1036 val days, then ran for 11.6 h on a T4 x2 without finishing even the epoch-0 evaluation. Nothing was scored, so there is no result to record and the rules above are unchanged.
+- Cause: `ArmorInputs.planes` read one day at a time from Zarr: `clim` from the stats store, `armor3d` from the part stores and the side stores. Each read decompresses whole chunks (the reason the training cache exists, PRD §5.1), and the DataLoader workers also inherited open dask handles.
+- Fix: `ArmorInputs` now writes every day's planes once at start-up into a float16 memory map (reading each side store and each 32-day span of the part stores once), and each worker reads one slice per sample. Same values as before up to float16 rounding, the same rounding the training cache uses. Rerun run M unchanged.
+

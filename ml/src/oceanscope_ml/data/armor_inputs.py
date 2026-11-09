@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +86,7 @@ class ArmorInputs:
         sigma_d: np.ndarray,
         side_paths: list[Path] | None = None,
         allow_test: bool = False,
+        cache_dir: Path | None = None,
     ) -> None:
         self.n_depth = len(config.depths_m)
         self.sigma = np.asarray(sigma_d, dtype=np.float64)[:, None, None]
@@ -90,7 +94,6 @@ class ArmorInputs:
             raise ValueError("sigma_d must have one value per depth")
         if "armor3d" not in ds or "clim" not in ds:
             raise KeyError("The store needs armor3d and clim (attach the stats store)")
-        self._ds = ds
         self._lat = np.asarray(ds["lat"].values)
         self._lon = np.asarray(ds["lon"].values)
         val_start = pd.Timestamp(config.splits.val[0])
@@ -105,7 +108,6 @@ class ArmorInputs:
 
         self.side_paths = side_store_paths(list(side_paths or []))
         self._side: dict[pd.Timestamp, tuple[int, int]] = {}
-        self._side_ds: list[xr.Dataset | None] = []
         for k, path in enumerate(self.side_paths):
             side = xr.open_zarr(path)
             if not side.attrs.get(COMPLETE_ATTR):
@@ -122,7 +124,9 @@ class ArmorInputs:
                 raise ValueError(f"{path} reaches the validation period (side stores: train only)")
             for t, day in enumerate(side_times):
                 self._side.setdefault(day, (k, t))
-            self._side_ds.append(side)
+        for day in self._side:
+            self._main.pop(day, None)
+        self._build_cache(ds, cache_dir)
         logger.info(
             "ARMOR3D inputs: %d days from the part stores, %d from %d side stores",
             len(self._main),
@@ -130,44 +134,81 @@ class ArmorInputs:
             len(self.side_paths),
         )
 
+    def _build_cache(self, ds: xr.Dataset, cache_dir: Path | None) -> None:
+        """Write every day's planes once into a float16 memory map (run M stalled without it).
+
+        Reading one day from Zarr decompresses whole chunks of ``clim``, the part stores and
+        the side stores (seconds per sample), and the DataLoader workers then shared lazy dask
+        handles. The cache reads each source once, in order, so a sample is one small slice.
+        """
+        days = sorted(set(self._side) | set(self._main))
+        self._row = {day: i for i, day in enumerate(days)}
+        folder = Path(cache_dir) if cache_dir is not None else Path(tempfile.mkdtemp())
+        folder.mkdir(parents=True, exist_ok=True)
+        self._cache_path = folder / f"armor3d_planes_{os.getpid()}_{id(self)}.npy"
+        self._planes: np.ndarray | None = None
+        shape = (max(len(days), 1), self.n_depth + 1, len(self._lat), len(self._lon))
+        mm = np.lib.format.open_memmap(self._cache_path, mode="w+", dtype=np.float16, shape=shape)
+        if days:
+            start = time.perf_counter()
+            clim = np.asarray(ds["clim"].values, dtype=np.float32)  # [dayofyear, depth, lat, lon]
+            sigma = self.sigma.astype(np.float32)
+
+            def write(day: pd.Timestamp, raw: np.ndarray, out: np.ndarray = mm) -> None:
+                anomaly = (raw.astype(np.float32) - clim[day.day_of_year - 1]) / sigma
+                ok = np.isfinite(anomaly)
+                row = out[self._row[day]]
+                row[: self.n_depth] = np.where(ok, anomaly, 0.0)
+                row[self.n_depth] = ok.any(axis=0)
+
+            by_store: dict[int, list[tuple[int, pd.Timestamp]]] = {}
+            for day, (k, t) in self._side.items():
+                by_store.setdefault(k, []).append((t, day))
+            for k, items in by_store.items():
+                values = np.asarray(xr.open_zarr(self.side_paths[k])["armor3d"].values)
+                for t, day in items:
+                    write(day, values[t])
+                del values
+            blocks: list[list[tuple[int, pd.Timestamp]]] = []
+            for t, day in sorted((t, day) for day, t in self._main.items()):
+                if not blocks or t - blocks[-1][0][0] >= 32:  # 32 store days per read
+                    blocks.append([])
+                blocks[-1].append((t, day))
+            for block in blocks:
+                lo, hi = block[0][0], block[-1][0] + 1
+                values = np.asarray(ds["armor3d"].isel(time=slice(lo, hi)).values)
+                for t, day in block:
+                    write(day, values[t - lo])
+            del clim
+            logger.info(
+                "ARMOR3D planes cached for %d days in %.1f min (%s)",
+                len(days),
+                (time.perf_counter() - start) / 60.0,
+                self._cache_path,
+            )
+        mm.flush()
+        del mm
+
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
-        state["_side_ds"] = [None] * len(self._side_ds)  # reopened in each worker
+        state["_planes"] = None  # the memory map reopens in each worker
         return state
 
     def has(self, day: pd.Timestamp) -> bool:
-        day = pd.Timestamp(day).normalize()
-        return day in self._side or day in self._main
+        return pd.Timestamp(day).normalize() in self._row
 
     @property
     def dates(self) -> pd.DatetimeIndex:
-        return pd.DatetimeIndex(sorted(set(self._side) | set(self._main)))
-
-    def _raw(self, day: pd.Timestamp) -> np.ndarray | None:
-        if day in self._side:
-            k, t = self._side[day]
-            side = self._side_ds[k]
-            if side is None:
-                side = xr.open_zarr(self.side_paths[k])
-                self._side_ds[k] = side
-            return np.asarray(side["armor3d"].isel(time=t).values, dtype=np.float64)
-        if day in self._main:
-            return np.asarray(self._ds["armor3d"].isel(time=self._main[day]).values, np.float64)
-        return None
+        return pd.DatetimeIndex(sorted(self._row))
 
     def planes(self, day: pd.Timestamp) -> np.ndarray:
         """Anomaly planes and the mask; all zero (mask 0) on a day without ARMOR3D."""
         day = pd.Timestamp(day).normalize()
-        out = np.zeros((self.n_depth + 1, len(self._lat), len(self._lon)), dtype=np.float32)
-        raw = self._raw(day)
-        if raw is None:
-            return out
-        clim = np.asarray(self._ds["clim"].isel(dayofyear=day.day_of_year - 1).values, np.float64)
-        anomaly = (raw - clim) / self.sigma
-        ok = np.isfinite(anomaly)
-        out[: self.n_depth] = np.where(ok, anomaly, 0.0)
-        out[self.n_depth] = ok.any(axis=0)
-        return out
+        if day not in self._row:
+            return np.zeros((self.n_depth + 1, len(self._lat), len(self._lon)), dtype=np.float32)
+        if self._planes is None:
+            self._planes = np.load(self._cache_path, mmap_mode="r")
+        return np.asarray(self._planes[self._row[day]], dtype=np.float32)
 
 
 # ------------------------------------------------------------------ side stores
