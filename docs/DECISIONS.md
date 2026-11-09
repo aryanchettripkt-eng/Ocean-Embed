@@ -350,3 +350,8 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **main3_aix30a** (0.727 on the dev half; ARMOR3D only as 16 of 155 input channels, no output blend) is the pick again.
 - Claim to be tested: given the same ARGO float information as GLORYS12 (which assimilates the held-out floats; our model sees it through ARMOR3D), our model scores lower at the held-out floats. Always stated with: ARMOR3D is an input, and ARMOR3D alone scores lower (0.639 on the dev half); main3_aix30 without ARMOR3D is 0.840.
 - **Go for the one-shot 2021 test on main3_aix30a** (Aryan: "let's actually test it once for all and see if our claim holds up in actuality", 2026-11-09). GREP ends in 2020, so the 2021 verdict is against GLORYS12 (and ARMOR3D for reference); the GREP comparison stays a validation-year result.
+
+## 2026-11-09 — 2021 test attempt 1 stalled before any scoring; preload fix
+- The first 2021 test run (notebook97c612307d) fetched the 13 ARGO months and started predicting 2021, then ran 85+ min without finishing the first 32 of 335 days. It was stopped before any prediction store or score existed, so the test is still unspent (no `main3_aix30a_test_headline.csv`).
+- Cause: the training cache excludes the test year by design, so prediction read every sample straight from the five part stores and the stats store (history windows and clim decompressed per sample), the same slow path that stalled run M.
+- Fix: `OceanScopeDataset.preload()` loads the days the split reads (history included) and `clim` into memory once; `predict_store` calls it when there is no cache. Samples are identical (test: `test_preloaded_samples_match_the_store`). Rerun the same cell unchanged.

@@ -133,3 +133,19 @@ def test_drops_days_whose_history_crosses_a_gap_between_parts(
     got = pd.to_datetime(gappy["time"].values)[parted._positions]
     assert list(got) == want
     assert 0 < len(parted) < len(full)
+
+
+@pytest.mark.parametrize("split", ["val", "test"])
+def test_preloaded_samples_match_the_store(
+    store: Path, config: ExperimentConfig, split: str
+) -> None:
+    # preload() (used by predict_store without a cache, e.g. the 2021 test) changes speed only.
+    allow = split == "test"
+    direct = OceanScopeDataset(store, config, split=split, allow_test=allow)
+    loaded = OceanScopeDataset(store, config, split=split, allow_test=allow)
+    loaded.preload()
+    assert loaded._mem is not None
+    for i in (0, len(direct) // 2, len(direct) - 1):
+        a, b = direct[i], loaded[i]
+        for key in a:
+            assert torch.equal(a[key], b[key]), (split, i, key)
