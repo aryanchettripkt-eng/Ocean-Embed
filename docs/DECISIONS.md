@@ -314,3 +314,9 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Cause: `ArmorInputs.planes` read one day at a time from Zarr: `clim` from the stats store, `armor3d` from the part stores and the side stores. Each read decompresses whole chunks (the reason the training cache exists, PRD §5.1), and the DataLoader workers also inherited open dask handles.
 - Fix: `ArmorInputs` now writes every day's planes once at start-up into a float16 memory map (reading each side store and each 32-day span of the part stores once), and each worker reads one slice per sample. Same values as before up to float16 rounding, the same rounding the training cache uses. Rerun run M unchanged.
 
+## 2026-11-09 — Run M result: main3_aix30a is below GLORYS12 on the dev half
+- Rerun with the cached planes: 1421 train / 1036 val days, 4.1–4.4 min per epoch, best epoch 5 of 6 (λ 3). Validation ARGO RMSE (non-held-out floats, whole region) 0.572 °C vs 0.709 °C for main3 at epoch 0; Bay of Bengal 50–300 m on those floats 0.695 vs 0.888.
+- Dev half, Bay of Bengal 50–300 m (6 floats, 20 021 obs): **main3_aix30a 0.727** (CI 0.641–0.752); GLORYS12 0.756 (difference −0.028, CI −0.077 to −0.021); GREP 0.855; ARMOR3D 0.639 (ARMOR3D still lower by 0.088, CI 0.064–0.139). Compared with main3_aix30 (0.840), the only change is the ARMOR3D channels: −0.113.
+- By the rules set before the run it replaces ens3w_rm_oi (0.816) as the pick on the dev half. It is the first run below GLORYS12 on the dev half, so the one-shot 2021 test may now be spent, on Aryan's go only.
+- Caveat (as recorded for round M): ARMOR3D assimilates the held-out floats, so this score compares with GLORYS12 on equal terms but is not skill independent of those floats. The model is still behind ARMOR3D itself, which it takes as input. The dev half has only 6 Bay of Bengal floats.
+
