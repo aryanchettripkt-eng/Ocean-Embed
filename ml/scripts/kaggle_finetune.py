@@ -48,6 +48,11 @@ ARGO_WINDOW = os.environ.get("OCEANSCOPE_FT_ARGO_WINDOW", "").strip()
 ARMOR = os.environ.get("OCEANSCOPE_FT_ARMOR", "0") == "1"
 if ARMOR and not ARGO_INPUT:
     raise SystemExit("OCEANSCOPE_FT_ARMOR=1 needs OCEANSCOPE_FT_ARGO_INPUT=1")
+# OCEANSCOPE_FT_ARMOR_BLEND=1: blend the output with ARMOR3D, one learned weight per depth
+# (DECISIONS 2026-11-09). Needs OCEANSCOPE_FT_ARMOR=1.
+ARMOR_BLEND = os.environ.get("OCEANSCOPE_FT_ARMOR_BLEND", "0") == "1"
+if ARMOR_BLEND and not ARMOR:
+    raise SystemExit("OCEANSCOPE_FT_ARMOR_BLEND=1 needs OCEANSCOPE_FT_ARMOR=1")
 HALF = os.environ.get("OCEANSCOPE_HALF", "all").strip()
 if HALF not in ("dev", "all", "final"):
     raise SystemExit("OCEANSCOPE_HALF must be dev, all or final")
@@ -137,6 +142,8 @@ if ARMOR:
     if len(set(years)) != len(years):
         raise SystemExit(f"The same ARMOR3D year is attached twice: {years}")
     ARMOR_ARGS = " --armor-input --armor-store " + " ".join(sorted(armor_side))
+    if ARMOR_BLEND:
+        ARMOR_ARGS += " --armor-blend"
 
 # 2) ARGO profiles, 2004-2020 (input-era floats start in 2004; 2021 is sealed).
 months = pd.period_range("2004-01", "2020-12", freq="M")

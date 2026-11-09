@@ -12,10 +12,12 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.armor_inputs import (
+    ArmorBlend,
     ArmorInputs,
     build_side_year,
     enable_armor_input,
     side_days,
+    wrap_armor_blend,
 )
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.finetune import finetune_run, load_holdout
@@ -165,3 +167,52 @@ def test_finetune_with_armor_inputs_and_predict(
     with pytest.raises(ValueError, match="other settings"):
         finetune_run(config, [store], base, files, holdout, "base_ar", lam=1.0,
                      device_choice="cpu", epochs=2, argo_input=True)  # fmt: skip
+
+
+class _Const(torch.nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.full((x.shape[0], 2, *x.shape[-2:]), 4.0)
+
+
+def test_blend_starts_halfway_and_keeps_the_net_where_armor_is_missing() -> None:
+    channels = ["sst", "armor3d_anom@0m", "armor3d_anom@10m", "armor3d_mask"]
+    blend = wrap_armor_blend(_Const(), channels)
+    x = torch.zeros(1, 4, 2, 3)
+    x[0, 1], x[0, 2] = 2.0, -2.0
+    x[0, 3, 0] = 1.0  # ARMOR3D on the first row only
+    out = blend(x)
+    assert torch.allclose(out[0, 0, 0], torch.full((3,), 3.0))
+    assert torch.allclose(out[0, 1, 0], torch.full((3,), 1.0))
+    assert torch.allclose(out[0, :, 1], torch.full((2, 3), 4.0))
+    assert torch.allclose(blend.weights(), torch.full((2,), 0.5))
+    with pytest.raises(ValueError, match="ARMOR3D input channels"):
+        wrap_armor_blend(_Const(), ["sst"])
+
+
+def test_finetune_with_armor_blend_and_predict(
+    setup: tuple[ExperimentConfig, Path, Path, list[Path], Path],  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    config, store, base, files, holdout_path = setup
+    config.inputs.setdefault("argo_input", {})["min_year"] = 2000  # synthetic years
+    _match_region(config)
+    _add_store_armor(store)
+    build_side_year(config, 2000, 1, tmp_path / "armor", source=_raw_armor(store, config))
+    holdout = load_holdout(holdout_path)
+    with pytest.raises(ValueError, match="needs armor_input"):
+        finetune_run(config, [store], base, files, holdout, "bl0", lam=1.0, device_choice="cpu",
+                     epochs=1, argo_input=True, armor_blend=True)  # fmt: skip
+    result = finetune_run(
+        config, [store], base, files, holdout, "base_bl", lam=1.0, device_choice="cpu",
+        epochs=1, argo_input=True, armor_input=True, armor_paths=[tmp_path / "armor"],
+        armor_blend=True,
+    )  # fmt: skip
+    best = torch.load(result.best_path, weights_only=False)
+    assert best["armor_blend"] and "blend_logit" in best["model"]
+    model, _ = load_checkpoint(config, result.best_path, torch.device("cpu"))
+    assert isinstance(model, ArmorBlend)
+    dest = predict_store(
+        config, store, result.best_path, out_dir=tmp_path / "o", device_choice="cpu",
+        argo_paths=files, holdout=holdout,
+    )  # fmt: skip
+    assert np.isfinite(xr.open_zarr(dest)["temp_pred"].values).any()

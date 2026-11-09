@@ -35,7 +35,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import torch
 import xarray as xr
+from torch import nn
 
 from oceanscope_ml.config import ExperimentConfig, load_config
 
@@ -209,6 +211,50 @@ class ArmorInputs:
         if self._planes is None:
             self._planes = np.load(self._cache_path, mmap_mode="r")
         return np.asarray(self._planes[self._row[day]], dtype=np.float32)
+
+
+# ------------------------------------------------------------------ blend
+
+
+class ArmorBlend(nn.Module):
+    """Output = w * ARMOR3D + (1 - w) * U-Net where ARMOR3D has a value (DECISIONS 2026-11-09).
+
+    ``w`` is one learned weight per depth (a sigmoid, starting at ``init_weight``). Both terms are
+    anomalies scaled by ``sigma_d``, the units of the targets, so the blend needs no rescaling.
+    Where the mask is 0 (no ARMOR3D that day, land, padding) the output is the U-Net's alone.
+    """
+
+    def __init__(
+        self, net: nn.Module, armor_index: list[int], mask_index: int, init_weight: float = 0.5
+    ) -> None:
+        super().__init__()
+        if not 0.0 < init_weight < 1.0:
+            raise ValueError("init_weight must be between 0 and 1")
+        self.net = net
+        self.armor_index: torch.Tensor
+        self.register_buffer("armor_index", torch.tensor(armor_index), persistent=False)
+        self.mask_index = int(mask_index)
+        logit = float(np.log(init_weight / (1.0 - init_weight)))
+        self.blend_logit = nn.Parameter(torch.full((len(armor_index),), logit))
+
+    def weights(self) -> torch.Tensor:
+        return torch.sigmoid(self.blend_logit.detach())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.net(x)
+        h, w = out.shape[-2:]
+        armor = x.index_select(1, self.armor_index)[..., :h, :w].to(out.dtype)
+        mask = x[:, self.mask_index : self.mask_index + 1, :h, :w].to(out.dtype)
+        weight = torch.sigmoid(self.blend_logit).to(out.dtype)[None, :, None, None] * mask
+        return weight * armor + (1.0 - weight) * out
+
+
+def wrap_armor_blend(net: nn.Module, channels: list[str], init_weight: float = 0.5) -> ArmorBlend:
+    """Wrap a U-Net whose inputs include the ARMOR3D channels in an :class:`ArmorBlend`."""
+    anom = [i for i, c in enumerate(channels) if str(c).startswith(f"{ARMOR_PREFIX}anom@")]
+    if not anom or ARMOR_MASK not in channels:
+        raise ValueError("The ARMOR3D blend needs the ARMOR3D input channels")
+    return ArmorBlend(net, anom, channels.index(ARMOR_MASK), init_weight)
 
 
 # ------------------------------------------------------------------ side stores

@@ -39,7 +39,12 @@ from oceanscope_ml.data.argo_inputs import (
     enable_year_input,
     set_argo_window,
 )
-from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
+from oceanscope_ml.data.armor_inputs import (
+    ArmorInputs,
+    enable_armor_input,
+    is_armor_channel,
+    wrap_armor_blend,
+)
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -76,7 +81,9 @@ def load_checkpoint(
         raise ValueError(
             f"Checkpoint {checkpoint} was trained with a different channel list than the config"
         )
-    model = build_model(config, len(channels)).to(device)
+    model: torch.nn.Module = build_model(config, len(channels)).to(device)
+    if ckpt.get("armor_blend"):
+        model = wrap_armor_blend(model, channels).to(device)  # DECISIONS 2026-11-09
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, str(ckpt.get("run_id", checkpoint.parent.name))

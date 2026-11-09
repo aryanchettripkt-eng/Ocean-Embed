@@ -50,7 +50,13 @@ from oceanscope_ml.data.argo_inputs import (
     set_argo_window,
 )
 from oceanscope_ml.data.argo_inputs import argo_window as argo_window_of
-from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
+from oceanscope_ml.data.armor_inputs import (
+    ArmorBlend,
+    ArmorInputs,
+    enable_armor_input,
+    is_armor_channel,
+    wrap_armor_blend,
+)
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -344,6 +350,7 @@ def finetune_run(
     argo_window: int | None = None,
     armor_input: bool = False,
     armor_paths: list[Path] | None = None,
+    armor_blend: bool = False,
 ) -> FineTuneResult:
     """Fine-tune ``base_checkpoint`` with ARGO targets; resumable; returns the best epoch.
 
@@ -390,6 +397,10 @@ def finetune_run(
         if not armor_paths:
             raise ValueError("armor_input needs the ARMOR3D side stores of the training years")
         loss_settings["armor_input"] = True
+    if armor_blend:
+        if not armor_input:
+            raise ValueError("armor_blend needs armor_input")
+        loss_settings["armor_blend"] = True
     no_options = {"huber_delta": None, "vgrad_weight": 0.0, "warm_weight": 1.0}
     if argo_input:
         enable_argo_input(config)
@@ -425,14 +436,26 @@ def finetune_run(
         logger.warning("Base checkpoint config hash differs from the current config")
 
     set_seed(int(config.train.get("seed", 42)))
-    model = build_model(config, len(channels)).to(device)
+    model: torch.nn.Module = build_model(config, len(channels)).to(device)
     model.load_state_dict(base_state)
+    if armor_blend:
+        # Output starts halfway between the base model and ARMOR3D (DECISIONS 2026-11-09).
+        model = wrap_armor_blend(model, channels).to(device)
     weight_decay = float(config.train.get("weight_decay", 1e-4))
     if argo_input or armor_input:
         # The new input weights start at zero; the first layer learns 10x faster to pick them up.
-        first = [p for n, p in model.named_parameters() if n.startswith("encoders.0.0.")]
-        rest = [p for n, p in model.named_parameters() if not n.startswith("encoders.0.0.")]
+        # The blend weights (one per depth) learn 100x faster, without weight decay.
+        named = list(model.named_parameters())
+        first = [p for n, p in named if n.removeprefix("net.").startswith("encoders.0.0.")]
+        blend = [p for n, p in named if n == "blend_logit"]
+        rest = [
+            p
+            for n, p in named
+            if n != "blend_logit" and not n.removeprefix("net.").startswith("encoders.0.0.")
+        ]
         groups = [{"params": first, "lr": 10 * lr}, {"params": rest, "lr": lr}]
+        if blend:
+            groups.append({"params": blend, "lr": 100 * lr, "weight_decay": 0.0})
         optimizer = torch.optim.AdamW(groups, lr=lr, weight_decay=weight_decay)
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -555,6 +578,9 @@ def finetune_run(
             argo_band,
             n_obs,
         )
+        if isinstance(model, ArmorBlend):
+            w = model.weights().cpu().numpy()
+            logger.info("ARMOR3D blend weight per depth: %s", np.array2string(w, precision=2))
         return row
 
     def save_best() -> None:
@@ -571,6 +597,7 @@ def finetune_run(
                 "argo_input": argo_input,
                 "argo_window_days": argo_window_of(config) if argo_input else None,
                 "armor_input": armor_input,
+                "armor_blend": armor_blend,
                 "loss": loss_settings,
             },
             best_path,
@@ -717,6 +744,9 @@ def build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--armor-store", nargs="+", default=None, help="ARMOR3D side stores (or their folders)"
     )
+    parser.add_argument(
+        "--armor-blend", action="store_true", help="Blend the output with ARMOR3D (learned weight)"
+    )
     return parser
 
 
@@ -746,6 +776,7 @@ def main() -> None:
         argo_window=args.argo_window,
         armor_input=args.armor_input,
         armor_paths=[Path(p) for p in args.armor_store] if args.armor_store else None,
+        armor_blend=args.armor_blend,
     )
     print(json.dumps({k: str(v) for k, v in asdict(result).items()}))
 
