@@ -326,3 +326,8 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - Run N: `kaggle_run_f.py` with members main2_ai, main2_ft, main3, main3_aiw, main3_aix30, main3_aix30a (`ens6`), tree window 30 days, dev half. Nothing reads 2021.
 - **Rules set before the run:** ens6 (or ens6w_rm2 / ens6w_rm2_oi) replaces main3_aix30a only if lower than 0.727 °C on the dev half. The winner is the one that takes the single 2021 test, on Aryan's go. `evaluation.argo_test --single` (and `OCEANSCOPE_SINGLE` in `kaggle_argo_test.py`) can score a single model if main3_aix30a stays the pick.
 - Expectation, stated in advance: the tree and per-depth corrections learn from the same non-held-out floats that ARMOR3D already assimilates, so the gain may be small; in run K the weights also favoured the strongest member.
+
+## 2026-11-09 — Run N result (ens6): main3_aix30a stays the pick
+- Weights on non-held-out floats: main3_aix30a 0.7, main3_aiw 0.25, main3 0.05, the rest 0. Tree (30-day window) CV, Bay of Bengal 50–300 m: 0.664 → 0.642. The per-depth correction again found nothing to add (every depth's plan empty), so ens6w_rm2_oi equals ens6w_rm2.
+- Dev half, Bay of Bengal 50–300 m (6 floats): **ens6w_rm2 0.735** (CI 0.638–0.771) vs main3_aix30a 0.727; GLORYS12 0.756, GREP 0.855, ARMOR3D 0.639. Not lower than 0.727, so by the rule set before the run main3_aix30a stays the pick. It is the model for the single 2021 test (`kaggle_argo_test.py` with `OCEANSCOPE_SINGLE=main3_aix30a`), on Aryan's go.
+- Regimes (ens6w_rm2 vs GLORYS12): better in cold anomalies, normal conditions, cyclones (0.531 vs 0.691), La Niña, neutral IOD, inter- and NE monsoon; worse in warm anomalies (1.140 vs 1.012), positive IOD and the SW monsoon.
