@@ -296,8 +296,8 @@ def test_live_settings_live_outside_the_hashed_experiment_config() -> None:
     exp = (Path(__file__).resolve().parents[1] / "configs" / "experiment.yaml").read_text()
     assert "\nlive:" not in exp and "live_check:" not in exp
     s = LiveSettings.from_dict(LIVE_CFG)
-    assert set(s.sources) == set(live_inputs.PRODUCT_VARS)
-    assert set(LIVE_CFG["live_check"]["reprocessed"]) == set(live_inputs.PRODUCT_VARS)
+    assert set(s.sources) == set(live_inputs.PRODUCT_VARS) | {live_inputs.ARMOR_PRODUCT}
+    assert set(LIVE_CFG["live_check"]["reprocessed"]) == set(s.sources)
 
 
 def test_kit_for_a_run_published_under_another_name(

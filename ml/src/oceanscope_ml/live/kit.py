@@ -54,7 +54,7 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.argo_inputs import ArgoInputs, enable_argo_input, enable_year_input
-from oceanscope_ml.data.armor_inputs import is_armor_channel
+from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -79,6 +79,8 @@ def member_config(config: ExperimentConfig, names: list[str]) -> ExperimentConfi
     cfg = copy.deepcopy(config)
     if uses_argo(names):
         enable_argo_input(cfg)
+    if any(is_armor_channel(n) for n in names):
+        enable_armor_input(cfg)
     if "year" in names:
         enable_year_input(cfg)
     if channel_names(cfg) != list(names):
@@ -96,10 +98,16 @@ class KitMember:
     file: str  # relative to the kit root
     checkpoint_run_id: str
     channel_names: list[str] = field(default_factory=list)
+    # The ARGO input window the member was trained with (None: the config's, or no ARGO).
+    argo_window_days: int | None = None
 
     @property
     def uses_argo(self) -> bool:
         return uses_argo(self.channel_names)
+
+    @property
+    def uses_armor(self) -> bool:
+        return any(is_armor_channel(n) for n in self.channel_names)
 
 
 @dataclass
@@ -131,6 +139,16 @@ class Kit:
     @property
     def needs_argo(self) -> bool:
         return any(m.uses_argo for m in self.members)
+
+    @property
+    def needs_armor(self) -> bool:
+        return any(m.uses_armor for m in self.members)
+
+    def argo_fetch_days(self, config: ExperimentConfig) -> int:
+        """Days of ARGO profiles a live run fetches: the widest window of any ARGO member."""
+        default = argo_window_days(config)
+        windows = [m.argo_window_days or default for m in self.members if m.uses_argo]
+        return max(windows, default=default)
 
     def static(self) -> xr.Dataset:
         return xr.open_dataset(self.static_path).load()
@@ -179,21 +197,14 @@ def build_kit(
     for name, path in paths.items():
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         names = [str(n) for n in ckpt["channel_names"]]
+        # A member trained with another ARGO window keeps it: predict applies the checkpoint's
+        # window, and the live run fetches the widest window of the kit (Kit.argo_fetch_days).
         window = ckpt.get("argo_window_days")
-        if uses_argo(names) and window and int(window) != argo_window_days(config):
-            raise ValueError(
-                f"{path} uses a {window}-day ARGO window; live mode fetches "
-                f"{argo_window_days(config)} days. Widen the live ARGO fetch before using it."
-            )
-        if any(is_armor_channel(n) for n in names):
-            raise ValueError(
-                f"{path} uses ARMOR3D input channels; live mode has no ARMOR3D feed yet "
-                "(DECISIONS 2026-11-08)."
-            )
+        member_window = int(window) if uses_argo(names) and window else None
         member_config(config, names)  # raises on a channel list the config cannot make
         ckpt_run_id = str(ckpt.get("run_id", path.parent.name))
         file = "best.pt" if single else f"members/{name}.pt"
-        members.append(KitMember(name or ckpt_run_id, file, ckpt_run_id, names))
+        members.append(KitMember(name or ckpt_run_id, file, ckpt_run_id, names, member_window))
     run_id = run_id or members[0].checkpoint_run_id
     needs_argo = any(m.uses_argo for m in members)
     if needs_argo and holdout is None:
@@ -266,6 +277,7 @@ def open_kit(root: Path, config: ExperimentConfig) -> Kit:
                 str(m["file"]),
                 str(m["checkpoint_run_id"]),
                 [str(n) for n in m["channel_names"]],
+                int(m["argo_window_days"]) if m.get("argo_window_days") else None,
             )
             for m in meta["members"]
         ]
@@ -367,6 +379,10 @@ def predict_days(
                 seed=int(cfg.train.get("seed", 42)),
             )
             dataset.set_argo(argo, "predict")
+        if dataset._has_armor_channels:
+            if "armor3d" not in ds:
+                raise ValueError(f"Member {member.name} has ARMOR3D input channels: no armor3d")
+            dataset.set_armor(ArmorInputs(cfg, ds, dataset.sigma_d, live=True))
         with torch.no_grad():
             anomalies = []
             for i in range(len(days)):

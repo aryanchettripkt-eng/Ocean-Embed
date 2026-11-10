@@ -124,6 +124,9 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             for var in self._window_vars()
         }
         self._ds: xr.Dataset | None = None
+        # preload(): the days this split reads, in memory (no per-sample Zarr reads).
+        self._mem: xr.Dataset | None = None
+        self._mem_offset = 0
         # With a cache dir, samples come from the fast local cache (oceanscope_ml.data.cache).
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None
         self._arrays: dict[str, np.ndarray] | None = None
@@ -313,6 +316,29 @@ class OceanScopeDataset(torch.utils.data.Dataset):
             self._ds = self._open_store()
         return self._ds
 
+    def preload(self) -> None:
+        """Load every day this split reads (history included) and the climatology into memory.
+
+        For splits with no training cache (the 2021 test, uncached prediction), so that each
+        sample is read from memory instead of decompressing Zarr chunks of every part store
+        (the 2021 test stalled for over 85 min on the first 32 days, 2026-11-09). Samples are
+        identical to the store reads.
+        """
+        if self.cache_dir is not None:
+            return
+        ds = self._open_store()
+        lo = int(self._positions.min()) - self._lookback
+        hi = int(self._positions.max()) + 1
+        names = set(self._window_vars())
+        names |= {c.source for c in self.channels if c.kind == "index"}
+        names |= {"thetao", "target_valid", "grep_mean"}
+        timed = [v for v in sorted(names) if v in ds.data_vars]
+        mem = ds[timed].isel(time=slice(lo, hi)).load()
+        mem["clim"] = ds["clim"].load()
+        logger.info("Preloaded %d days of %s and clim into memory", hi - lo, ", ".join(timed))
+        self._mem = mem
+        self._mem_offset = lo
+
     def _cache(self) -> dict[str, np.ndarray]:
         if self._arrays is None:
             assert self.cache_dir is not None
@@ -320,8 +346,12 @@ class OceanScopeDataset(torch.utils.data.Dataset):
         return self._arrays
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        ds = self._open()
         t = int(self._positions[index])
+        if self._mem is not None:
+            ds = self._mem
+            t -= self._mem_offset
+        else:
+            ds = self._open()
         day = pd.Timestamp(ds["time"].values[t])
         doy = day.day_of_year
         if self.cache_dir is not None:

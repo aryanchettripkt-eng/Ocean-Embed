@@ -27,6 +27,11 @@ live:                     # PRD §12, PHASES P9. Used by `python -m oceanscope_m
       service: arco       # without the CDS queue (2,000+ requests deep on 4 Nov 2026).
       dataset_id: arco-era5:full_37-1h-0p25deg-chunk-1
       # CDS fallback: service: cds, dataset_id: derived-era5-single-levels-daily-statistics
+    armor3d:              # only for kits with ARMOR3D-input members (main3_aix30a); daily, ~7 days behind
+      service: copernicusmarine
+      dataset_id: cmems_obs-mob_glo_phy_nrt_0.125deg_P1D-m       # MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012
+      variables: [to]
+      max_depth: 1100
 
 live_check:               # P9-1: the same month with reprocessed inputs (the products the store used)
   reprocessed:
@@ -49,6 +54,11 @@ live_check:               # P9-1: the same month with reprocessed inputs (the pr
     era5:                 # the training store read ERA5 from ARCO too
       service: arco
       dataset_id: arco-era5:full_37-1h-0p25deg-chunk-1
+    armor3d:              # what the model trained on
+      service: copernicusmarine
+      dataset_id: cmems_obs-mob_glo_phy_my_0.125deg_P1D-m
+      variables: [to]
+      max_depth: 1100
   glorys:
     service: copernicusmarine
     dataset_id: cmems_mod_glo_phy_my_0.083deg_P1D-m   # use the myint dataset for months after mid-2021

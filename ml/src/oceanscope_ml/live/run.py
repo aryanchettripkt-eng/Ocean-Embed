@@ -36,7 +36,7 @@ import xarray as xr
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.live import inputs as live_inputs
 from oceanscope_ml.live.argo import ArgoFetcher
-from oceanscope_ml.live.kit import Kit, argo_window_days, download_kit, open_kit, predict_days
+from oceanscope_ml.live.kit import Kit, download_kit, open_kit, predict_days
 from oceanscope_ml.live.store import (
     PublishedRepo,
     append_day,
@@ -212,9 +212,16 @@ def run_live(
     days = pd.date_range(oldest - pd.Timedelta(days=max_lb), newest, freq="D")
     product_end = {"era5": today - pd.Timedelta(days=settings.era5_min_lag_days)}
     inputs = live_inputs.load_inputs(config, settings.sources, days, ocean, fetch, product_end)
-    check = live_inputs.check_inputs(
-        live_inputs.daily_coverage(inputs, ocean), lookbacks, newest, oldest
-    )
+    coverage = live_inputs.daily_coverage(inputs, ocean)
+    check_lookbacks = lookbacks
+    armor = None
+    if kit.needs_armor:  # same-day ARMOR3D NRT for ARMOR3D-input members (DECISIONS 2026-11-10)
+        armor_days = pd.date_range(oldest, newest, freq="D")
+        armor = live_inputs.load_armor3d(
+            config, live_inputs.armor_spec(settings.sources), armor_days, fetch
+        )
+        coverage, check_lookbacks = live_inputs.with_armor(coverage, lookbacks, armor, ocean)
+    check = live_inputs.check_inputs(coverage, check_lookbacks, newest, oldest)
     log.input_last_day = check.last_day
     log.input_latency_days = {
         v: (None if d is None else int((today - pd.Timestamp(d)).days))
@@ -238,7 +245,7 @@ def run_live(
     if kit.needs_argo:
         if argo_fetch is None:
             raise LiveRunError("The kit has ARGO input members but no ARGO fetcher was given")
-        argo_start = target - pd.Timedelta(days=argo_window_days(config) - 1)
+        argo_start = target - pd.Timedelta(days=kit.argo_fetch_days(config) - 1)
         profiles = argo_fetch(argo_start, target)
         log.argo_profiles = int(len(profiles))
         log.argo_floats = int(profiles["platform_number"].nunique()) if len(profiles) else 0
@@ -254,7 +261,7 @@ def run_live(
     # --- 5. predict, append, trim
     before = file_hashes(published)
     window = live_inputs.write_window_store(
-        work / "window.zarr", inputs, static, target - pd.Timedelta(days=max_lb), target
+        work / "window.zarr", inputs, static, target - pd.Timedelta(days=max_lb), target, armor
     )
     day = predict_days(config, kit, window, [target], argo_profiles=profiles)
     if not (day["coverage"].values == 1).any():

@@ -168,6 +168,7 @@ def predict_store(
         cache_dir=cache_dir,
         allow_test=allow_test,
     )
+    dataset.preload()  # no-op with a training cache
     ds = open_parts(store_path if isinstance(store_path, list) else [store_path], stats_path)
     if dataset._has_argo_channels:
         if not argo_paths or not holdout:

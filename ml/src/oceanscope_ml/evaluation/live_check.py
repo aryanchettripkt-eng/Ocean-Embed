@@ -37,7 +37,7 @@ from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.transform import TestLeakageError
 from oceanscope_ml.live import inputs as live_inputs
 from oceanscope_ml.live.argo import ArgoFetcher
-from oceanscope_ml.live.kit import Kit, argo_window_days, open_kit, predict_days
+from oceanscope_ml.live.kit import Kit, open_kit, predict_days
 from oceanscope_ml.live.run import (
     DEFAULT_LIVE_CONFIG,
     default_argo_fetch,
@@ -201,7 +201,7 @@ def run_check(
     if kit.needs_argo:
         if argo_fetch is None:
             raise ValueError("The kit has ARGO input members but no ARGO fetcher was given")
-        argo_start = days[0] - pd.Timedelta(days=argo_window_days(config) - 1)
+        argo_start = days[0] - pd.Timedelta(days=kit.argo_fetch_days(config) - 1)
         profiles = argo_fetch(argo_start, days[-1])
         if profiles.empty:
             raise ValueError(f"No ARGO profiles in {argo_start.date()}..{days[-1].date()}")
@@ -230,13 +230,23 @@ def run_check(
     for name in SETS:
         inputs = live_inputs.load_inputs(config, sources[name], fetch_days, ocean, fetch)
         cov = live_inputs.daily_coverage(inputs, ocean)
-        ok = [d for d in days if live_inputs.check_inputs(cov, lookbacks, d, d).target is not None]
+        check_lookbacks = lookbacks
+        armor = None
+        if kit.needs_armor:  # ARMOR3D NRT vs reprocessed, like the other inputs
+            spec = live_inputs.armor_spec(sources[name])
+            armor = live_inputs.load_armor3d(config, spec, days, fetch)
+            cov, check_lookbacks = live_inputs.with_armor(cov, lookbacks, armor, ocean)
+        ok = [
+            d
+            for d in days
+            if live_inputs.check_inputs(cov, check_lookbacks, d, d).target is not None
+        ]
         complete[name] = [str(d.date()) for d in ok]
         logger.info("%s: %d of %d days have complete inputs", name, len(ok), len(days))
         if not ok:
             raise ValueError(f"No day of {month} has complete {name} inputs")
         window = live_inputs.write_window_store(
-            work / f"{name}.zarr", inputs, static, fetch_days[0], days[-1]
+            work / f"{name}.zarr", inputs, static, fetch_days[0], days[-1], armor
         )
         preds[name] = predict_days(config, kit, window, ok, argo_profiles=profiles)
 
