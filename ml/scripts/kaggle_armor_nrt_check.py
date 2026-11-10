@@ -100,7 +100,12 @@ for did, info in datasets.items():
     print("  time (start, end, step, unit):", info["time"])
     print("  latitude step:", info["lat_step"], " depths:", info["depths"])
 
-nrt_ids = [d for d in datasets if "nrt" in d.lower()]
+# Daily NRT temperature only (the monthly and uncertainty datasets are not model inputs).
+nrt_ids = [
+    d
+    for d, info in datasets.items()
+    if "_nrt_" in d.lower() and "P1D" in d and info["variables"] & {"to", "thetao"}
+]
 print("\nNRT datasets:", nrt_ids or "NONE")
 if not nrt_ids:
     raise SystemExit("No NRT dataset found: send me this log.")
