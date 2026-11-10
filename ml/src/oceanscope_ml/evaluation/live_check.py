@@ -230,13 +230,23 @@ def run_check(
     for name in SETS:
         inputs = live_inputs.load_inputs(config, sources[name], fetch_days, ocean, fetch)
         cov = live_inputs.daily_coverage(inputs, ocean)
-        ok = [d for d in days if live_inputs.check_inputs(cov, lookbacks, d, d).target is not None]
+        check_lookbacks = lookbacks
+        armor = None
+        if kit.needs_armor:  # ARMOR3D NRT vs reprocessed, like the other inputs
+            spec = live_inputs.armor_spec(sources[name])
+            armor = live_inputs.load_armor3d(config, spec, days, fetch)
+            cov, check_lookbacks = live_inputs.with_armor(cov, lookbacks, armor, ocean)
+        ok = [
+            d
+            for d in days
+            if live_inputs.check_inputs(cov, check_lookbacks, d, d).target is not None
+        ]
         complete[name] = [str(d.date()) for d in ok]
         logger.info("%s: %d of %d days have complete inputs", name, len(ok), len(days))
         if not ok:
             raise ValueError(f"No day of {month} has complete {name} inputs")
         window = live_inputs.write_window_store(
-            work / f"{name}.zarr", inputs, static, fetch_days[0], days[-1]
+            work / f"{name}.zarr", inputs, static, fetch_days[0], days[-1], armor
         )
         preds[name] = predict_days(config, kit, window, ok, argo_profiles=profiles)
 

@@ -15,7 +15,9 @@ from the Argo ERDDAP, which needs no account.
 
 Settings (env):
 - OCEANSCOPE_RUN: the published name (default ens3)
-- OCEANSCOPE_MEMBERS: comma-separated members (default main2_ai,main2_ft,main3). A member is
+- OCEANSCOPE_MEMBERS: comma-separated members (default main2_ai,main2_ft,main3); one name
+  builds a single-model kit (OCEANSCOPE_RUN=main3_aix30a, OCEANSCOPE_MEMBERS=main3_aix30a).
+  A member is
   matched to the checkpoint named exactly like it, or to its fine-tunes ``<member>_l<lambda>``;
   among fine-tunes the one with the lowest validation ARGO RMSE is taken, as in
   kaggle_finetune.py. ``name=checkpoint_run`` picks one by hand (e.g. main2_ai=main2_ai_l0.1).
@@ -139,7 +141,10 @@ def pick(member):
 
 
 chosen = [pick(m) for m in MEMBERS]
-members = " ".join(f"--member {n}={p}" for n, p in chosen)
+if len(chosen) == 1:  # a single model (main3_aix30a, DECISIONS 2026-11-10)
+    members = f"--checkpoint {chosen[0][1]}"
+else:
+    members = " ".join(f"--member {n}={p}" for n, p in chosen)
 
 # 2) Kit (uploaded only at the end, after the check).
 run(

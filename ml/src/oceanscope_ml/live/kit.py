@@ -54,7 +54,7 @@ import xarray as xr
 
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.data.argo_inputs import ArgoInputs, enable_argo_input, enable_year_input
-from oceanscope_ml.data.armor_inputs import is_armor_channel
+from oceanscope_ml.data.armor_inputs import ArmorInputs, enable_armor_input, is_armor_channel
 from oceanscope_ml.data.channels import channel_names
 from oceanscope_ml.data.dataset import OceanScopeDataset
 from oceanscope_ml.data.parts import open_parts
@@ -79,6 +79,8 @@ def member_config(config: ExperimentConfig, names: list[str]) -> ExperimentConfi
     cfg = copy.deepcopy(config)
     if uses_argo(names):
         enable_argo_input(cfg)
+    if any(is_armor_channel(n) for n in names):
+        enable_armor_input(cfg)
     if "year" in names:
         enable_year_input(cfg)
     if channel_names(cfg) != list(names):
@@ -102,6 +104,10 @@ class KitMember:
     @property
     def uses_argo(self) -> bool:
         return uses_argo(self.channel_names)
+
+    @property
+    def uses_armor(self) -> bool:
+        return any(is_armor_channel(n) for n in self.channel_names)
 
 
 @dataclass
@@ -133,6 +139,10 @@ class Kit:
     @property
     def needs_argo(self) -> bool:
         return any(m.uses_argo for m in self.members)
+
+    @property
+    def needs_armor(self) -> bool:
+        return any(m.uses_armor for m in self.members)
 
     def argo_fetch_days(self, config: ExperimentConfig) -> int:
         """Days of ARGO profiles a live run fetches: the widest window of any ARGO member."""
@@ -191,11 +201,6 @@ def build_kit(
         # window, and the live run fetches the widest window of the kit (Kit.argo_fetch_days).
         window = ckpt.get("argo_window_days")
         member_window = int(window) if uses_argo(names) and window else None
-        if any(is_armor_channel(n) for n in names):
-            raise ValueError(
-                f"{path} uses ARMOR3D input channels; live mode has no ARMOR3D feed yet "
-                "(DECISIONS 2026-11-08)."
-            )
         member_config(config, names)  # raises on a channel list the config cannot make
         ckpt_run_id = str(ckpt.get("run_id", path.parent.name))
         file = "best.pt" if single else f"members/{name}.pt"
@@ -374,6 +379,10 @@ def predict_days(
                 seed=int(cfg.train.get("seed", 42)),
             )
             dataset.set_argo(argo, "predict")
+        if dataset._has_armor_channels:
+            if "armor3d" not in ds:
+                raise ValueError(f"Member {member.name} has ARMOR3D input channels: no armor3d")
+            dataset.set_armor(ArmorInputs(cfg, ds, dataset.sigma_d, live=True))
         with torch.no_grad():
             anomalies = []
             for i in range(len(days)):

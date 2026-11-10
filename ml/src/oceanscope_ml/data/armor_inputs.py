@@ -89,7 +89,10 @@ class ArmorInputs:
         side_paths: list[Path] | None = None,
         allow_test: bool = False,
         cache_dir: Path | None = None,
+        live: bool = False,
     ) -> None:
+        # live: a live window store (days after the test period, ARMOR3D NRT); DECISIONS
+        # 2026-11-10. Days of the training, validation or test period are never read this way.
         self.n_depth = len(config.depths_m)
         self.sigma = np.asarray(sigma_d, dtype=np.float64)[:, None, None]
         if self.sigma.shape[0] != self.n_depth:
@@ -103,9 +106,13 @@ class ArmorInputs:
 
         times = pd.to_datetime(ds["time"].values).normalize()
         ranges = _armor_ranges(config, allow_test)
+        test_end = pd.Timestamp(config.splits.test[1])
         self._main: dict[pd.Timestamp, int] = {}
         for t, day in enumerate(times):
-            if any(a <= day <= b for a, b in ranges) and (allow_test or day < test_start):
+            if live:
+                if day > test_end:
+                    self._main[day] = t
+            elif any(a <= day <= b for a, b in ranges) and (allow_test or day < test_start):
                 self._main[day] = t
 
         self.side_paths = side_store_paths(list(side_paths or []))

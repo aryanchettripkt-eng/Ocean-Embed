@@ -321,3 +321,93 @@ def test_a_wider_argo_window_member_widens_the_live_fetch(
                    argo_fetch=argo_fetch)  # fmt: skip
     assert log.status == "dry_run"
     assert asked == [(pd.Timestamp("2001-02-13"), pd.Timestamp("2001-03-14"))]
+
+
+def _armor_checkpoint(config: ExperimentConfig, base: Path, out: Path) -> Path:
+    """``base`` widened to ARGO + ARMOR3D channels, the ARMOR3D ones with weight 0.5."""
+    from oceanscope_ml.data.armor_inputs import enable_armor_input, is_armor_channel
+
+    ckpt = torch.load(base, map_location="cpu", weights_only=False)
+    cfg = copy.deepcopy(config)
+    enable_argo_input(cfg)
+    enable_armor_input(cfg)
+    names = channel_names(cfg)
+    state = expand_input_weights(ckpt["model"], ckpt["channel_names"], names)
+    w = state["encoders.0.0.weight"]
+    for i, n in enumerate(names):
+        if is_armor_channel(n):
+            w[:, i] = 0.5
+    torch.save({**ckpt, "model": state, "channel_names": names, "run_id": out.stem}, out)
+    return out
+
+
+def _armor_fetch(missing: set[str]) -> Any:
+    """Raw ARMOR3D (1/8 degree, ``to``) on every asked day except ``missing``."""
+    import xarray as xr
+
+    def fetch_all(product: str, spec: dict[str, Any], start: Any, end: Any) -> Any:
+        if product != "armor3d":
+            return fetch(product, spec, start, end)
+        days = pd.date_range(start, end, freq="D")
+        days = days[~days.strftime("%Y-%m-%d").isin(list(missing))]
+        lat = 5.0 + 0.0625 + 0.125 * np.arange(20)
+        lon = 60.0 + 0.0625 + 0.125 * np.arange(24)
+        depth = np.array([0.0, 50.0, 100.0, 300.0, 600.0, 1100.0])
+        prof = 29.0 - 0.02 * depth
+        to = np.broadcast_to(prof[None, :, None, None], (len(days), len(depth), 20, 24))
+        return xr.Dataset(
+            {"to": (("time", "depth", "latitude", "longitude"), to.astype(np.float32))},
+            coords={"time": days, "depth": depth, "latitude": lat, "longitude": lon},
+        )
+
+    return fetch_all
+
+
+def test_armor_member_runs_live_on_the_newest_day_with_armor3d(
+    tmp_path: Path,
+    live_config: ExperimentConfig,  # noqa: F811
+    store: Path,
+    kits: dict[str, Any],
+    monkeypatch: Any,
+) -> None:
+    base = Path(live_config.paths.checkpoints) / "run1" / "best.pt"
+    armor_ck = _armor_checkpoint(live_config, base, tmp_path / "ck" / "run1_aia.pt")
+    built = build_kit(live_config, {"a": base, "b": armor_ck}, store, store, tmp_path / "ka",
+                      run_id="run1", holdout=_holdout(tmp_path))  # fmt: skip
+    kit = open_kit(built.root, live_config)
+    assert kit.needs_armor and [m.uses_armor for m in kit.members] == [False, True]
+
+    fake_inputs(monkeypatch)
+    srcs = settings(live_config).sources
+    assert live_inputs.armor_spec(srcs)["dataset_id"].startswith("cmems_obs-mob_glo_phy_nrt")
+
+    def argo_fetch(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        return _profiles(live_config, pd.date_range(start, end))
+
+    # ARMOR3D NRT lags: the two newest days have none, so the run goes back to 2001-03-12.
+    log = run_live(live_config, RecordingRepo(kits["root"]), kit, tmp_path / "run",
+                   pd.Timestamp("2001-03-15"), _armor_fetch({"2001-03-13", "2001-03-14"}),
+                   settings(live_config), dry_run=True, argo_fetch=argo_fetch)  # fmt: skip
+    assert log.status == "dry_run" and log.target_day == "2001-03-12"
+    assert "armor3d missing on the day" in log.skipped_days["2001-03-14"]
+
+    # The ARMOR3D channels reach the model: the prediction moves with the ARMOR3D field.
+    static = kit.static()
+    ocean = static["ocean_mask"].values.astype(bool)
+    max_lb = max(live_inputs.var_lookbacks(live_config).values())
+    target = pd.Timestamp("2001-03-12")
+    days = pd.date_range(target - pd.Timedelta(days=max_lb), target, freq="D")
+    inputs = live_inputs.load_inputs(live_config, srcs, days, ocean, fetch)
+    armor = live_inputs.load_armor3d(
+        live_config, live_inputs.armor_spec(srcs), pd.DatetimeIndex([target]), _armor_fetch(set())
+    )
+    assert np.isfinite(armor.values[0][:, ocean]).all()
+    profiles = _profiles(live_config, pd.date_range(target - pd.Timedelta(days=9), target))
+    preds = []
+    for k, a in enumerate((armor, armor + 2.0)):
+        window = live_inputs.write_window_store(
+            tmp_path / f"w{k}.zarr", inputs, static, days[0], target, a
+        )
+        preds.append(predict_days(live_config, kit, window, [target], argo_profiles=profiles))
+    diff = preds[1]["temp_pred"].values - preds[0]["temp_pred"].values
+    assert np.nanmax(np.abs(diff)) > 0

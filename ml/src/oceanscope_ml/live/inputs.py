@@ -27,6 +27,7 @@ from oceanscope_ml.data.channels import channel_list
 from oceanscope_ml.data.reduce import (
     TargetGrid,
     reduce_adt,
+    reduce_armor3d,
     reduce_currents,
     reduce_era5_fluxes,
     reduce_era5_winds,
@@ -50,6 +51,8 @@ PRODUCT_VARS: dict[str, tuple[str, ...]] = {
     "era5": ("u_wind", "v_wind", "wind_stress_curl", "net_heat_flux", "precip"),
 }
 SERVICES = ("copernicusmarine", "earthdata", "cds", "arco")
+# ARMOR3D (3D, same-day) for kits whose members take ARMOR3D input channels.
+ARMOR_PRODUCT = "armor3d"
 # Newest ERA5T days to give up on, one at a time, when CDS refuses a request.
 CDS_MAX_DROPPED_DAYS = 3
 
@@ -221,12 +224,73 @@ def check_inputs(
     return InputCheck(coverage, last_day, None, skipped)
 
 
+def armor_spec(sources: dict[str, Any]) -> dict[str, Any]:
+    """The ARMOR3D source of a sources block; fails when it is missing."""
+    if ARMOR_PRODUCT not in sources:
+        raise KeyError(f"Config has no source for {ARMOR_PRODUCT!r} (a member uses ARMOR3D)")
+    spec = dict(sources[ARMOR_PRODUCT])
+    if spec.get("service") != "copernicusmarine" or not spec.get("dataset_id"):
+        raise ValueError(f"Source {ARMOR_PRODUCT!r} needs service copernicusmarine and dataset_id")
+    return spec
+
+
+def load_armor3d(
+    config: ExperimentConfig,
+    spec: dict[str, Any],
+    days: pd.DatetimeIndex,
+    fetch: Fetcher,
+) -> xr.DataArray:
+    """ARMOR3D on ``days`` as [time, depth, lat, lon] on the target grid (NaN where absent).
+
+    Reduced with ``reduce_armor3d``, as the part stores and side stores were.
+    """
+    grid = target_grid(config)
+    depths = [float(d) for d in config.depths_m]
+    out = np.full((len(days), len(depths), len(grid.lats), len(grid.lons)), np.nan, np.float32)
+    logger.info("Fetching ARMOR3D (%s) %s..%s", spec["dataset_id"], days[0].date(),
+                days[-1].date())  # fmt: skip
+    raw = fetch(ARMOR_PRODUCT, spec, days[0], days[-1])
+    if raw is not None and raw.sizes.get("time", 0):
+        red = reduce_armor3d(raw, grid, depths)["armor3d"]
+        index = {d: i for i, d in enumerate(days)}
+        for k, day in enumerate(pd.to_datetime(red["time"].values).normalize()):
+            if day in index:
+                out[index[day]] = np.asarray(red.values[k], dtype=np.float32)
+    return xr.DataArray(
+        out,
+        dims=("time", "depth", "lat", "lon"),
+        coords={"time": days, "depth": np.asarray(depths), "lat": grid.lats, "lon": grid.lons},
+        name="armor3d",
+    )
+
+
+def armor_coverage(armor: xr.DataArray, ocean_mask: np.ndarray) -> pd.Series:
+    """Share of ocean cells with a surface ARMOR3D value, per day."""
+    n_ocean = max(int(ocean_mask.sum()), 1)
+    surface = np.asarray(armor.isel(depth=0).values)
+    frac = np.isfinite(surface[:, ocean_mask]).sum(axis=1) / n_ocean
+    return pd.Series(frac, index=pd.DatetimeIndex(armor["time"].values), name="armor3d")
+
+
+def with_armor(
+    coverage: pd.DataFrame,
+    lookbacks: dict[str, int],
+    armor: xr.DataArray,
+    ocean_mask: np.ndarray,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Add ARMOR3D (needed on the day itself, no history) to the input check."""
+    cov = coverage.copy()
+    cov["armor3d"] = armor_coverage(armor, ocean_mask).reindex(cov.index).fillna(0.0)
+    return cov, {**lookbacks, "armor3d": 0}
+
+
 def write_window_store(
     path: Path,
     inputs: xr.Dataset,
     static: xr.Dataset,
     start: pd.Timestamp,
     end: pd.Timestamp,
+    armor: xr.DataArray | None = None,
 ) -> Path:
     """A small store over [start, end] that ``OceanScopeDataset(split="live")`` reads.
 
@@ -243,6 +307,8 @@ def write_window_store(
     ds = window.copy()
     for v in ("ocean_mask", "bathymetry", "woa_clim_profile"):
         ds[v] = static[v]
+    if armor is not None:  # ARMOR3D input members (DECISIONS 2026-11-10)
+        ds["armor3d"] = armor.reindex(time=window["time"].values).astype(np.float32)
     path.parent.mkdir(parents=True, exist_ok=True)
     ds.to_zarr(path, mode="w", zarr_format=2, consolidated=True)
     return path
