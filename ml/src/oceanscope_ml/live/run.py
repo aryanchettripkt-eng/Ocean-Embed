@@ -36,7 +36,7 @@ import xarray as xr
 from oceanscope_ml.config import ExperimentConfig
 from oceanscope_ml.live import inputs as live_inputs
 from oceanscope_ml.live.argo import ArgoFetcher
-from oceanscope_ml.live.kit import Kit, argo_window_days, download_kit, open_kit, predict_days
+from oceanscope_ml.live.kit import Kit, download_kit, open_kit, predict_days
 from oceanscope_ml.live.store import (
     PublishedRepo,
     append_day,
@@ -238,7 +238,7 @@ def run_live(
     if kit.needs_argo:
         if argo_fetch is None:
             raise LiveRunError("The kit has ARGO input members but no ARGO fetcher was given")
-        argo_start = target - pd.Timedelta(days=argo_window_days(config) - 1)
+        argo_start = target - pd.Timedelta(days=kit.argo_fetch_days(config) - 1)
         profiles = argo_fetch(argo_start, target)
         log.argo_profiles = int(len(profiles))
         log.argo_floats = int(profiles["platform_number"].nunique()) if len(profiles) else 0

@@ -37,7 +37,7 @@ from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.transform import TestLeakageError
 from oceanscope_ml.live import inputs as live_inputs
 from oceanscope_ml.live.argo import ArgoFetcher
-from oceanscope_ml.live.kit import Kit, argo_window_days, open_kit, predict_days
+from oceanscope_ml.live.kit import Kit, open_kit, predict_days
 from oceanscope_ml.live.run import (
     DEFAULT_LIVE_CONFIG,
     default_argo_fetch,
@@ -201,7 +201,7 @@ def run_check(
     if kit.needs_argo:
         if argo_fetch is None:
             raise ValueError("The kit has ARGO input members but no ARGO fetcher was given")
-        argo_start = days[0] - pd.Timedelta(days=argo_window_days(config) - 1)
+        argo_start = days[0] - pd.Timedelta(days=kit.argo_fetch_days(config) - 1)
         profiles = argo_fetch(argo_start, days[-1])
         if profiles.empty:
             raise ValueError(f"No ARGO profiles in {argo_start.date()}..{days[-1].date()}")

@@ -362,3 +362,7 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - GREP had values for 2021 at these matchups, so it was scored (an earlier note in this thread that GREP ends in 2020 was wrong for this product version).
 - Per depth (all held-out floats): lower RMSE than GLORYS12 at 29–1062 m, slightly higher at 0–18 m (within 0.016 °C); behind ARMOR3D at every depth.
 - What can be said: on the untouched 2021 floats, given the same ARGO information (through ARMOR3D as an input), our model is more accurate than GLORYS12 in the Bay of Bengal 50–300 m band and ties GREP; ARMOR3D, one of its inputs, is more accurate still. The test is spent; this is the number quoted. Nothing published.
+
+## 2026-11-10 — Running main3_aix30a live (Aryan: "let's do it")
+- Plan: (1) Kaggle check of the near-real-time ARMOR3D datasets (`scripts/kaggle_armor_nrt_check.py`: datasets, daily or weekly, delay, NRT − MY over the Bay of Bengal at 50–300 m); (2) live ARMOR3D fetch and lifting the live-kit ARMOR3D lock, shaped by that result; (3) the P9-1 style live-vs-reprocessed check on a past month; (4) dry run; the site switches only on Aryan's OK.
+- Done now: live mode keeps each member's ARGO window. `KitMember.argo_window_days` (in kit.json; old kits default to the config's 10 days), `Kit.argo_fetch_days` = the widest window of the ARGO members, used by `live.run` and `evaluation.live_check`. `live.kit` no longer refuses a 30-day member. The ARMOR3D refusal stays until step 2.

@@ -286,3 +286,38 @@ def test_nrt_check_runs_the_ensemble_with_argo(
     assert asked == [(pd.Timestamp("2000-12-23"), pd.Timestamp("2001-01-31"))]
     text = paths["report"].read_text()
     assert "(mean of a, b)" in text and "ARGO input profiles (same in both sets): 40" in text
+
+
+def test_a_wider_argo_window_member_widens_the_live_fetch(
+    tmp_path: Path,
+    live_config: ExperimentConfig,  # noqa: F811
+    store: Path,
+    kits: dict[str, Any],
+    monkeypatch: Any,
+) -> None:
+    # A member trained with a 30-day ARGO window (main3_aix30a) keeps it in the kit, and the
+    # live run fetches 30 days instead of the config's 10.
+    loud = tmp_path / "ck" / "run1_ai.pt"
+    wide = tmp_path / "ck" / "run1_ai30.pt"
+    ckpt = torch.load(loud, map_location="cpu", weights_only=False)
+    torch.save({**ckpt, "argo_window_days": 30, "run_id": "run1_ai30"}, wide)
+    base = Path(live_config.paths.checkpoints) / "run1" / "best.pt"
+    built = build_kit(live_config, {"a": base, "b": wide}, store, store, tmp_path / "k30",
+                      run_id="run1", holdout=_holdout(tmp_path))  # fmt: skip
+    kit = open_kit(built.root, live_config)
+    assert [m.argo_window_days for m in kit.members] == [None, 30]
+    assert kit.argo_fetch_days(live_config) == 30
+    assert kits["argo"].argo_fetch_days(live_config) == 10
+
+    fake_inputs(monkeypatch)
+    asked: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+
+    def argo_fetch(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        asked.append((start, end))
+        return _profiles(live_config, pd.date_range(start, end))
+
+    log = run_live(live_config, RecordingRepo(kits["root"]), kit, tmp_path / "run",
+                   pd.Timestamp("2001-03-15"), fetch, settings(live_config), dry_run=True,
+                   argo_fetch=argo_fetch)  # fmt: skip
+    assert log.status == "dry_run"
+    assert asked == [(pd.Timestamp("2001-02-13"), pd.Timestamp("2001-03-14"))]
