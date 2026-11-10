@@ -355,3 +355,10 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - The first 2021 test run (notebook97c612307d) fetched the 13 ARGO months and started predicting 2021, then ran 85+ min without finishing the first 32 of 335 days. It was stopped before any prediction store or score existed, so the test is still unspent (no `main3_aix30a_test_headline.csv`).
 - Cause: the training cache excludes the test year by design, so prediction read every sample straight from the five part stores and the stats store (history windows and clim decompressed per sample), the same slow path that stalled run M.
 - Fix: `OceanScopeDataset.preload()` loads the days the split reads (history included) and `clim` into memory once; `predict_store` calls it when there is no cache. Samples are identical (test: `test_preloaded_samples_match_the_store`). Rerun the same cell unchanged.
+
+## 2026-11-10 — 2021 ARGO test result (main3_aix30a, scored once)
+- Rerun after the preload fix (notebook97c612307d): 335 test days predicted in about 2 min; 23 held-out floats in 2021, 269 303 matches.
+- **Bay of Bengal 50–300 m, all held-out floats, 2021 (7 floats, 15 901 obs):** main3_aix30a **0.709 °C** (CI 0.612–0.785); GLORYS12 0.873 (difference −0.164, CI −0.283 to −0.018: **lower than GLORYS12**); GREP 0.743 (difference −0.033, CI −0.091 to +0.021: **a tie**); ARMOR3D 0.570 (ARMOR3D lower by 0.139, CI 0.071–0.194). Headline verdict as pre-registered: **Not met** (not below every reference).
+- GREP had values for 2021 at these matchups, so it was scored (an earlier note in this thread that GREP ends in 2020 was wrong for this product version).
+- Per depth (all held-out floats): lower RMSE than GLORYS12 at 29–1062 m, slightly higher at 0–18 m (within 0.016 °C); behind ARMOR3D at every depth.
+- What can be said: on the untouched 2021 floats, given the same ARGO information (through ARMOR3D as an input), our model is more accurate than GLORYS12 in the Bay of Bengal 50–300 m band and ties GREP; ARMOR3D, one of its inputs, is more accurate still. The test is spent; this is the number quoted. Nothing published.
