@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # Ephemeral on Render is fine; never inside the repository.
     POSTCARD_CACHE_DIR: str = ""
     RELOAD_INTERVAL_MIN: int = 60
+    # Memory limits for reading the prediction store on Render's 512 MB free tier. Each read
+    # decodes whole daily chunks (all depths, full grid), so many reads at once add up fast:
+    # 20 parallel year-long timeseries peaked at ~550 MB with zarr's defaults.
+    # How many requests may read the store at the same time (the rest wait their turn).
+    DATA_READ_CONCURRENCY: int = 2
+    # How many chunks one read decodes in parallel (zarr's own default is 10).
+    ZARR_ASYNC_CONCURRENCY: int = 2
     LOG_LEVEL: str = "INFO"
 
 

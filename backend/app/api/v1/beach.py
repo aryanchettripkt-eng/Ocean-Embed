@@ -58,17 +58,18 @@ def locate(
 
     date = str(manifest["available_dates"]["end"])
     ds = store.get_predictions_dataset()
-    try:
-        day = ds.sel(time=date)
-        coverage = day["coverage"].values.astype(int)
-    except KeyError:
-        raise DateUnavailableError(f"Date {date} is unavailable in dataset") from None
-    lats = np.asarray(ds.coords["lat"].values, dtype=float)
-    lons = np.asarray(ds.coords["lon"].values, dtype=float)
-    ocean = coverage == 1
-    if min_depth_m is not None:
-        pred = np.asarray(day["temp_pred"].transpose("depth", "lat", "lon").values, dtype=float)
-        ocean = ocean & glasses.deep_enough(pred, depths, min_depth_m)
+    with store.reading():
+        try:
+            day = ds.sel(time=date)
+            coverage = day["coverage"].values.astype(int)
+        except KeyError:
+            raise DateUnavailableError(f"Date {date} is unavailable in dataset") from None
+        lats = np.asarray(ds.coords["lat"].values, dtype=float)
+        lons = np.asarray(ds.coords["lon"].values, dtype=float)
+        ocean = coverage == 1
+        if min_depth_m is not None:
+            pred = np.asarray(day["temp_pred"].transpose("depth", "lat", "lon").values, dtype=float)
+            ocean = ocean & glasses.deep_enough(pred, depths, min_depth_m)
 
     if bearing_deg is None:
         hit = nearest.nearest_ocean(lat, lon, max_km, ocean, lats, lons)
