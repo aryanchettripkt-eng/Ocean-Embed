@@ -5,10 +5,13 @@
 - **Live site:** https://ocean-embed.vercel.app
 - **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
-- **Model run shown:** `ens3` (the average of three U-Net runs, see [Results](#results))
+- **Model run shown:** `main3_aix30a` since 10 November 2026: a U-Net that takes recent ARGO floats and the ARMOR3D product as extra inputs (see [Results](#results)). Before that the site showed `ens3`, then `main2_ft`.
+- **Live:** a new day is added every day at 06:00 UTC from near-real-time inputs, about 7 days behind today (see [Live mode](#live-mode-a-new-day-every-day))
 - **Uptime:** an UptimeRobot monitor pings the backend every 5 minutes, backed up by a GitHub Actions ping (see [Keeping the backend awake](#keeping-the-backend-awake))
 
-> **Honest caveat, up front.** The model is trained to reproduce the GLORYS12 reanalysis. GLORYS assimilates satellite altimetry and ARGO profiles, so agreement with GLORYS is not the same as agreement with the real ocean. ARGO profiles are also assimilated into GLORYS, so our ARGO comparison is not fully independent either. See [Limitations](#limitations).
+> **The result in one line.** On ARGO floats from 2021 that the model never saw, in the Bay of Bengal at 50–300 m, `main3_aix30a` scored **0.709 °C RMSE against 0.873 °C for GLORYS12** (19% lower, a significant difference), tied with the GREP ensemble (0.743 °C), and stayed behind ARMOR3D (0.570 °C), which is one of its inputs. That test was run once and is now spent.
+
+> **Honest caveat, up front.** The model is trained to reproduce the GLORYS12 reanalysis and then fine-tuned on ARGO floats. GLORYS12 and ARMOR3D both assimilate ARGO profiles, including the floats we hold out, so our ARGO comparisons put us on equal terms with GLORYS12 but are not fully independent of those floats. Our model sees that float information through ARMOR3D, and ARMOR3D on its own is still more accurate. See [Limitations](#limitations).
 
 ## Contents
 
@@ -41,8 +44,8 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 | **Region** | 40–100°E, 0–30°N (Arabian Sea, Bay of Bengal, northern equatorial Indian Ocean) |
 | **Grid** | 0.25°, daily |
 | **Depths** | 15 native GLORYS12 levels: 0.5, 5, 10, 18, 29, 47, 66, 92, 131, 186, 222, 266, 380, 644 and 1,062 m (7 of them in 50–300 m) |
-| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021 (scored once, on `main2_ft`) · Live days from near-real-time inputs, about 3 days behind today |
-| **Model** | Small 2D U-Net (≤ 10 M parameters) that predicts temperature anomalies from a training-period climatology |
+| **Period** | Train 1993-03-02 to 2017-12-01 · Validation 2018-01-01 to 2020-12-01 · Test 2021, sealed (the gridded test was spent on `main2_ft`, the ARGO test on `main3_aix30a`) · Live days from near-real-time inputs, about 7 days behind today |
+| **Model** | Small 2D U-Net (≤ 10 M parameters) that predicts temperature anomalies from a training-period climatology. The live model also takes the last 30 days of ARGO profiles and the daily ARMOR3D field as input channels (155 in all) |
 | **Headline test** | Bay of Bengal, 50–300 m: is the model's error against held-out ARGO floats lower than GLORYS12, the GREP ensemble mean and ARMOR3D? Fixed before training (see [Results](#results)) |
 
 ### At a glance
@@ -60,27 +63,52 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 
 ## Results
 
-**Run `ens3`**: the daily average of three U-Net runs:
-- `main2_ft`: trained on 23 training years (1993–2017 without 2005 and 2006, which weren't built in time), then fine-tuned on ARGO profiles from floats that are not held out (λ = 0.3, picked on validation);
-- `main2_ai`: the same network fine-tuned with ARGO profiles as extra input channels;
-- `main3`: trained from scratch with ARGO inputs, recency weighting and a year channel.
+All numbers below are RMSE in °C. "Held-out floats" are the 20% of ARGO floats that never feed the model, as input or as a training target. Every pick rule was written down before the run it judged ([`docs/DECISIONS.md`](docs/DECISIONS.md)).
 
-**Validation, 2018–2020, against GLORYS12:** RMSE **0.644 °C** (MAE 0.429 °C), which is **35.1% skill** over the climatology baseline. `main2_ft` alone scores 0.660 °C (33.5%).
+### The live model: `main3_aix30a`
 
-**Headline test (Bay of Bengal, 50–300 m, held-out ARGO floats, validation years):**
+`main3` is a U-Net trained from scratch on 23 training years (1993–2017 without 2005 and 2006, which weren't built in time) with ARGO profiles as input channels, recency weighting and a year channel. `main3_aix30a` is `main3` fine-tuned on ARGO profiles from floats that are not held out (λ = 3), with two extra inputs: the last **30 days** of those floats, and the daily **ARMOR3D** temperature field (15 anomaly channels plus a mask, 155 input channels in all).
 
-| Product | RMSE vs held-out floats (°C) |
-|---|---|
-| OceanScope `ens3` | 0.957 (95% CI 0.868–1.052) |
-| GLORYS12 | 0.786 |
-| GREP ensemble mean | 0.952 |
-| ARMOR3D | 0.607 |
+**One-shot 2021 ARGO test (the number to quote).** Bay of Bengal, 50–300 m, 7 held-out floats, about 16,000 measurements, run once on 10 November 2026:
 
-**Verdict: not met.** The ensemble is level with the GREP mean (the difference isn't significant), but GLORYS12 and ARMOR3D, which assimilate ARGO profiles, are closer to the floats. We fixed this test before training and report it as it came out. For reference, `main2_ft` alone scores 0.996 °C, and `main2` before ARGO fine-tuning scored 1.026 °C. A per-depth ARGO correction of `main2_ai` reached 0.862 °C (CI 0.815–0.910) on the same floats, but it needs a live ARGO feed and is not published.
+| Product | RMSE vs held-out 2021 floats (°C) | Difference from ours (95% CI) |
+|---|---|---|
+| **OceanScope `main3_aix30a`** | **0.709** (CI 0.612–0.785) | |
+| GLORYS12 | 0.873 | we are lower by 0.164 (0.018 to 0.283): **better** |
+| GREP ensemble mean | 0.743 | we are lower by 0.033 (−0.021 to 0.091): **a tie** |
+| ARMOR3D | 0.570 | ARMOR3D is lower by 0.139 (0.071 to 0.194): **behind** |
 
-**Sealed 2021 test:** run once, on `main2_ft` (the run published at the time): RMSE 0.753 °C, MAE 0.497 °C, bias −0.08 °C, 32.4% skill over climatology. The test year is now spent, so `ens3` is **not evaluated** on 2021; its numbers above are validation-period only.
+Depth by depth, the model beats GLORYS12 everywhere from 29 m down to 1,062 m, and is within 0.016 °C of it in the top 18 m. It is behind ARMOR3D at every depth. **Pre-registered verdict: not met**, because the headline rule asks to beat every reference, ARMOR3D included.
 
-The per-depth, per-season and per-region tables are in the published dataset under `metrics/` and on the site's Validation page.
+What this does and doesn't show: given the same ARGO information as GLORYS12 (GLORYS12 assimilates the floats; our model sees them through ARMOR3D), our model is more accurate at those floats in this band. It is not a skill independent of the floats, and ARMOR3D, one of its inputs, is more accurate still. Without the ARMOR3D channels the same recipe (`main3_aix30`) scored 0.840 on the dev half against 0.727 with them.
+
+**Validation years, all 15 held-out floats (2018–2020), Bay of Bengal 50–300 m,** as shown on the site: ours 0.780, GLORYS12 0.786 (a tie, CI −0.028 to +0.023), GREP 0.952 (we're lower, but the CI just crosses zero), ARMOR3D 0.607. The model was picked on the 6-float dev half (0.727 there), which is why this wider score is higher.
+
+**Against GLORYS12 on the grid, 1,036 validation days:** RMSE 0.655 °C, **34.1% skill** over the climatology baseline.
+
+### How we got here: the ARGO rounds
+
+The first published runs were trained only to imitate GLORYS12, and they were well behind it at real floats. From 6 to 10 November 2026 we ran a series of rounds against ARGO. To avoid fooling ourselves, the held-out floats were split into a **dev half** (6 Bay of Bengal floats, used to pick) and a **final half** (scored once). Every round had a rule written before it ran: replace the pick only if lower on the dev half.
+
+| Run | What changed | Dev half, BoB 50–300 m |
+|---|---|---|
+| `ens3` | Average of `main2_ft`, `main2_ai`, `main3` (the published run until 10 Nov) | 0.867 |
+| `ens3w_rm_oi` (run E) | Weighted ensemble + LightGBM residual model + guarded per-depth ARGO correction | 0.816 (final half 0.906; GLORYS12 0.794) |
+| run F, `main3_aiw`, `ens4`, `ens5` | Richer residual features, warm-event weighting, more members | 0.821–0.860, no change of pick |
+| `main3_aix30` (run J) | Fine-tune with a 30-day float window | 0.840, best single model without ARMOR3D |
+| `main3_aix30L` (run L) | Longer training | 0.853: the fine-tune route had reached its limit |
+| **`main3_aix30a` (run M)** | **ARMOR3D as 16 extra input channels** | **0.727, first run below GLORYS12 (0.756)** |
+| `ens6w_rm2` (run N) | Best ensemble recipe with `main3_aix30a` added | 0.735, no change of pick |
+| `main3_aix30ab` (run O) | Learned per-depth blend with ARMOR3D | 0.612, **ruled out**: about 80% of its answer below 18 m was ARMOR3D itself |
+
+On the same dev half, GLORYS12 scored 0.756, GREP 0.855 and ARMOR3D 0.639. Run O scored best but was dropped on purpose, because its score was mostly ARMOR3D's rather than our model's. `main3_aix30a` was then the model that took the one-shot 2021 test.
+
+### Earlier runs, for the record
+
+- **`ens3`** (published 4–10 Nov): grid RMSE vs GLORYS12 0.644 °C (35.1% skill) on validation; held-out floats, Bay of Bengal 50–300 m, 0.957 °C against GLORYS12 0.786, GREP 0.952 and ARMOR3D 0.607. Not scored on 2021.
+- **`main2_ft`** (published before `ens3`): validation 0.660 °C (33.5% skill). It took the sealed **gridded** 2021 test, run once: RMSE 0.753 °C, MAE 0.497 °C, bias −0.08 °C, 32.4% skill over climatology. Held-out floats, Bay of Bengal 50–300 m: 0.996 °C (`main2` before ARGO fine-tuning: 1.026).
+
+The per-depth, per-season and per-region tables for the published run are in the dataset under `metrics/` and on the site's Validation page. The regime breakdown (`evaluation.regimes`) shows the ensembles do worst in warm anomalies, positive IOD and the southwest monsoon.
 
 ---
 
@@ -102,7 +130,7 @@ flowchart LR
     TRAIN["train · ensemble<br/>U-Net on anomalies"]
     EVAL["evaluate · argo_validation<br/>baselines · headline"]
     PUB["publish"]
-    LIVE["live (daily 06:00 UTC)<br/>NRT inputs → one new day"]
+    LIVE["live (daily 06:00 UTC)<br/>NRT inputs + ARMOR3D NRT<br/>+ 30 days of ARGO → one new day"]
   end
 
   HF[("Hugging Face dataset<br/>zenzone3/oceanscope-outputs")]
@@ -190,6 +218,7 @@ Python 3.11, FastAPI, xarray and zarr, pydantic-settings and httpx. It runs as a
 - **Startup.** The service binds its port first, then downloads the active run from the Hugging Face dataset in a worker thread. Only the files named in the remote `manifest.json` are fetched, so a deploy never times out on Render's port scan. Until the data is loaded, `/health` and `/meta` return 503.
 - **Hourly reload.** Every `RELOAD_INTERVAL_MIN` (60) minutes it re-checks the manifest, so a new live day or a newly published run appears without a redeploy. `manifest.json` is always uploaded last, so the backend never sees a half-published run.
 - **One store, one code path.** Routers hold no data logic. They call a single `OutputStore`, and the guide's data tools call the very same methods.
+- **Staying under 512 MB.** Render restarted the service on 6 November 2026 for going over its 512 MB limit. Under load (20 parallel year-long time series) memory peaked at 496 MB, because every read decodes whole daily chunks and zarr fetched 10 chunks at a time per read across up to 40 request threads. Now a read gate lets only `DATA_READ_CONCURRENCY` (default 2) requests read the store at once, zarr's async concurrency is capped by `ZARR_ASYNC_CONCURRENCY` (default 2), the Docker image sets `MALLOC_ARENA_MAX=2` so freed buffers are handed back, and `HF_HUB_DISABLE_XET=1` makes the dataset download stream over plain HTTP. The same load now peaks at **233 MB** and finishes slightly faster.
 - **Hardening.** NaN or infinite coordinates are refused (422), CORS is limited to the site and localhost without credentials, every response carries `nosniff`, `X-Frame-Options` and `Referrer-Policy` headers, and logs never hold user text, audio, images, keys or coordinates finer than 1°.
 
 ### API (base `/api/v1`)
@@ -303,9 +332,20 @@ Without any glasses connected, Ask uses the phone mic and Android's speech recog
 
 ## Live mode: a new day every day
 
-Since 4 November 2026 a daily live run adds recent days to the site, not just the past. The **Live** workflow ([`.github/workflows/live.yml`](.github/workflows/live.yml)) runs daily at 06:00 UTC. It picks the newest day for which every near-real-time input exists, runs the published model (for an ensemble, each member, then averages them; ARGO-input members read the last 10 days of profiles from the Argo ERDDAP, with held-out floats left out), and uploads that day to the Hugging Face dataset, with `manifest.json` last. The backend picks it up on its next hourly reload.
+Since 4 November 2026 a daily live run adds recent days to the site, not just the past. The **Live** workflow ([`.github/workflows/live.yml`](.github/workflows/live.yml)) runs daily at 06:00 UTC. It picks the newest day for which every near-real-time input exists, runs the published model from its "live kit" (a private Hugging Face repo holding the checkpoint, statistics and static fields), and uploads that day to the Hugging Face dataset, with `manifest.json` last. The backend picks it up on its next hourly reload. It keeps a rolling window of 365 live days.
 
-Live maps run about 3 days behind real time. They have no GLORYS reference yet, so the site marks them with a live banner. Before switching it on, a one-month check compared the model on near-real-time and reprocessed inputs: within 0.01 °C at 0–30 m and below 180 m, and 0.03–0.15 °C better at 47–131 m. The full runbook is [`docs/P9_LIVE_RUNBOOK.md`](docs/P9_LIVE_RUNBOOK.md).
+**What it fetches.** Near-real-time sea level, SST, SSS, OSCAR currents and ERA5T (through Google's ARCO copy, which avoids the CDS queue). For ARGO-input models it reads the profiles of the model's own float window (30 days for `main3_aix30a`) from the Argo ERDDAP, with held-out floats left out. For ARMOR3D-input models it fetches the daily near-real-time ARMOR3D (`cmems_obs-mob_glo_phy_nrt_0.125deg_P1D-m`), on the same grid and depths as the reprocessed product the model trained on. For an ensemble kit it runs each member and averages them.
+
+**How far behind.** The wind, heat flux and precipitation inputs trail by about 7 days and ARMOR3D by about 6, so live maps run **about 7 days behind today** (they were about 3–5 days behind with the older models, which didn't need ARMOR3D). Live days have no GLORYS reference yet, so the site marks them with a live banner.
+
+**Checked before each switch.** Every model went through the same test before going live: run one past month twice, once on near-real-time inputs and once on the reprocessed inputs it trained on, and compare both with GLORYS12.
+
+| Model (live from) | Month | Result |
+|---|---|---|
+| `main2_ft`, then `ens3` (4 Nov 2026) | Oct 2024 | Within 0.01 °C at 0–30 m and below 180 m, 0.03–0.15 °C better at 47–131 m with live inputs. Output moved by up to 0.41 (`main2_ft`) and 0.43 °C (`ens3`) at 92 m |
+| `main3_aix30a` (10 Nov 2026) | Oct 2024, 31/31 days | Within 0.01 °C at 0–30 m and 186–1,062 m, 0.03–0.12 °C better at 47–131 m with live inputs. Output moved by at most 0.31 °C (at 92 m), even though near-real-time ARMOR3D differs from the reprocessed one by 0.38 °C RMSE at 50–300 m |
+
+The switch to `main3_aix30a` was published with `scripts/kaggle_publish_single.py` (which scores its validation store on all held-out floats, publishes it and uploads its live kit in one notebook), then checked with a dry run of the Live workflow on 10 November (462 ARGO profiles from 166 floats, target day 3 November, nothing trimmed). The full runbook is [`docs/P9_LIVE_RUNBOOK.md`](docs/P9_LIVE_RUNBOOK.md).
 
 ---
 
@@ -332,7 +372,11 @@ Render's free tier puts a web service to sleep after about 15 minutes without tr
 
 **Evaluation.** Baselines are climatology and per-pixel ridge regression. Metrics are computed per depth, season and region, with day-to-day flicker and per-year bias checks and physics sanity checks. Comparisons against ARGO use 20% of floats held out at the float level, which never feed the model as input. The test year (2021) is sealed: one command scores it once, on the owner's instruction, and the result is fixed after that.
 
-**Ensemble.** The published run, `ens3`, is the daily mean of three members' prediction stores (`main2_ft`, `main2_ai` and `main3`, see [Results](#results)). The same members are packed into a "live kit" so the daily live run averages them too.
+**ARGO fine-tuning and inputs.** `finetune` continues training on ARGO profiles from non-held-out floats alongside the GLORYS target (weight λ), with options for the float window (`--argo-window`, saved in the checkpoint and used by predict and live), ARMOR3D input channels (`--armor-input`), a learned ARMOR3D blend (`--armor-blend`), warm-event weighting, Huber and vertical-gradient losses. ARMOR3D planes are cached once in a float16 memory map, and prediction preloads the test year into memory, which turned two multi-hour stalls into minutes.
+
+**Ensembles and corrections.** `inference.ensemble` averages members' prediction stores, optionally with weights fitted on non-held-out floats (`ensemble_weights`). `inference.residual_model` is a LightGBM correction of the residuals at nearby floats, and `inference.argo_correct` is a guarded per-depth ARGO correction. None of these beat the single `main3_aix30a` on the dev half (see [How we got here](#how-we-got-here-the-argo-rounds)).
+
+**Evaluation tools.** `argo_validation --half dev|final` scores either half of the held-out floats; `evaluation.argo_test` is the one-shot 2021 ARGO test (it refuses to run twice); `evaluation.regimes` breaks errors down by anomaly, ENSO, IOD, monsoon and cyclone days; `evaluation.matchup_audit` and `evaluation.spread_skill` check the matchups and ensemble spread; `evaluation.live_check` is the live-vs-reprocessed check; `evaluation.report` writes the evaluation report.
 
 ---
 
@@ -378,7 +422,18 @@ python -m oceanscope_ml.data.parts check --parts <A.zarr> <B.zarr> ... --stats s
 
 ### 3. Baselines, training, prediction and evaluation (GPU)
 
-On Kaggle, with the part stores attached as inputs, GPU and Internet on and an `HF_TOKEN` secret, one script runs stats, training, prediction, evaluation, baselines and (with `OCEANSCOPE_PUBLISH=1`) publishing: `%run ml/scripts/kaggle_train_and_publish.py`. `ml/scripts/kaggle_finetune.py` runs the ARGO fine-tune and `ml/scripts/kaggle_argo_check.py` the ARGO comparison. The steps it runs are:
+On Kaggle, with the part stores attached as inputs, GPU and Internet on and an `HF_TOKEN` secret, one script runs stats, training, prediction, evaluation, baselines and (with `OCEANSCOPE_PUBLISH=1`) publishing: `%run ml/scripts/kaggle_train_and_publish.py`. The other notebook scripts in [`ml/scripts/`](ml/scripts/):
+
+| Script | What it does |
+|---|---|
+| `kaggle_finetune.py` | ARGO fine-tune; `OCEANSCOPE_FT_ARGO_WINDOW`, `OCEANSCOPE_FT_ARMOR=1`, `OCEANSCOPE_FT_ARMOR_BLEND=1`, `OCEANSCOPE_FT_WARM` pick the options |
+| `kaggle_armor3d_fetch.py` | Builds the training-period ARMOR3D side stores (2004–2017) |
+| `kaggle_argo_check.py`, `kaggle_ensemble_correct.py`, `kaggle_run_e.py`, `kaggle_run_f.py` | Score members, ensembles and corrections on the dev half |
+| `kaggle_final_half.py`, `kaggle_argo_test.py` | The one-time final-half score and the one-shot 2021 ARGO test (`OCEANSCOPE_SINGLE` for one model) |
+| `kaggle_publish_single.py`, `kaggle_publish_ensemble.py` | Publish a model or an ensemble as the site's run and upload its live kit |
+| `kaggle_live_kit.py`, `kaggle_armor_nrt_check.py` | Build a live kit and run the live-vs-reprocessed check; inspect the near-real-time ARMOR3D |
+
+The core steps are:
 
 ```bash
 STORES="<A.zarr> <B.zarr> <C.zarr> <D.zarr>"
@@ -439,17 +494,19 @@ Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design
 
 ## Limitations
 
-- **Trained to imitate a reanalysis.** The target is GLORYS12, which itself assimilates altimetry and ARGO. Skill against GLORYS is not skill against the real ocean. The ARGO comparison is the closer check, but ARGO is assimilated into GLORYS too, so it is not fully independent.
-- **The headline test was not met.** Against held-out ARGO floats in the Bay of Bengal at 50–300 m, GLORYS12 and ARMOR3D are more accurate than our model; we only tie the GREP mean.
+- **Trained to imitate a reanalysis.** The base target is GLORYS12, which itself assimilates altimetry and ARGO. Skill against GLORYS is not skill against the real ocean. The ARGO comparison is the closer check, but ARGO is assimilated into GLORYS12 and ARMOR3D too, so it is not fully independent.
+- **The pre-registered headline was not met.** On 2021 the model beats GLORYS12 and ties GREP at held-out floats in the Bay of Bengal at 50–300 m, but ARMOR3D is more accurate. On the validation years it only ties GLORYS12.
+- **It leans on ARMOR3D.** ARMOR3D is an input and is still more accurate on its own. Without it, our best model (0.840 on the dev half) was behind GLORYS12 (0.756). The live site depends on Copernicus publishing near-real-time ARMOR3D.
+- **Small samples.** The Bay of Bengal headline rests on 6 to 15 floats per period (7 in 2021), so the confidence intervals are wide.
 - **Training years.** 2005 and 2006 were not built in time and are not in the training set.
-- **Before 2004**, there are few ARGO floats, so the ARGO input channels are empty by design for those years.
-- **Not tuned exhaustively.** There was no hyperparameter search, and the per-input-group ablation study planned in the PRD hasn't been run, so we make no claim about which inputs matter most.
-- **`ens3` is not scored on the test year.** The sealed 2021 test was spent on `main2_ft`; the `ens3` numbers are validation-period only.
+- **Before 2004**, there are few ARGO floats, so the ARGO input channels are empty by design for those years. ARMOR3D side stores cover 2004–2017, one day in three.
+- **Not tuned exhaustively.** There was no hyperparameter search, and the per-input-group ablation study planned in the PRD hasn't been run beyond the ARMOR3D on/off comparison, so we make no claim about which other inputs matter most.
+- **The test year is spent.** The gridded 2021 test was used on `main2_ft` and the ARGO 2021 test on `main3_aix30a`. Nothing else can be scored on 2021.
 - **Resolution.** 0.25° and daily. Fronts, eddies and coastal features smaller than about 25 km are smoothed out, and cells less than half ocean are masked.
 - **Depth.** 15 levels down to about 1,060 m. Values between levels in the profile chart (and in glasses answers) are interpolated linearly.
 - **Region.** The North Indian Ocean box only (40–100°E, 0–30°N). The model has not been tested elsewhere.
 - **Not a forecast.** Each map is a reconstruction of a past day from that day's and earlier observations.
-- **Live days are unchecked.** They run about 3 days behind real time and have no GLORYS reference yet.
+- **Live days are unchecked.** They run about 7 days behind real time and have no GLORYS reference yet. Near-real-time inputs, ARMOR3D especially, differ from the reprocessed ones the model trained on; the one-month check above bounds the effect but can't rule it out for every day.
 - **AI features are an interface, not a source.** The guide's wording, postcards and lasso shapes come from Meta's models; the numbers always come from the model outputs. The grounding guard still has known gaps (for example, a number spelled out in words).
 - **Glasses app is a demo.** It is tested on Meta's mock glasses only, not on real hardware, and it uses dev/beta toolkit APIs, so it can't be published as it is. The answer is for a cell about 27 km wide, and the phone's compass sets the direction.
 - **Hosting.** The backend runs on Render's free tier (512 MB). After a restart it re-downloads the data, which takes a few minutes; the uptime monitors keep restarts rare but can't prevent them.
