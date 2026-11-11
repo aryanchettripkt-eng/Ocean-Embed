@@ -13,8 +13,10 @@ RUN useradd -m -u 1000 appuser && \
     mkdir -p /data/outputs /app/data && \
     chown -R appuser:appuser /data /app
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+# Exact versions from requirements.lock, so a new release of a dependency can't break a deploy.
+COPY pyproject.toml requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock && \
+    pip install --no-cache-dir --no-deps .
 
 COPY app/ ./app/
 RUN chown -R appuser:appuser /app
