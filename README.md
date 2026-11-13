@@ -2,7 +2,7 @@
 
 **See the ocean below the surface.** OceanScope AI reconstructs daily sea temperature at 15 depths, from the surface down to about 1,060 m, across the North Indian Ocean. It uses only what satellites and a few other sources can see from the surface, plus recent ARGO float profiles. You can explore the result as a 2D map or a 3D cutaway block, ask questions about it in plain language (typed or spoken), and even ask it out loud through a pair of Meta smart glasses.
 
-- **Live site:** https://ocean-embed.vercel.app
+- **Live site:** https://ocean-embed-xi.vercel.app/
 - **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
 - **Model run shown:** `main3_aix30a` since 10 November 2026: a U-Net that takes recent ARGO floats and the ARMOR3D product as extra inputs (see [Results](#results)). Before that the site showed `ens3`, then `main2_ft`.
@@ -188,7 +188,7 @@ The browser and the Android app only ever talk to our backend. Every Meta model 
 
 ## Frontend (Next.js on Vercel)
 
-Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js and WebGL2, Recharts, TanStack Query and GSAP. It deploys to Vercel from `main` at https://ocean-embed.vercel.app. Contributor setup is in [`frontend/README.md`](frontend/README.md).
+Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js and WebGL2, Recharts, TanStack Query and GSAP. It deploys to Vercel from `main` at https://ocean-embed-xi.vercel.app/. Contributor setup is in [`frontend/README.md`](frontend/README.md).
 
 ### Pages
 
