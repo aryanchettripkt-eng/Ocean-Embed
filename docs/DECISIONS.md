@@ -397,3 +397,12 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
   - **NLL.** BaM's NLL gain over the posterior-mean plug-in is concentrated where features are clipped or the bar is capped: 4.0 vs 24.1 on those 7.1% of split rows, against 0.478 vs 0.484 everywhere else.
   - **Bay of Bengal.** The near-constant bars there are not caused by clipping or the cap, which hit its 50–300 m rows less often (1.2% vs 10.5% elsewhere). Every setting tried gives the Bay of Bengal near-constant bars.
   - **Permanent link.** Tag `uncertainty-v1`.
+- **Hierarchical error bars (2026-11-13, Aryan's plan; 2018–2020 only, 2021 not read):** the rule was written before any fit ([docs/uncertainty/HIERARCHY.md](uncertainty/HIERARCHY.md)). The split is 5-fold CV over the 51 floats, stratified by region. There are three regions, because no held-out float lies south of 0°.
+  - **Signal in the Bay of Bengal 50–300 m:** small. Monsoon phase has none. The U-Net's predicted stratification and the global layer's log sd do: CV R² on log r² rises from 0.010 (depth only) to 0.013 and 0.018. Sea-surface salinity is untested (it needs one Kaggle collect).
+  - **NUTS reference (numpyro, 92/186/380 m):** τ is well identified (log τ about −2.3 to −3.1) and the posterior is not a funnel. Centred NUTS breaks at 380 m (252 divergences).
+  - **BaM centred:** right location for log τ, sd 0.53–0.68× NUTS, which is the funnel verdict by the rule.
+  - **BaM non-centred:** sd about 0.1× NUTS even when started at the answer, and unstable in CV.
+  - **Laplace:** wrong location for log τ (non-centred joint mode).
+  - **Scores:** the centred-BaM hierarchy meets the "sharpens" rule in the Bay of Bengal 50–300 m. Mean sd 0.746 vs 0.823 (global) and 0.834 (constant), 95% coverage 0.95, CRPS skill 3.7% vs 3.0%; the paired difference CI is −0.0045 to −0.00005 °C, just excluding 0.
+  - **Email question:** parameterisation sensitivity of BaM in hierarchical models (non-centring made it worse here).
+  - **Cross-check at 380 m (same day):** the official GSM-VI BaM shows the same non-centred collapse (sd of log τ 0.06–0.25× NUTS, from three starts). The score-based divergence is about 100× lower at the collapsed solutions (2.6–7.3) than at the NUTS-matched Gaussian (491). So the cause is the objective, not the optimiser.

@@ -390,7 +390,9 @@ def _cover(pit: np.ndarray, p: float) -> float:
     return float(np.mean(np.abs(pit - 0.5) <= p / 2)) if pit.size else float("nan")
 
 
-def coverage_table(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
+def coverage_table(
+    df: pd.DataFrame, seed: int = SEED, methods: tuple[str, ...] = METHODS
+) -> pd.DataFrame:
     """Coverage at 68% and 95%, mean CRPS and Gaussian NLL, sharpness (mean sd), the share of
     blown-up error bars (sd > 5x the constant one) and RMSE. Float-bootstrap 95% intervals for
     coverage and for the CRPS skill against the constant bar,
@@ -405,7 +407,7 @@ def coverage_table(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
         draws = [np.concatenate([idx[f] for f in rng.choice(uniq, uniq.size)])
                  for _ in range(BOOTSTRAP_DRAWS)] if uniq.size else []  # fmt: skip
         obs = g["temp_obs_c"].to_numpy(float)
-        for method in METHODS:
+        for method in methods:
             pit = g[f"{method}_pit"].to_numpy(float)
             row: dict[str, Any] = {"group": name, "method": method, "n_obs": len(g),
                                    "n_floats": uniq.size}  # fmt: skip
@@ -433,13 +435,13 @@ def coverage_table(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def reliability_table(df: pd.DataFrame) -> pd.DataFrame:
+def reliability_table(df: pd.DataFrame, methods: tuple[str, ...] = METHODS) -> pd.DataFrame:
     """Observed vs nominal coverage of central intervals, for the calibration plot."""
     rows = []
     for name, sel in _groups(df).items():
         if name not in ("all", "Bay of Bengal 50-300 m", *BANDS) or not sel.any():
             continue
-        for method in METHODS:
+        for method in methods:
             pit = df.loc[sel, f"{method}_pit"].to_numpy(float)
             for p in NOMINAL:
                 rows.append({"group": name, "method": method, "nominal": p,
