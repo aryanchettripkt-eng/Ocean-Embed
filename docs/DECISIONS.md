@@ -41,7 +41,7 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 ## 2026-10-24 — Phase 2 hosting (Render), RAM limits, and tokenless basemap
 - **Backend hosting**: Hugging Face Spaces now requires a paid Pro subscription to run Docker or Python spaces. Per PRD_BACKEND §8, backend is deployed to Render (Docker Web Service, free tier).
 - **Resource limit note for P6**: Render's free tier provides 512 MB of RAM. For the P2 synthetic dataset, memory consumption is ~150 MB and fits comfortably. For the real multi-year full-resolution predictions in P6, memory pressure may occur; a bigger plan (e.g. Starter 2 GB RAM) or another host may be required when real outputs are published.
-- **CORS configuration**: `CORS_ORIGINS` in `render.yaml` set to `https://ocean-embed.vercel.app,http://localhost:3000` with regex matching for Vercel preview domains in backend middleware.
+- **CORS configuration**: `CORS_ORIGINS` in `render.yaml` set to `https://ocean-embed-xi.vercel.app,http://localhost:3000` with regex matching for Vercel preview domains in backend middleware.
 - **Basemap**: Replaced CARTO basemap (which burns "API KEY REQUIRED" watermarks on public non-localhost origins) with OpenFreeMap (tokenless, open-source Positron and Dark Matter vector styles with no API key or watermarks).
 - **Synthetic banner**: Embedded `<Banner type="synthetic" />` directly inside the sticky `<Header />` component to ensure it cannot be scrolled out of view and remains visible on every page.
 - Approved by Aryan.
