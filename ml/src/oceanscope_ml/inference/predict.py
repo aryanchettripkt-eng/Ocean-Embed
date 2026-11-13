@@ -21,6 +21,7 @@ import argparse
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -141,8 +142,13 @@ def predict_store(
     day_stride: int | None = None,
     argo_paths: list[Path] | None = None,
     holdout: set[str] | None = None,
+    feature_sink: Callable[[pd.DatetimeIndex, np.ndarray], None] | None = None,
 ) -> Path:
     """Run the model on every validation day (or on ``split``) and write the prediction store.
+
+    ``feature_sink(dates, features)``, if given, receives each batch's input to the U-Net's
+    1x1 head (``(days, channels, lat, lon)``, float32, cropped like the prediction). It feeds the
+    Bayesian last layer of ``evaluation.uncertainty``; the store written is unchanged.
 
     ``split="train"`` writes every ``day_stride``-th training day (default
     ``TRAIN_SAMPLE_STRIDE_DAYS``) to a ``_train`` store. The test split is read only when
@@ -264,6 +270,12 @@ def predict_store(
 
     clim = np.asarray(ds["clim"].values, dtype=np.float32)  # (366, depth, lat, lon)
     batch_size = int(config.train.get("batch_size", 8))
+    captured: list[torch.Tensor] = []
+    if feature_sink is not None:
+        heads = [m for n, m in model.named_modules() if n.split(".")[-1] == "head"]
+        if len(heads) != 1:
+            raise ValueError(f"Expected one 'head' module for the feature sink, found {len(heads)}")
+        heads[0].register_forward_pre_hook(lambda _m, args: captured.append(args[0].detach()))
     logger.info("Predicting %d %s days with %s into %s", len(dates), split, checkpoint, dest)
     with torch.no_grad():
         for b0 in range(0, len(dates), WRITE_BLOCK_DAYS):
@@ -275,10 +287,16 @@ def predict_store(
                 num_workers=int(config.train.get("num_workers", 2)),
             )
             preds: list[np.ndarray] = []
+            done = b0
             for batch in loader:
                 x = batch["x"].to(device)
+                captured.clear()
                 pred = _crop_to_target(model(x).float(), batch["y"])
                 preds.append(pred.cpu().numpy())
+                if feature_sink is not None:
+                    feats = _crop_to_target(captured[-1].float(), batch["y"]).cpu().numpy()
+                    feature_sink(dates[done : done + len(feats)], feats)
+                done += len(pred)
             anomaly = np.concatenate(preds)  # (days, depth, lat, lon), normalized
             doy = dates[b0:b1].day_of_year.values - 1
             temp_pred = anomaly * sigma[None] + clim[doy]
