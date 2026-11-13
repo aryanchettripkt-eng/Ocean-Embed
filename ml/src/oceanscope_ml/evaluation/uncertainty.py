@@ -19,9 +19,10 @@ the 32 features ``x`` that feed the U-Net's 1x1 head (standardized, plus a const
 ``s_d`` is the RMS error at that level on the fitting floats. ``beta`` is a small mean
 correction in the head's own feature space and ``gamma`` sets an input-dependent error size. The
 posterior over the 66 parameters per level is not Gaussian; it is fitted with Batch-and-Match
-(Cai, Modi et al., ICML 2024; ``bam_fit``), a score-based VI method. Each observation's weight in
-the likelihood is 1 / (rows of its profile at that level), so a profile counts once per level
-however finely the float samples it. Floats are still correlated in time, so the parameter
+(Cai, Modi et al., ICML 2024; ``bam_fit``), a score-based VI method, started from the Laplace
+approximation at the MAP. The features are whitened first (they are strongly correlated), and
+the fit uses one observation per profile and level (``thin``), so a profile counts once per
+level however finely the float samples it. Floats are still correlated in time, so the parameter
 posterior is somewhat too narrow; the noise term dominates the error bars anyway.
 
 Error bars compared (``METHODS``):
@@ -164,8 +165,19 @@ def head_score(x: np.ndarray, r: np.ndarray, w: np.ndarray) -> Any:
     return score
 
 
-def _design(feats: np.ndarray, mean: np.ndarray, sd: np.ndarray) -> np.ndarray:
-    return np.column_stack([(feats - mean) / sd, np.ones(len(feats))])
+def _design(feats: np.ndarray, fit: dict[str, Any]) -> np.ndarray:
+    """Standardized, then whitened (PCA) features, plus a constant column."""
+    z = (feats - fit["mean"]) / fit["sd"] @ fit["proj"]
+    return np.column_stack([z, np.ones(len(feats))])
+
+
+def _whitening(feats: np.ndarray) -> dict[str, Any]:
+    """The head features are strongly correlated (and some nearly constant), which makes the
+    posterior badly conditioned; whitening them is what lets BaM converge on the real data."""
+    mean, sd = feats.mean(0), feats.std(0) + 1e-6
+    w, v = np.linalg.eigh(np.cov(((feats - mean) / sd).T))
+    keep = w > 1e-6 * w.max()
+    return {"mean": mean, "sd": sd, "proj": v[:, keep] / np.sqrt(w[keep])}
 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
@@ -181,48 +193,67 @@ def row_weights(df: pd.DataFrame) -> np.ndarray:
     return 1.0 / n
 
 
-def fit_heads(df: pd.DataFrame, *, niter: int = 300, seed: int = SEED) -> dict[str, Any]:
-    """Per level: feature standardization, s_d, and the BaM posterior (mu, cov)."""
-    cols = feature_columns(df)
-    feats = df[cols].to_numpy(float)
-    mean, sd = feats.mean(0), feats.std(0) + 1e-6
-    fits: dict[float, dict[str, Any]] = {}
-    for depth, g in df.groupby("depth_m"):
-        err = (g["temp_obs_c"] - g["temp_pred_c"]).to_numpy(float)
-        w = row_weights(g)
-        s_d = float(np.sqrt(np.sum(w * err**2) / np.sum(w)))
-        x = _design(g[cols].to_numpy(float), mean, sd)
-        d = 2 * x.shape[1]
-        mu, cov = bam_fit(head_score(x, err / s_d, w), np.zeros(d), 0.01 * np.eye(d),
-                          niter=niter, seed=seed)  # fmt: skip
-        gap = _map_gap(x, err / s_d, w, mu)
-        fits[float(depth)] = {"s": s_d, "mu": mu, "cov": cov, "n_profiles": float(np.sum(w)),
-                              "map_gap_sd": gap}  # fmt: skip
-        logger.info("Level %.1f m: %d rows, %.0f profile-levels, s = %.3f °C, log-sd intercept "
-                    "%.2f, BaM mean vs MAP: max %.2f posterior sd", depth, len(g), np.sum(w), s_d,
-                    mu[d - 1], gap)  # fmt: skip
-    return {"columns": cols, "mean": mean, "sd": sd, "levels": fits}
+def thin(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
+    """One observation per profile and level (picked at random, fixed seed), so a profile counts
+    once per level however finely the float samples it, and the fit stays fast."""
+    shuffled = df.sample(frac=1.0, random_state=seed)
+    return shuffled.drop_duplicates([*KEY, "depth_m"]).sort_index()
 
 
-def _map_gap(x: np.ndarray, r: np.ndarray, w: np.ndarray, mu: np.ndarray) -> float:
-    """Convergence check: max |BaM mean - MAP| in units of the Laplace posterior sd."""
+def _neg_log_post(x: np.ndarray, r: np.ndarray) -> Any:
+    p = x.shape[1]
+
+    def f(theta: np.ndarray) -> float:
+        log_sd = np.clip(x @ theta[p:], -LOG_SD_CLIP, LOG_SD_CLIP)
+        ll = np.sum(-log_sd - 0.5 * ((r - x @ theta[:p]) * np.exp(-log_sd)) ** 2)
+        return float(-(ll - 0.5 * np.sum(theta**2) / PRIOR_SD**2))
+
+    return f
+
+
+def laplace(x: np.ndarray, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """MAP and the inverse Fisher information there (beta and gamma blocks are uncorrelated
+    in expectation). BaM starts from this and corrects it towards the non-Gaussian posterior."""
     from scipy.optimize import minimize
 
     p = x.shape[1]
-    score = head_score(x, r, w)
+    score = head_score(x, r, np.ones(len(r)))
+    theta0 = np.zeros(2 * p)
+    res = minimize(_neg_log_post(x, r), theta0, jac=lambda th: -score(th[None])[0],
+                   method="L-BFGS-B", options={"maxiter": 2000})  # fmt: skip
+    inv_var = np.exp(-2 * np.clip(x @ res.x[p:], -LOG_SD_CLIP, LOG_SD_CLIP))
+    info_b = (x * inv_var[:, None]).T @ x + np.eye(p) / PRIOR_SD**2
+    info_g = 2 * x.T @ x + np.eye(p) / PRIOR_SD**2
+    cov = np.zeros((2 * p, 2 * p))
+    cov[:p, :p], cov[p:, p:] = np.linalg.inv(info_b), np.linalg.inv(info_g)
+    return res.x, (cov + cov.T) / 2
 
-    def neg_log_post(theta: np.ndarray) -> float:
-        log_sd = np.clip(x @ theta[p:], -LOG_SD_CLIP, LOG_SD_CLIP)
-        ll = np.sum(w * (-log_sd - 0.5 * ((r - x @ theta[:p]) * np.exp(-log_sd)) ** 2))
-        return float(-(ll - 0.5 * np.sum(theta**2) / PRIOR_SD**2))
 
-    res = minimize(neg_log_post, mu, jac=lambda th: -score(th[None])[0], method="L-BFGS-B")
-    # Laplace sd from the Fisher information at the MAP (diagonal blocks)
-    log_sd = x @ res.x[p:]
-    info_b = (x * (w * np.exp(-2 * log_sd))[:, None]).T @ x + np.eye(p) / PRIOR_SD**2
-    info_g = 2 * (x * w[:, None]).T @ x + np.eye(p) / PRIOR_SD**2
-    sd = np.sqrt(np.concatenate([np.diag(np.linalg.inv(info_b)), np.diag(np.linalg.inv(info_g))]))
-    return float(np.max(np.abs(mu - res.x) / sd))
+def fit_heads(df: pd.DataFrame, *, niter: int = 100, seed: int = SEED) -> dict[str, Any]:
+    """Per level: whitening, s_d, the Laplace start and the BaM posterior (mu, cov)."""
+    df = thin(df, seed)
+    cols = feature_columns(df)
+    fit: dict[str, Any] = {"columns": cols, **_whitening(df[cols].to_numpy(float))}
+    levels: dict[float, dict[str, Any]] = {}
+    for depth, g in df.groupby("depth_m"):
+        err = (g["temp_obs_c"] - g["temp_pred_c"]).to_numpy(float)
+        s_d = float(np.sqrt(np.mean(err**2)))
+        x = _design(g[cols].to_numpy(float), fit)
+        r = err / s_d
+        p = x.shape[1]
+        theta_map, cov0 = laplace(x, r)
+        mu, cov = bam_fit(head_score(x, r, np.ones(len(r))), theta_map, cov0, niter=niter,
+                          reg0=10.0, seed=seed)  # fmt: skip
+        gap = float(np.max(np.abs(mu - theta_map) / np.sqrt(np.diag(cov0))))
+        sd_ratio = np.sqrt(np.diag(cov) / np.diag(cov0))
+        levels[float(depth)] = {"s": s_d, "mu": mu, "cov": cov, "n_profiles": len(g),
+                                "map_gap_sd": gap}  # fmt: skip
+        logger.info("Level %.1f m: %d profile-levels, s = %.3f °C, log-sd intercept %.2f, "
+                    "BaM mean vs MAP: max %.2f Laplace sd, BaM sd / Laplace sd %.2f-%.2f",
+                    depth, len(g), s_d, mu[2 * p - 1], gap, sd_ratio.min(),
+                    sd_ratio.max())  # fmt: skip
+    fit["levels"] = levels
+    return fit
 
 
 def predictive(df: pd.DataFrame, fit: dict[str, Any], seed: int = SEED) -> pd.DataFrame:
@@ -235,7 +266,7 @@ def predictive(df: pd.DataFrame, fit: dict[str, Any], seed: int = SEED) -> pd.Da
             continue
         obs, pred = g["temp_obs_c"].to_numpy(float), g["temp_pred_c"].to_numpy(float)
         s_d, mu, cov = lev["s"], lev["mu"], lev["cov"]
-        x = _design(g[fit["columns"]].to_numpy(float), fit["mean"], fit["sd"])
+        x = _design(g[fit["columns"]].to_numpy(float), fit)
         p = x.shape[1]
         res = pd.DataFrame(index=g.index)
         res["const_mean"], res["const_sd"] = pred, s_d
@@ -346,7 +377,7 @@ def plot_reliability(table: pd.DataFrame, path: Path, title: str) -> Path | None
 
 
 def analyse(
-    fit_df: pd.DataFrame, check: dict[str, pd.DataFrame], out_dir: Path, *, niter: int = 300
+    fit_df: pd.DataFrame, check: dict[str, pd.DataFrame], out_dir: Path, *, niter: int = 100
 ) -> dict[str, pd.DataFrame]:
     """Fit on ``fit_df``; score each ``check`` table. Also the dev -> final half check."""
     metrics = out_dir / "metrics"
@@ -473,7 +504,7 @@ def build_cli() -> argparse.ArgumentParser:
     a.add_argument("--fit", required=True, help="uncert_val.parquet (validation years)")
     a.add_argument("--check", default=None, help="uncert_test.parquet (2021, second look)")
     a.add_argument("--out-dir", default="outputs")
-    a.add_argument("--niter", type=int, default=300)
+    a.add_argument("--niter", type=int, default=100)
     return parser
 
 
