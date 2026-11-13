@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +15,11 @@ import jsonschema
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Remembers the blob id of every file fetched, so unchanged files are not fetched again.
+_INDEX_FILE = ".hf-sync-index.json"
+# Parallel downloads. Each holds a small buffer; few workers keep memory and the HF rate low.
+_DOWNLOAD_WORKERS = 4
 
 
 class DataLoader:
@@ -23,119 +31,169 @@ class DataLoader:
         self._load_error: str | None = "Data store is still loading"
         self._current_hf_revision: str | None = None
         self._current_hf_commit_sha: str | None = None
+        self._sync_error: str | None = None
         if autoload:
             self.load()
 
     def _get_schema_path(self) -> Path:
         return Path(__file__).resolve().parent.parent / "schemas" / "manifest.schema.json"
 
-    def _allow_patterns(self, hf_token: str | None) -> list[str] | None:
-        """Paths the remote manifest points at, so only the active run is downloaded.
-
-        The dataset holds every run's prediction store (thousands of zarr chunk files), and
-        the server reads only the files the manifest names. None means download everything.
-        """
-        try:
-            from huggingface_hub import hf_hub_download
-
-            path = hf_hub_download(
-                repo_id=settings.HF_DATASET_REPO or "",
-                repo_type="dataset",
-                filename="manifest.json",
-                revision=settings.HF_DATASET_REVISION,
-                token=hf_token,
-            )
-            with open(path, encoding="utf-8") as f:
-                files = json.load(f).get("files", {})
-        except Exception as e:
-            logger.warning("Could not read the remote manifest, downloading everything: %s", e)
-            return None
-        patterns = ["manifest.json"]
-        for value in files.values():
+    @staticmethod
+    def _manifest_paths(manifest: dict[str, Any]) -> list[str]:
+        """Repo paths (files or folders) that a manifest's `files` block points at."""
+        paths: list[str] = []
+        for value in manifest.get("files", {}).values():
             for rel in value if isinstance(value, list) else [value]:
-                if isinstance(rel, str) and rel:
-                    rel = rel.strip("/")
-                    patterns += [rel, f"{rel}/**"]
-        return patterns
+                if isinstance(rel, str) and rel.strip("/"):
+                    paths.append(rel.strip("/"))
+        return paths
 
-    def _maybe_download_from_hf(self) -> None:
-        """Download dataset from HF if absent, revision changed, or commit updated."""
+    def _read_index(self) -> dict[str, str]:
+        try:
+            with open(self.data_dir / _INDEX_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _write_index(self, index: dict[str, str]) -> None:
+        tmp = self.data_dir / f"{_INDEX_FILE}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(index, f)
+        os.replace(tmp, self.data_dir / _INDEX_FILE)
+
+    def _sync_from_hf(self) -> None:
+        """Bring the active run from the HF dataset to DATA_DIR, manifest last.
+
+        Only the files the remote manifest names are listed and fetched (the dataset holds
+        every run ever published, and listing all of it took a lot of memory). Files whose
+        blob id matches the last sync are skipped, so a new live day fetches a few chunks.
+        manifest.json is replaced only after every file arrived, so a failed or partial
+        download never points the server at a half-copied run; the next reload retries.
+        A remote manifest that can't be read means "try again later", never "download all".
+        """
+        self._sync_error = None
         if not settings.HF_DATASET_REPO:
             return
+        from huggingface_hub import HfApi, hf_hub_download
 
-        manifest_file = self.data_dir / "manifest.json"
-        needs_download = not manifest_file.exists()
-
-        if (
-            settings.HF_DATASET_REVISION
-            and self._current_hf_revision != settings.HF_DATASET_REVISION
-        ):
-            needs_download = True
-
-        remote_sha: str | None = None
-        hf_token = (
+        repo = settings.HF_DATASET_REPO
+        revision = settings.HF_DATASET_REVISION or "main"
+        token = (
             settings.HF_TOKEN.strip() if (settings.HF_TOKEN and settings.HF_TOKEN.strip()) else None
         )
-        if not needs_download:
-            try:
-                from huggingface_hub import HfApi
+        manifest_file = self.data_dir / "manifest.json"
+        api = HfApi(token=token)
 
-                api = HfApi(token=hf_token)
-                info = api.dataset_info(
-                    repo_id=settings.HF_DATASET_REPO,
-                    revision=settings.HF_DATASET_REVISION or "main",
-                )
-                remote_sha = getattr(info, "sha", None)
-                if remote_sha and self._current_hf_commit_sha != remote_sha:
-                    logger.info(
-                        "New HF commit detected: %s (was %s)",
-                        remote_sha,
-                        self._current_hf_commit_sha,
-                    )
-                    needs_download = True
-            except Exception as e:
-                logger.debug("Could not check remote HF commit sha: %s", e)
+        try:
+            remote_sha = api.dataset_info(repo_id=repo, revision=revision).sha
+        except Exception as e:
+            logger.warning("Could not check the HF dataset, keeping local data: %s", e)
+            if not manifest_file.exists():
+                self._sync_error = f"Could not reach the HF dataset: {e}"
+            return
+        if (
+            manifest_file.exists()
+            and remote_sha
+            and remote_sha == self._current_hf_commit_sha
+            and self._current_hf_revision == revision
+        ):
+            return
 
-        if needs_download:
-            try:
-                from huggingface_hub import snapshot_download
+        try:
+            remote_manifest_path = hf_hub_download(
+                repo_id=repo,
+                repo_type="dataset",
+                filename="manifest.json",
+                revision=remote_sha or revision,
+                token=token,
+            )
+            with open(remote_manifest_path, encoding="utf-8") as f:
+                remote_manifest = json.load(f)
 
-                logger.info(
-                    "Downloading dataset from HF: %s (revision: %s) to %s",
-                    settings.HF_DATASET_REPO,
-                    settings.HF_DATASET_REVISION,
-                    self.data_dir,
-                )
-                allow_patterns = self._allow_patterns(hf_token)
-                snapshot_download(
-                    repo_id=settings.HF_DATASET_REPO,
+            wanted: dict[str, str] = {}
+            paths = self._manifest_paths(remote_manifest)
+            infos = api.get_paths_info(
+                repo_id=repo, paths=paths, repo_type="dataset", revision=remote_sha or revision
+            )
+            for info in infos:
+                blob = getattr(info, "blob_id", None)
+                if blob is not None:
+                    wanted[info.path] = str(blob)
+                    continue
+                for entry in api.list_repo_tree(
+                    repo_id=repo,
+                    path_in_repo=info.path,
+                    recursive=True,
                     repo_type="dataset",
-                    revision=settings.HF_DATASET_REVISION,
+                    revision=remote_sha or revision,
+                ):
+                    entry_blob = getattr(entry, "blob_id", None)
+                    if entry_blob is not None:
+                        wanted[entry.path] = str(entry_blob)
+
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            index = self._read_index()
+            todo = [
+                path
+                for path, blob in wanted.items()
+                if index.get(path) != blob or not (self.data_dir / path).exists()
+            ]
+            logger.info(
+                "Syncing HF dataset %s at %s: %d files in the run, %d to fetch",
+                repo,
+                remote_sha,
+                len(wanted),
+                len(todo),
+            )
+
+            def fetch(path: str) -> str:
+                hf_hub_download(
+                    repo_id=repo,
+                    repo_type="dataset",
+                    filename=path,
+                    revision=remote_sha or revision,
                     local_dir=str(self.data_dir),
-                    token=hf_token,
-                    allow_patterns=allow_patterns,
-                    max_workers=16,
+                    token=token,
                 )
-                self._current_hf_revision = settings.HF_DATASET_REVISION
-                if remote_sha:
-                    self._current_hf_commit_sha = remote_sha
-            except Exception as e:
-                logger.error("Failed to download dataset from HF: %s", e)
-                self._load_error = f"Failed to download dataset from HF: {e}"
+                return path
+
+            failed: Exception | None = None
+            with ThreadPoolExecutor(max_workers=_DOWNLOAD_WORKERS) as pool:
+                for future in as_completed([pool.submit(fetch, p) for p in todo]):
+                    try:
+                        done = future.result()
+                    except Exception as e:  # keep the files that did arrive for the retry
+                        failed = failed or e
+                        continue
+                    index[done] = wanted[done]
+            self._write_index(index)
+            if failed is not None:
+                raise failed
+
+            tmp = self.data_dir / "manifest.json.tmp"
+            shutil.copyfile(remote_manifest_path, tmp)
+            os.replace(tmp, manifest_file)
+            self._current_hf_revision = revision
+            self._current_hf_commit_sha = remote_sha
+        except Exception as e:
+            logger.error("Failed to sync the dataset from HF, keeping local data: %s", e)
+            if not manifest_file.exists():
+                self._sync_error = f"Failed to download dataset from HF: {e}"
 
     def load(self, data_dir: str | Path | None = None) -> None:
         """Attempt to load and validate manifest.json."""
         if data_dir is not None:
             self.data_dir = Path(data_dir)
 
-        self._maybe_download_from_hf()
+        self._sync_from_hf()
 
         manifest_file = self.data_dir / "manifest.json"
         if not manifest_file.exists():
             if self.manifest is not None:
                 logger.error("Manifest disappeared on reload, keeping current valid manifest")
             else:
-                self._load_error = f"Manifest not found in {self.data_dir}"
+                self._load_error = self._sync_error or f"Manifest not found in {self.data_dir}"
                 self.manifest = None
             return
 
@@ -153,6 +211,12 @@ class DataLoader:
                 format_checker=jsonschema.Draft7Validator.FORMAT_CHECKER,
             )
             old_manifest = self.manifest
+            if old_manifest is not None and raw_manifest == old_manifest:
+                # Nothing published changed (or a sync stopped part-way): keep the open store
+                # and its caches, so an hourly check costs nothing and never shows a half-synced
+                # store. A live day always changes the manifest (its available end date).
+                self._load_error = None
+                return
             self.manifest = raw_manifest
             self._load_error = None
 

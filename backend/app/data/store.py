@@ -11,10 +11,13 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import date as dt_date
+from pathlib import Path
 from typing import Any, Literal, ParamSpec, TypeVar
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import xarray as xr
 import zarr
 
@@ -115,6 +118,8 @@ class _ReadGate:
 
 
 _read_gate = _ReadGate(settings.DATA_READ_CONCURRENCY)
+# Guards the one-time load of the ARGO matches summary (OutputStore._argo_profile_table).
+_argo_matches_lock = threading.Lock()
 
 
 _P = ParamSpec("_P")
@@ -1067,16 +1072,13 @@ class OutputStore:
                 profiles=[],
             )
 
-        if self._cached_argo_matches is not None:
-            df = self._cached_argo_matches
-        else:
-            df = pd.read_parquet(parquet_path)
-            self._cached_argo_matches = df
+        if date is not None:
+            validate_date(date)
+        df = self._argo_profile_table(parquet_path)
 
         filtered = df
         if date is not None:
-            validate_date(date)
-            filtered = filtered[filtered["time"].astype(str).str.startswith(date)]
+            filtered = filtered[filtered["time_str"].str.startswith(date)]
         if lat_min is not None:
             filtered = filtered[filtered["lat"] >= lat_min]
         if lat_max is not None:
@@ -1093,18 +1095,13 @@ class OutputStore:
                 profiles=[],
             )
 
-        grouped = (
-            filtered.groupby(["platform_number", "cycle", "time", "lat", "lon"], as_index=False)
-            .size()
-            .rename(columns={"size": "n_obs"})
-        )
-        grouped = grouped.iloc[:500]
+        grouped = filtered.iloc[:500]
 
         profiles = [
             ArgoProfileMatch(
                 platform_number=str(r["platform_number"]),
                 cycle=int(r["cycle"]),
-                time=str(r["time"]),
+                time=str(r["time_str"]),
                 lat=round(float(r["lat"]), 4),
                 lon=round(float(r["lon"]), 4),
                 n_obs=int(r["n_obs"]),
@@ -1117,6 +1114,39 @@ class OutputStore:
             synthetic=manifest["synthetic"],
             profiles=profiles,
         )
+
+    def _argo_profile_table(self, parquet_path: Path) -> pd.DataFrame:
+        """One row per matched profile (platform, cycle, time, lat, lon, n_obs), cached.
+
+        The matches file has one row per observation level: about a million rows for the
+        held-out floats of three validation years. Keeping it whole, and converting its time
+        column to text on every request, took hundreds of MB per request and pushed the
+        service past Render's 512 MB. Only the per-profile summary is kept, and the time text
+        is made once, on the profiles. A lock stops parallel first requests reading it twice.
+        """
+        cached = self._cached_argo_matches
+        if cached is not None:
+            return cached
+        with _argo_matches_lock:
+            if self._cached_argo_matches is not None:
+                return self._cached_argo_matches
+            keys = ["platform_number", "cycle", "time", "lat", "lon"]
+            # Count the levels per profile in Arrow, so the million rows never become
+            # Python objects; only the few thousand profiles reach pandas.
+            counts = (
+                pq.read_table(parquet_path, columns=keys)
+                .group_by(keys)
+                .aggregate([([], "count_all")])
+                .rename_columns([*keys, "n_obs"])
+            )
+            table = counts.to_pandas()
+            del counts
+            pa.default_memory_pool().release_unused()
+            table = table.dropna(subset=keys).sort_values(keys, kind="stable", ignore_index=True)
+            table["time_str"] = table["time"].map(str)
+            table = table.drop(columns=["time"])
+            self._cached_argo_matches = table
+            return table
 
     def get_headline(self) -> HeadlineResponse:
         """Query headline success criterion table."""
