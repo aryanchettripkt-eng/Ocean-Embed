@@ -375,3 +375,20 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **Aryan's choice** (decision card "Switch the live site to main3_aix30a?": "Switch to main3_aix30a"), after the 2021 test and the live-vs-reprocessed check.
 - Steps: merge this branch into main (the daily live workflow runs from main); `scripts/kaggle_publish_single.py` scores main3_aix30a's validation store against all held-out floats of 2018–2020 (the fine-tune scored only the dev half), publishes it as the active run, and builds and uploads its live kit in the same notebook; then one live dry run by hand, then the daily schedule picks it up.
 - What visitors see changes: the active model, its validation metrics, and live maps about 7–8 days behind today (ARMOR3D NRT lag) instead of about 5.
+
+## 2026-11-13 — Error bars: a Bayesian last layer (Batch-and-Match), checked on 2018–2020 and 2021
+- **Aryan's request** (project thread, 2026-11-13): "Build a basic uncertainty version of OceanScope and check whether its error bars are honest on the 2021 Argo floats. Even a rough result is enough." This is the "ensemble + uncertainty" stretch goal (DECISIONS 2026-10-22, Round 4).
+- Method (`evaluation.uncertainty`): main3_aix30a stays frozen. Per depth level, its error at held-out ARGO observations gets a heteroscedastic Bayesian linear model on the 32 features that feed the U-Net's 1x1 head (mean correction and log error size, 66 parameters per level), fitted with Batch-and-Match VI (Cai, Modi et al., ICML 2024). Baselines: one constant error size per level, and the last layer at its posterior mean only. Coverage of the 68% and 95% intervals per depth band with float-bootstrap CIs, and reliability curves.
+- What is fitted on what: only held-out floats (never model inputs). Everything is fitted on 2018–2020. Inside those years: fit on the dev half of the floats, score the final half. Then fit on all 2018–2020 held-out floats and score 2021.
+- **The 2021 part is a second look at the sealed test year.** The mean prediction is the model scored once on 2021-11-10 and its 2021 headline does not change; nothing is fitted on 2021. Calibration numbers on 2021 are reported as a second look, never as an untouched result, and are not used to tune anything afterwards.
+- Kaggle: `scripts/kaggle_uncertainty.py` (one run, `OCEANSCOPE_OWNER_GO=1` for 2021). Nothing is published.
+- **Result (2026-11-13, notebook480bb00de4 + local refit with 8e882f5):** on the 2021 floats (second look) the per-level Bayesian last layer covers 0.71 / 0.94 overall (constant bar 0.83 / 0.98) and 0.74 / 0.96 in the Bay of Bengal 50–300 m (constant 0.79 / 0.97). Dev→final half check in 2018–2020: 0.71 / 0.93, but about 3.5% of rows get blown-up error bars (feature extrapolation); any fix is judged on that check only. Full posterior vs posterior-mean plug-in barely differ (parameter uncertainty is small at this data size). The last layer's mean correction (BoB 0.709 → 0.694 on 2021) is not a test result.
+- **Fix and final result (2026-11-13, Aryan's review before emailing):**
+  - **Settings, picked on the 2018–2020 dev→final float split only** (rule written before each round: [docs/uncertainty/SELECTION.md](uncertainty/SELECTION.md)): 8 whitened feature directions, features clipped to the fit range, predicted error size capped at 3× the constant bar, mean correction on.
+  - **New scores.** CRPS and Gaussian NLL are added next to coverage, with sharpness.
+  - **2021, scored once with those settings:**
+    - Coverage 0.74 / 0.95 (constant bar 0.83 / 0.98), mean sd 0.40 vs 0.49 °C.
+    - CRPS 5.7% (4.3–7.3) below the constant bar.
+    - Bay of Bengal 50–300 m: 0.79 / 0.97 for both methods, CRPS 4.2% (2.6–5.5) below the constant bar.
+  - **Blow-ups.** No observation now gets a bar above 5× the constant one. The cap binds on 3.0% of observations in the split and 0.04% in 2021.
+  - **Public page:** `docs/uncertainty/README.md`.
