@@ -1,0 +1,13 @@
+92 m NUTS -2.33±0.23 | Laplace start, 1000 it: -0.99±0.015 | Laplace start, reg0 100, 300 it: -0.70±0.003 | NUTS-mean start, 100 it: -2.21±0.027 | NUTS-mean start, 1000 it: -2.07±0.017
+186 m NUTS -3.09±0.27 | Laplace start, 1000 it: -1.47±0.023 | Laplace start, reg0 100, 300 it: -2.05±0.037 | NUTS-mean start, 100 it: -2.81±0.053 | NUTS-mean start, 1000 it: -2.61±0.065
+380 m NUTS -2.32±0.20 | Laplace start, 1000 it: -0.70±0.005 | Laplace start, reg0 100, 300 it: -0.70±0.000 | NUTS-mean start, 100 it: -2.22±0.031 | NUTS-mean start, 1000 it: -2.01±0.024
+
+[exited with code 0]
+
+Batch-size check at 92 m, 200 iterations, started at the NUTS mean (log tau -2.33, sd 0.23):
+centred 64 -2.61 0.162
+centred 256 -3.02 0.15
+centred 1024 -3.13 0.143
+non-centred 64 -2.16 0.023
+non-centred 256 -2.3 0.022
+non-centred 1024 -2.39 0.023

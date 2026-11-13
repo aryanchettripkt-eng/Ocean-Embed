@@ -163,3 +163,34 @@ def test_crps_closed_forms_agree() -> None:
     draws = m[:, None] + sd[:, None] * rng.standard_normal((50, 20000))
     mc = np.abs(draws - obs[:, None]).mean(1) - 0.5 * np.abs(draws[:, ::2] - draws[:, 1::2]).mean(1)
     np.testing.assert_allclose(one, mc, atol=0.03)
+
+
+@pytest.mark.parametrize("centred", [True, False])
+def test_hierarchical_score_matches_finite_differences(centred: bool) -> None:
+    from oceanscope_ml.evaluation import uncertainty_hier as uh
+
+    rng = np.random.default_rng(4)
+    n, p, n_reg = 60, 3, 3
+    x = np.column_stack([rng.standard_normal((n, p - 1)), np.ones(n)])
+    r, g = rng.standard_normal(n), rng.integers(0, n_reg, n)
+    log_post, score = uh.hier_log_post(x, r, g, n_reg, centred)
+    theta = 0.3 * rng.standard_normal((2, uh.n_params(p, n_reg)))
+    theta[:, -1] = [-1.0, -0.3]
+    eps = 1e-6
+    num = np.empty_like(theta)
+    for j in range(theta.shape[1]):
+        e = np.zeros(theta.shape[1])
+        e[j] = eps
+        num[:, j] = (log_post(theta + e) - log_post(theta - e)) / (2 * eps)
+    np.testing.assert_allclose(score(theta), num, rtol=1e-5, atol=1e-5)
+
+
+def test_folds_split_each_region_evenly() -> None:
+    from oceanscope_ml.evaluation import uncertainty_hier as uh
+
+    df = pd.DataFrame({"platform_number": [f"{k}" for k in range(15)],
+                       "lat": [15.0] * 10 + [2.0] * 5,
+                       "lon": [88.0] * 5 + [65.0] * 5 + [80.0] * 5})  # fmt: skip
+    folds = uh.float_folds(df)
+    for lo in (0, 5, 10):
+        assert sorted(folds[str(k)] for k in range(lo, lo + 5)) == [0, 1, 2, 3, 4]

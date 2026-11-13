@@ -71,6 +71,10 @@ Brackets are 95% bootstrap intervals over floats. Gaussian NLL (all depths) is 0
   So BaM's averaging over parameters matters almost only where inputs leave the fitted range, which is the thin-data case. On those extrapolating rows even BaM's NLL (4.0) is worse than the constant bar's (2.6).
 - **Where it matters most.** The parameter uncertainty would matter much more with fewer data, such as one region or season, or a handful of subjects.
 
+## Follow-up: a per-region error size (2018–2020 only)
+
+A hierarchical version gives each region its own error-size coefficients. It was tested with 5-fold float cross-validation inside 2018–2020 against a NUTS reference posterior. Fitted with centred BaM, it narrows the Bay of Bengal 50–300 m bars from 0.82 to 0.75 °C at 0.95 coverage, a small CRPS gain. BaM's spread for the group scale depends on the parameterisation: it is 0.5–0.7× NUTS centred and about 0.1× non-centred. The rule, results and files are in [HIERARCHY.md](HIERARCHY.md).
+
 ## Caveats
 - Observations from one float are correlated in time. The fit uses one observation per profile and depth, and the intervals resample whole floats.
 - The error bars are against Argo point measurements, so they include the gap between a point and a 0.25° cell.
