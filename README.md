@@ -2,7 +2,7 @@
 
 **See the ocean below the surface.** OceanScope AI reconstructs daily sea temperature at 15 depths, from the surface down to about 1,060 m, across the North Indian Ocean. It uses only what satellites and a few other sources can see from the surface, plus recent ARGO float profiles. You can explore the result as a 2D map or a 3D cutaway block, ask questions about it in plain language (typed or spoken), and even ask it out loud through a pair of Meta smart glasses.
 
-- **Live site:** https://ocean-embed.vercel.app
+- **Live site:** https://ocean-embed-xi.vercel.app/
 - **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
 - **Model run shown:** `main3_aix30a` since 10 November 2026: a U-Net that takes recent ARGO floats and the ARMOR3D product as extra inputs (see [Results](#results)). Before that the site showed `ens3`, then `main2_ft`.
@@ -112,7 +112,7 @@ The per-depth, per-season and per-region tables for the published run are in the
 
 ### Error bars: are they honest?
 
-A basic uncertainty version of `main3_aix30a` keeps the trained U-Net frozen and adds a Bayesian last layer for each depth. That layer predicts how large the error is at each point from the 32 features feeding the U-Net's output layer, and it is fitted with Batch-and-Match variational inference (Cai, Modi et al., ICML 2024). It was fitted on held-out ARGO floats in 2018–2020 and checked once on held-out floats in 2021. That was a second look at 2021, for error bars only; nothing was fitted on 2021.
+A basic uncertainty version of `main3_aix30a` keeps the trained U-Net frozen and adds a Bayesian last layer for each depth. That layer predicts how large the error is at each point from the 32 features feeding the U-Net's output layer, and it is fitted with Batch-and-Match variational inference (Cai, Modi et al., ICML 2024). It was fitted on held-out ARGO floats in 2018–2020, with its settings chosen there by a rule written down in advance, and confirmed on held-out floats in 2021. 2021 has now been viewed four times (the accuracy test and three error-bar runs), so these numbers are a confirmation rather than a clean test. Nothing was fitted on 2021.
 
 | 2021, held-out floats | 68% interval holds | 95% interval holds | mean error bar (sd) | CRPS vs a constant error bar |
 |---|---|---|---|---|
@@ -188,7 +188,7 @@ The browser and the Android app only ever talk to our backend. Every Meta model 
 
 ## Frontend (Next.js on Vercel)
 
-Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js and WebGL2, Recharts, TanStack Query and GSAP. It deploys to Vercel from `main` at https://ocean-embed.vercel.app. Contributor setup is in [`frontend/README.md`](frontend/README.md).
+Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js and WebGL2, Recharts, TanStack Query and GSAP. It deploys to Vercel from `main` at https://ocean-embed-xi.vercel.app/. Contributor setup is in [`frontend/README.md`](frontend/README.md).
 
 ### Pages
 

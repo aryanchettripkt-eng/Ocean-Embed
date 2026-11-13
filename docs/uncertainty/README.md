@@ -14,8 +14,13 @@ OceanScope AI is a U-Net that predicts daily ocean temperature at 15 depths (0�
 ## What was fitted on what
 - **Fitting.** Everything is fitted on **2018–2020**: 51 held-out floats, 3,848 profiles.
 - **Choosing settings.** The settings (feature directions, clipping, cap, mean correction) were picked on a split *inside* 2018–2020: fit on 26 floats, score the other 25. The rule was written down before each round ([SELECTION.md](SELECTION.md)).
-- **2021, scored once.** The chosen setting was then run once on **2021**: 23 floats, 752 profiles, 269,303 observations.
-- **About 2021.** The model's accuracy had already been tested on 2021 once, so this is a second look at that year, for error bars only. Nothing was fitted or tuned on 2021.
+- **2021 as a confirmation, not a clean test.** The final setting was run on **2021**: 23 floats, 752 profiles, 269,303 observations. 2021 has now been viewed four times:
+  1. the model's one-shot accuracy test;
+  2. a first error-bar run whose fit had not converged (its constant-bar coverage was seen);
+  3. the first converged version (68% / 95% coverage 0.71 / 0.94);
+  4. this final run.
+
+  The final settings were fixed on 2018–2020 by a rule written down before each selection round. Nothing was ever fitted on 2021. But those rounds came after looks 2 and 3, so read the 2021 numbers as a confirmation.
 - **Sample sizes are small.** There are 23 floats in 2021, and only 7 in the Bay of Bengal. The bootstrap intervals over floats below are correspondingly wide.
 
 ## 2021 results
@@ -40,7 +45,10 @@ Brackets are 95% bootstrap intervals over floats. Gaussian NLL (all depths) is 0
 **How to read it:**
 - **The constant bar is honest but blunt.** It never under-covers, but it is far too wide near the surface (its "68%" interval holds 95% of the time), because one size per depth ignores where errors are large.
 - **The last layer is sharper and still honest.** Its bars are 18% narrower on average, its 95% intervals hold 95% of the time, and its CRPS is lower in every band (the 300–1100 m interval just touches zero).
-- **The Bay of Bengal is still conservative.** At 50–300 m both methods cover more than nominal, so there the bars are somewhat too wide.
+- **The Bay of Bengal is still conservative.** At 50–300 m both methods cover more than nominal, so there the bars are somewhat too wide. The learned bars there are barely different from the constant ones (mean sd 0.77 vs 0.78 °C), so the CRPS gain is modest.
+  - **It isn't the fixes.** Clipping and the cap hit Bay of Bengal floats *less* than elsewhere: 1.2% of its 50–300 m observations on the 2018–2020 split, against 10.5% for other 50–300 m observations, and none in 2021.
+  - **It isn't the setting either.** In every one of the 27 settings tried on 2018–2020, the Bay of Bengal bars averaged 0.86–0.92 °C, against 0.89 for the constant bar.
+  - **What it is.** The layer, fitted on all regions at once (only 9 Bay of Bengal floats in 2018–2020), does not find features that separate easy from hard conditions there. Keeping bars sharp in a small, unusual region without letting them blow up is the open thin-data problem.
 
 ## What happens when inputs drift outside the fit
 - **What we saw.** In the first version, fitted on half the 2018–2020 floats, about 3.5% of the other half's observations got error bars more than 5× the constant one, mostly at 380–640 m.
@@ -54,7 +62,13 @@ Brackets are 95% bootstrap intervals over floats. Gaussian NLL (all depths) is 0
 
 ## What Batch-and-Match adds here
 - **Coverage and CRPS barely change.** The full BaM posterior and its mean alone give almost the same coverage and CRPS, because with 1,500–3,700 profiles per depth the parameter uncertainty is small next to the noise.
-- **NLL is where it shows.** On the 2018–2020 split, the full posterior's NLL is 0.73 against 2.16 for the posterior mean alone (0–50 m: 2.8 vs 16.8). Averaging over parameter uncertainty softens overconfident tails where the data are thin.
+- **NLL is where it shows, and the gain sits where features extrapolate.** On the 2018–2020 split, the full posterior's NLL is 0.73 against 2.16 for the posterior mean alone. The breakdown:
+  - **Where features are clipped or the bar is capped** (7.1% of observations): 4.0 vs 24.1.
+  - **Everywhere else:** 0.478 vs 0.484.
+  - **Medians:** 0.363 vs 0.361.
+  - **Concentration:** 99% of the difference comes from 0.1% of observations.
+
+  So BaM's averaging over parameters matters almost only where inputs leave the fitted range, which is the thin-data case. On those extrapolating rows even BaM's NLL (4.0) is worse than the constant bar's (2.6).
 - **Where it matters most.** The parameter uncertainty would matter much more with fewer data, such as one region or season, or a handful of subjects.
 
 ## Caveats

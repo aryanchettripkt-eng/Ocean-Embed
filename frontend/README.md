@@ -1,6 +1,6 @@
 # oceanscope-frontend
 
-Next.js 15 (App Router, React 19, TypeScript, Tailwind, MapLibre, TanStack Query) web app for OceanScope AI. Deployed to Vercel at https://ocean-embed.vercel.app from `main`.
+Next.js 15 (App Router, React 19, TypeScript, Tailwind, MapLibre, TanStack Query) web app for OceanScope AI. Deployed to Vercel at https://ocean-embed-xi.vercel.app/ from `main`.
 
 Before changing anything, read [`../AGENTS.md`](../AGENTS.md) (repo rules, which also bind coding agents) and [`../docs/PRD_FRONTEND.md`](../docs/PRD_FRONTEND.md) (what the frontend must do).
 
