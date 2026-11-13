@@ -171,3 +171,23 @@ Over all rows, the centred hierarchy is level with the global layer: CRPS skill 
 - **The email question** (from the plan's table, "Non-centring fixes BaM" turned around):
   > With informative data (τ well identified), BaM fitted in the non-centred parameterisation collapsed the posterior sd of log τ to about 0.1× the NUTS value, even when started at the NUTS answer. The centred version kept the right location but was 0.5–0.7× too narrow. Since the score-based divergence is not reparameterisation-invariant, is there a known rule for which parameterisation BaM should use in hierarchical models? Or is a curved (η, log τ) ridge where a richer family such as EigenVI is needed?
 - **Not done:** sea-surface salinity in Step 2. It needs one Kaggle collect that samples the SSS input channel at each profile.
+
+## Cross-check at 380 m: official GSM-VI code and the divergence (added 2026-11-13)
+Script: `ml/scripts/hier_gsmvi_check.py`. Log: `hierarchy/gsmvi_check_380.log`.
+
+The non-centred posterior was refitted with the official `gsmvi.bam.BaM`: the paper's `linear` schedule (reg0 = 10), batch 64, float64. A fresh NUTS run gives log τ −2.31 ± 0.198 with 0 divergences.
+
+| Start | 100 iterations | 1000 iterations |
+|---|---|---|
+| This repo's Laplace fit | −1.08 ± 0.017 | −1.18 ± 0.019 |
+| NUTS-matched Gaussian | −2.35 ± 0.051 | −2.35 ± 0.048 |
+| N(0, I) | −0.48 ± 0.012 | −0.50 ± 0.014 |
+
+The official code shows the same collapse as this repo's implementation: the sd of log τ is 0.06–0.25× the NUTS value. Started at the NUTS answer, it keeps the location and shrinks the spread. From the other starts it also settles in the wrong place. Official centred BaM from the Laplace start gives −2.33 ± 0.13 (0.66×), in line with this repo's centred result.
+
+**The score-based divergence** BaM minimises is D(q; p) = E_q ‖Cov(q)^½ (∇log q − ∇log p)‖². It was estimated by Monte Carlo with 20,000 draws in non-centred coordinates:
+- the collapsed BaM solutions score 2.6–7.3, which includes this repo's 100-iteration fit (7.3);
+- the NUTS-matched Gaussian scores 491;
+- Laplace scores 2.6 × 10¹⁷.
+
+The divergence is about 100× lower at the collapsed solutions than at the Gaussian with the NUTS mean and covariance. So the collapse comes from the objective, not from BaM failing to optimise it. The divergence is also nearly flat across collapsed solutions at quite different log τ (−1.1 and −2.35 both score about 3), which is why the end point depends on the start.

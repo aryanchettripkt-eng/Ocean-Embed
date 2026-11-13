@@ -1,0 +1,22 @@
+depth 380.2 m, n = 3632
+NUTS: log tau -2.31 ± 0.198, divergences 0
+official BaM non-centred, start laplace, 100 it: log tau -1.08 ± 0.017
+official BaM non-centred, start laplace, 1000 it: log tau -1.18 ± 0.019
+official BaM non-centred, start nuts, 100 it: log tau -2.35 ± 0.051
+official BaM non-centred, start nuts, 1000 it: log tau -2.35 ± 0.048
+official BaM non-centred, start standard, 100 it: log tau -0.48 ± 0.012
+official BaM non-centred, start standard, 1000 it: log tau -0.50 ± 0.014
+official BaM centred, start laplace, 100 it: log tau -2.34 ± 0.133
+official BaM centred, start laplace, 1000 it: log tau -2.33 ± 0.130
+
+Score-based divergence D(q; p) in the non-centred coordinates (lower = BaM prefers):
+  nuts_matched                 log tau  -2.31 ± 0.198   D = 491.2
+  mine_laplace                 log tau  -0.72 ± 0.655   D = 2.605e+17
+  mine_bam_nc_100              log tau  -0.74 ± 0.008   D = 7.344
+  gsmvi_nc_laplace_100         log tau  -1.08 ± 0.017   D = 2.799
+  gsmvi_nc_laplace_1000        log tau  -1.18 ± 0.019   D = 4.183
+  gsmvi_nc_nuts_100            log tau  -2.35 ± 0.051   D = 2.585
+  gsmvi_nc_nuts_1000           log tau  -2.35 ± 0.048   D = 3.615
+  gsmvi_nc_standard_100        log tau  -0.48 ± 0.012   D = 44.87
+  gsmvi_nc_standard_1000       log tau  -0.50 ± 0.014   D = 67.58
+

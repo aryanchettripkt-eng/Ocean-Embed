@@ -405,3 +405,4 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
   - **Laplace:** wrong location for log τ (non-centred joint mode).
   - **Scores:** the centred-BaM hierarchy meets the "sharpens" rule in the Bay of Bengal 50–300 m. Mean sd 0.746 vs 0.823 (global) and 0.834 (constant), 95% coverage 0.95, CRPS skill 3.7% vs 3.0%; the paired difference CI is −0.0045 to −0.00005 °C, just excluding 0.
   - **Email question:** parameterisation sensitivity of BaM in hierarchical models (non-centring made it worse here).
+  - **Cross-check at 380 m (same day):** the official GSM-VI BaM shows the same non-centred collapse (sd of log τ 0.06–0.25× NUTS, from three starts). The score-based divergence is about 100× lower at the collapsed solutions (2.6–7.3) than at the NUTS-matched Gaussian (491). So the cause is the objective, not the optimiser.
