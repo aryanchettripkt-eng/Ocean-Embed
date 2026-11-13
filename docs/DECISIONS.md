@@ -392,3 +392,8 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
     - Bay of Bengal 50–300 m: 0.79 / 0.97 for both methods, CRPS 4.2% (2.6–5.5) below the constant bar.
   - **Blow-ups.** No observation now gets a bar above 5× the constant one. The cap binds on 3.0% of observations in the split and 0.04% in 2021.
   - **Public page:** `docs/uncertainty/README.md`.
+- **Disclosure and checks (2026-11-13, Aryan's review):**
+  - **2021 views.** 2021 has been viewed four times: the one-shot accuracy test, the unconverged first error-bar run, the first converged version, and the final run. The 2021 error-bar numbers are therefore a confirmation, not a clean test.
+  - **NLL.** BaM's NLL gain over the posterior-mean plug-in is concentrated where features are clipped or the bar is capped: 4.0 vs 24.1 on those 7.1% of split rows, against 0.478 vs 0.484 everywhere else.
+  - **Bay of Bengal.** The near-constant bars there are not caused by clipping or the cap, which hit its 50–300 m rows less often (1.2% vs 10.5% elsewhere). Every setting tried gives the Bay of Bengal near-constant bars.
+  - **Permanent link.** Tag `uncertainty-v1`.

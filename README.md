@@ -112,7 +112,7 @@ The per-depth, per-season and per-region tables for the published run are in the
 
 ### Error bars: are they honest?
 
-A basic uncertainty version of `main3_aix30a` keeps the trained U-Net frozen and adds a Bayesian last layer for each depth. That layer predicts how large the error is at each point from the 32 features feeding the U-Net's output layer, and it is fitted with Batch-and-Match variational inference (Cai, Modi et al., ICML 2024). It was fitted on held-out ARGO floats in 2018–2020 and checked once on held-out floats in 2021. That was a second look at 2021, for error bars only; nothing was fitted on 2021.
+A basic uncertainty version of `main3_aix30a` keeps the trained U-Net frozen and adds a Bayesian last layer for each depth. That layer predicts how large the error is at each point from the 32 features feeding the U-Net's output layer, and it is fitted with Batch-and-Match variational inference (Cai, Modi et al., ICML 2024). It was fitted on held-out ARGO floats in 2018–2020, with its settings chosen there by a rule written down in advance, and confirmed on held-out floats in 2021. 2021 has now been viewed four times (the accuracy test and three error-bar runs), so these numbers are a confirmation rather than a clean test. Nothing was fitted on 2021.
 
 | 2021, held-out floats | 68% interval holds | 95% interval holds | mean error bar (sd) | CRPS vs a constant error bar |
 |---|---|---|---|---|
