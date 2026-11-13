@@ -139,3 +139,27 @@ def test_collect_and_analyse_end_to_end(
     tables = un.analyse(table, {"again": table}, tmp_path / "o", niter=20)
     assert set(tables) == {"val_halves", "again"}
     assert (tmp_path / "o" / "metrics" / "uncertainty_coverage_again.csv").exists()
+
+
+def test_sd_cap_and_scores() -> None:
+    fit = un.fit_heads(_synthetic(40, 1), niter=30, n_dirs=2, clip=True, sd_cap=1.5)
+    scored = un.predictive(_synthetic(40, 2), fit)
+    # the full posterior adds the spread of its mean draws on top of the capped noise
+    assert (scored["bll_bam_sd"] <= 1.6 * scored["const_sd"]).all()
+    assert (scored["bll_plugin_sd"] <= 1.5 * scored["const_sd"] * 1.001).all()
+    table = un.coverage_table(scored).set_index(["group", "method"])
+    assert table.loc[("all", "bll_bam"), "frac_blowup"] == 0.0
+    allrows = table.loc["all"]
+    assert np.isfinite(allrows["crps_c"]).all() and np.isfinite(allrows["nll"]).all()
+
+
+def test_crps_closed_forms_agree() -> None:
+    rng = np.random.default_rng(0)
+    obs = rng.standard_normal(50)
+    m, sd = rng.standard_normal(50), np.exp(rng.standard_normal(50) * 0.3)
+    one = un.gaussian_crps(obs, m, sd)
+    mix = un.mixture_crps(obs, np.repeat(m[:, None], 5, 1), np.repeat(sd[:, None], 5, 1))
+    np.testing.assert_allclose(mix, one, rtol=1e-10)
+    draws = m[:, None] + sd[:, None] * rng.standard_normal((50, 20000))
+    mc = np.abs(draws - obs[:, None]).mean(1) - 0.5 * np.abs(draws[:, ::2] - draws[:, 1::2]).mean(1)
+    np.testing.assert_allclose(one, mc, atol=0.03)

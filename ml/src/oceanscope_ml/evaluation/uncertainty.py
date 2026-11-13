@@ -56,7 +56,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.special import ndtr
+from scipy.special import logsumexp, ndtr
 
 from oceanscope_ml.config import ExperimentConfig, load_config
 from oceanscope_ml.data.parts import open_parts
@@ -80,6 +80,11 @@ BANDS = {"0-50 m": (0.0, 50.0), "50-300 m": (50.0, 300.0), "300-1100 m": (300.0,
 PRIOR_SD = 0.5
 LOG_SD_CLIP = 8.0
 POSTERIOR_DRAWS = 200
+CRPS_PAIR_DRAWS = 40  # posterior draws used for the E|X - X'| term of the mixture CRPS
+BLOWUP_FACTOR = 5.0  # an error bar more than 5x the constant one counts as a blow-up
+# Chosen on the 2018-2020 dev -> final float split only (DECISIONS 2026-11-13, error bars):
+# see project files uncertainty/selection/RULE.md.
+DEFAULT_FIT: dict[str, Any] = {"n_dirs": 8, "clip": True, "mean_correction": True, "sd_cap": 3.0}
 BOOTSTRAP_DRAWS = 200
 SEED = 13
 KEY = ["platform_number", "cycle"]
@@ -147,37 +152,53 @@ def bam_fit(
 # --- The last layer ----------------------------------------------------------------------------
 
 
-def head_score(x: np.ndarray, r: np.ndarray, w: np.ndarray) -> Any:
-    """Score of the per-level log posterior over theta = (beta, gamma), each of size x.shape[1].
+def head_score(x: np.ndarray, r: np.ndarray, w: np.ndarray, mean_correction: bool = True) -> Any:
+    """Score of the per-level log posterior over theta = (beta, gamma), each of size x.shape[1]
+    (theta = gamma alone without ``mean_correction``: the error bar is centred on the U-Net).
 
     x (N, P) features with a constant column, r (N,) scaled errors, w (N,) row weights.
     """
     p = x.shape[1]
+    pb = p if mean_correction else 0
 
     def score(theta: np.ndarray) -> np.ndarray:
-        beta, gamma = theta[:, :p], theta[:, p:]
-        resid = r[:, None] - x @ beta.T  # (N, B)
+        beta, gamma = theta[:, :pb], theta[:, pb:]
+        resid = r[:, None] - x[:, :pb] @ beta.T if pb else np.repeat(r[:, None], len(theta), 1)
         inv_var = np.exp(-2 * np.clip(x @ gamma.T, -LOG_SD_CLIP, LOG_SD_CLIP))
-        g_beta = (x * w[:, None]).T @ (resid * inv_var)  # (P, B)
         g_gamma = (x * w[:, None]).T @ (resid**2 * inv_var - 1)
-        return np.concatenate([g_beta.T, g_gamma.T], axis=1) - theta / PRIOR_SD**2
+        parts = [g_gamma.T]
+        if pb:
+            parts.insert(0, ((x * w[:, None]).T @ (resid * inv_var)).T)
+        return np.concatenate(parts, axis=1) - theta / PRIOR_SD**2
 
     return score
 
 
 def _design(feats: np.ndarray, fit: dict[str, Any]) -> np.ndarray:
-    """Standardized, then whitened (PCA) features, plus a constant column."""
+    """Standardized, then whitened (PCA) features, plus a constant column. With ``clip`` the
+    whitened features are held inside the range the fit saw, so an input unlike anything in
+    the fitting years cannot extrapolate the error bar."""
     z = (feats - fit["mean"]) / fit["sd"] @ fit["proj"]
+    if fit.get("clip"):
+        z = np.clip(z, fit["zmin"], fit["zmax"])
     return np.column_stack([z, np.ones(len(feats))])
 
 
-def _whitening(feats: np.ndarray) -> dict[str, Any]:
+def _whitening(feats: np.ndarray, n_dirs: int | None = None, clip: bool = False) -> dict[str, Any]:
     """The head features are strongly correlated (and some nearly constant), which makes the
-    posterior badly conditioned; whitening them is what lets BaM converge on the real data."""
+    posterior badly conditioned; whitening them is what lets BaM converge on the real data.
+    ``n_dirs`` keeps only the leading principal directions."""
     mean, sd = feats.mean(0), feats.std(0) + 1e-6
     w, v = np.linalg.eigh(np.cov(((feats - mean) / sd).T))
+    order = np.argsort(w)[::-1]
+    w, v = w[order], v[:, order]
     keep = w > 1e-6 * w.max()
-    return {"mean": mean, "sd": sd, "proj": v[:, keep] / np.sqrt(w[keep])}
+    if n_dirs is not None:
+        keep &= np.arange(w.size) < n_dirs
+    fit = {"mean": mean, "sd": sd, "proj": v[:, keep] / np.sqrt(w[keep]), "clip": clip}
+    z = (feats - mean) / sd @ fit["proj"]
+    fit["zmin"], fit["zmax"] = z.min(0), z.max(0)
+    return fit
 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
@@ -200,57 +221,78 @@ def thin(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     return shuffled.drop_duplicates([*KEY, "depth_m"]).sort_index()
 
 
-def _neg_log_post(x: np.ndarray, r: np.ndarray) -> Any:
-    p = x.shape[1]
-
+def _neg_log_post(x: np.ndarray, r: np.ndarray, pb: int) -> Any:
     def f(theta: np.ndarray) -> float:
-        log_sd = np.clip(x @ theta[p:], -LOG_SD_CLIP, LOG_SD_CLIP)
-        ll = np.sum(-log_sd - 0.5 * ((r - x @ theta[:p]) * np.exp(-log_sd)) ** 2)
+        log_sd = np.clip(x @ theta[pb:], -LOG_SD_CLIP, LOG_SD_CLIP)
+        m = x[:, :pb] @ theta[:pb] if pb else 0.0
+        ll = np.sum(-log_sd - 0.5 * ((r - m) * np.exp(-log_sd)) ** 2)
         return float(-(ll - 0.5 * np.sum(theta**2) / PRIOR_SD**2))
 
     return f
 
 
-def laplace(x: np.ndarray, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def laplace(
+    x: np.ndarray, r: np.ndarray, mean_correction: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
     """MAP and the inverse Fisher information there (beta and gamma blocks are uncorrelated
     in expectation). BaM starts from this and corrects it towards the non-Gaussian posterior."""
     from scipy.optimize import minimize
 
     p = x.shape[1]
-    score = head_score(x, r, np.ones(len(r)))
-    theta0 = np.zeros(2 * p)
-    res = minimize(_neg_log_post(x, r), theta0, jac=lambda th: -score(th[None])[0],
-                   method="L-BFGS-B", options={"maxiter": 2000})  # fmt: skip
-    inv_var = np.exp(-2 * np.clip(x @ res.x[p:], -LOG_SD_CLIP, LOG_SD_CLIP))
-    info_b = (x * inv_var[:, None]).T @ x + np.eye(p) / PRIOR_SD**2
-    info_g = 2 * x.T @ x + np.eye(p) / PRIOR_SD**2
-    cov = np.zeros((2 * p, 2 * p))
-    cov[:p, :p], cov[p:, p:] = np.linalg.inv(info_b), np.linalg.inv(info_g)
+    pb = p if mean_correction else 0
+    score = head_score(x, r, np.ones(len(r)), mean_correction)
+    res = minimize(_neg_log_post(x, r, pb), np.zeros(pb + p),
+                   jac=lambda th: -score(th[None])[0], method="L-BFGS-B",
+                   options={"maxiter": 2000})  # fmt: skip
+    cov = np.zeros((pb + p, pb + p))
+    if pb:
+        inv_var = np.exp(-2 * np.clip(x @ res.x[pb:], -LOG_SD_CLIP, LOG_SD_CLIP))
+        cov[:pb, :pb] = np.linalg.inv((x * inv_var[:, None]).T @ x + np.eye(p) / PRIOR_SD**2)
+    cov[pb:, pb:] = np.linalg.inv(2 * x.T @ x + np.eye(p) / PRIOR_SD**2)
     return res.x, (cov + cov.T) / 2
 
 
-def fit_heads(df: pd.DataFrame, *, niter: int = 100, seed: int = SEED) -> dict[str, Any]:
-    """Per level: whitening, s_d, the Laplace start and the BaM posterior (mu, cov)."""
+def fit_heads(
+    df: pd.DataFrame,
+    *,
+    niter: int = 100,
+    seed: int = SEED,
+    n_dirs: int | None = None,
+    clip: bool = False,
+    mean_correction: bool = True,
+    sd_cap: str | float | None = None,
+) -> dict[str, Any]:
+    """Per level: whitening, s_d, the Laplace start and the BaM posterior (mu, cov).
+
+    ``sd_cap`` limits how wide a bar can get: ``"fit_range"`` keeps the log error size inside
+    the range it took on the fitting rows (per level), a number ``c`` keeps it at most
+    ``c * s_d``. Without it, only the numerical guard ``LOG_SD_CLIP`` applies."""
     df = thin(df, seed)
     cols = feature_columns(df)
-    fit: dict[str, Any] = {"columns": cols, **_whitening(df[cols].to_numpy(float))}
+    fit: dict[str, Any] = {"columns": cols, "mean_correction": mean_correction,
+                           **_whitening(df[cols].to_numpy(float), n_dirs, clip)}  # fmt: skip
     levels: dict[float, dict[str, Any]] = {}
     for depth, g in df.groupby("depth_m"):
         err = (g["temp_obs_c"] - g["temp_pred_c"]).to_numpy(float)
         s_d = float(np.sqrt(np.mean(err**2)))
         x = _design(g[cols].to_numpy(float), fit)
         r = err / s_d
-        p = x.shape[1]
-        theta_map, cov0 = laplace(x, r)
-        mu, cov = bam_fit(head_score(x, r, np.ones(len(r))), theta_map, cov0, niter=niter,
-                          reg0=10.0, seed=seed)  # fmt: skip
+        theta_map, cov0 = laplace(x, r, mean_correction)
+        mu, cov = bam_fit(head_score(x, r, np.ones(len(r)), mean_correction), theta_map, cov0,
+                          niter=niter, reg0=10.0, seed=seed)  # fmt: skip
         gap = float(np.max(np.abs(mu - theta_map) / np.sqrt(np.diag(cov0))))
+        log_sd_fit = x @ mu[len(mu) - x.shape[1] :]
+        lo, hi = -LOG_SD_CLIP, LOG_SD_CLIP
+        if sd_cap == "fit_range":
+            lo, hi = float(log_sd_fit.min()), float(log_sd_fit.max())
+        elif sd_cap is not None:
+            hi = float(np.log(float(sd_cap)))
         sd_ratio = np.sqrt(np.diag(cov) / np.diag(cov0))
         levels[float(depth)] = {"s": s_d, "mu": mu, "cov": cov, "n_profiles": len(g),
-                                "map_gap_sd": gap}  # fmt: skip
+                                "map_gap_sd": gap, "log_sd_lo": lo, "log_sd_hi": hi}  # fmt: skip
         logger.info("Level %.1f m: %d profile-levels, s = %.3f °C, log-sd intercept %.2f, "
                     "BaM mean vs MAP: max %.2f Laplace sd, BaM sd / Laplace sd %.2f-%.2f",
-                    depth, len(g), s_d, mu[2 * p - 1], gap, sd_ratio.min(),
+                    depth, len(g), s_d, mu[-1], gap, sd_ratio.min(),
                     sd_ratio.max())  # fmt: skip
     fit["levels"] = levels
     return fit
@@ -268,25 +310,67 @@ def predictive(df: pd.DataFrame, fit: dict[str, Any], seed: int = SEED) -> pd.Da
         s_d, mu, cov = lev["s"], lev["mu"], lev["cov"]
         x = _design(g[fit["columns"]].to_numpy(float), fit)
         p = x.shape[1]
+        pb = p if fit.get("mean_correction", True) else 0
         res = pd.DataFrame(index=g.index)
-        res["const_mean"], res["const_sd"] = pred, s_d
-        res["const_pit"] = ndtr((obs - pred) / s_d)
-        m = pred + s_d * (x @ mu[:p])
-        sd = s_d * np.exp(np.clip(x @ mu[p:], -LOG_SD_CLIP, LOG_SD_CLIP))
-        res["bll_plugin_mean"], res["bll_plugin_sd"] = m, sd
-        res["bll_plugin_pit"] = ndtr((obs - m) / sd)
+        const_sd = np.full(len(g), s_d)
+        _gaussian_scores(res, "const", obs, pred, const_sd)
+        m = pred + s_d * (x[:, :pb] @ mu[:pb]) if pb else pred
+        lo, hi = lev.get("log_sd_lo", -LOG_SD_CLIP), lev.get("log_sd_hi", LOG_SD_CLIP)
+        sd = s_d * np.exp(np.clip(x @ mu[pb:], lo, hi))
+        _gaussian_scores(res, "bll_plugin", obs, m, sd)
         th = rng.multivariate_normal(mu, cov, POSTERIOR_DRAWS)
-        ms = pred[:, None] + s_d * (x @ th[:, :p].T)
-        ss = s_d * np.exp(np.clip(x @ th[:, p:].T, -LOG_SD_CLIP, LOG_SD_CLIP))
+        ms = pred[:, None] + (s_d * (x[:, :pb] @ th[:, :pb].T) if pb else 0.0)
+        ms = np.broadcast_to(ms, (len(g), POSTERIOR_DRAWS))
+        ss = s_d * np.exp(np.clip(x @ th[:, pb:].T, lo, hi))
         mix_mean = ms.mean(1)
         res["bll_bam_mean"] = mix_mean
         res["bll_bam_sd"] = np.sqrt((ss**2 + ms**2).mean(1) - mix_mean**2)
         res["bll_bam_pit"] = ndtr((obs[:, None] - ms) / ss).mean(1)
+        res["bll_bam_crps"] = mixture_crps(obs, ms, ss)
+        log_dens = -0.5 * np.log(2 * np.pi * ss**2) - 0.5 * ((obs[:, None] - ms) / ss) ** 2
+        res["bll_bam_nll"] = -(logsumexp(log_dens, axis=1) - np.log(POSTERIOR_DRAWS))
         out.append(res)
     return df.join(pd.concat(out), how="inner")
 
 
 # --- Scoring -----------------------------------------------------------------------------------
+
+
+def _abs_mean(mu: np.ndarray, sd: np.ndarray) -> np.ndarray:
+    """E|Y| for Y ~ N(mu, sd^2)."""
+    z = mu / sd
+    return np.asarray(sd * np.sqrt(2 / np.pi) * np.exp(-0.5 * z**2) + mu * (2 * ndtr(z) - 1))
+
+
+def gaussian_crps(obs: np.ndarray, m: np.ndarray, sd: np.ndarray) -> np.ndarray:
+    """CRPS of N(m, sd^2) at obs (closed form, Gneiting and Raftery 2007), in °C."""
+    z = (obs - m) / sd
+    pdf = np.exp(-0.5 * z**2) / np.sqrt(2 * np.pi)
+    return np.asarray(sd * (z * (2 * ndtr(z) - 1) + 2 * pdf - 1 / np.sqrt(np.pi)))
+
+
+def mixture_crps(obs: np.ndarray, ms: np.ndarray, ss: np.ndarray) -> np.ndarray:
+    """CRPS of the equal-weight Gaussian mixture (rows of ms, ss) at obs:
+    E|X - y| - E|X - X'| / 2, both terms closed form; the second from the first
+    ``CRPS_PAIR_DRAWS`` components."""
+    first = _abs_mean(obs[:, None] - ms, ss).mean(1)
+    k = min(CRPS_PAIR_DRAWS, ms.shape[1])
+    out = np.empty(len(obs))
+    for a in range(0, len(obs), 20000):
+        b = min(a + 20000, len(obs))
+        dm = ms[a:b, :k, None] - ms[a:b, None, :k]
+        ds = np.sqrt(ss[a:b, :k, None] ** 2 + ss[a:b, None, :k] ** 2)
+        out[a:b] = first[a:b] - 0.5 * _abs_mean(dm, ds).mean((1, 2))
+    return out
+
+
+def _gaussian_scores(
+    res: pd.DataFrame, name: str, obs: np.ndarray, m: np.ndarray, sd: np.ndarray
+) -> None:
+    res[f"{name}_mean"], res[f"{name}_sd"] = m, sd
+    res[f"{name}_pit"] = ndtr((obs - m) / sd)
+    res[f"{name}_crps"] = gaussian_crps(obs, m, sd)
+    res[f"{name}_nll"] = 0.5 * np.log(2 * np.pi * sd**2) + 0.5 * ((obs - m) / sd) ** 2
 
 
 def _groups(df: pd.DataFrame) -> dict[str, np.ndarray]:
@@ -307,7 +391,10 @@ def _cover(pit: np.ndarray, p: float) -> float:
 
 
 def coverage_table(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
-    """Coverage at 68% and 95% (with float-bootstrap 95% intervals), mean sd and RMSE."""
+    """Coverage at 68% and 95%, mean CRPS and Gaussian NLL, sharpness (mean sd), the share of
+    blown-up error bars (sd > 5x the constant one) and RMSE. Float-bootstrap 95% intervals for
+    coverage and for the CRPS skill against the constant bar,
+    100 * (1 - CRPS / CRPS_const)."""
     rng = np.random.default_rng(seed)
     rows = []
     for name, sel in _groups(df).items():
@@ -324,6 +411,17 @@ def coverage_table(df: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
                                    "n_floats": uniq.size}  # fmt: skip
             row["rmse_c"] = float(np.sqrt(np.mean((g[f"{method}_mean"] - obs) ** 2)))
             row["mean_sd_c"] = float(np.mean(g[f"{method}_sd"]))
+            row["median_sd_c"] = float(np.median(g[f"{method}_sd"]))
+            row["frac_blowup"] = float(np.mean(g[f"{method}_sd"] > BLOWUP_FACTOR * g["const_sd"]))
+            crps = g[f"{method}_crps"].to_numpy(float)
+            crps0 = g["const_crps"].to_numpy(float)
+            row["crps_c"] = float(np.mean(crps))
+            row["nll"] = float(np.mean(g[f"{method}_nll"]))
+            row["crps_skill_pct"] = 100 * (1 - row["crps_c"] / np.mean(crps0))
+            skill = [100 * (1 - crps[d].mean() / crps0[d].mean()) for d in draws]
+            row["crps_skill_lo"], row["crps_skill_hi"] = (
+                np.percentile(skill, [2.5, 97.5]) if skill else (np.nan, np.nan)
+            )
             for p in (0.68, 0.95):
                 tag = int(round(p * 100))
                 row[f"cover{tag}"] = _cover(pit, p)
@@ -377,9 +475,15 @@ def plot_reliability(table: pd.DataFrame, path: Path, title: str) -> Path | None
 
 
 def analyse(
-    fit_df: pd.DataFrame, check: dict[str, pd.DataFrame], out_dir: Path, *, niter: int = 100
+    fit_df: pd.DataFrame,
+    check: dict[str, pd.DataFrame],
+    out_dir: Path,
+    *,
+    niter: int = 100,
+    **fit_options: Any,
 ) -> dict[str, pd.DataFrame]:
-    """Fit on ``fit_df``; score each ``check`` table. Also the dev -> final half check."""
+    """Fit on ``fit_df``; score each ``check`` table. Also the dev -> final half check.
+    ``fit_options`` go to ``fit_heads`` (n_dirs, clip, mean_correction)."""
     metrics = out_dir / "metrics"
     metrics.mkdir(parents=True, exist_ok=True)
     halves = holdout_halves(fit_df)
@@ -389,7 +493,7 @@ def analyse(
     jobs += [(name, fit_df, df) for name, df in check.items()]
     for name, fit_on, score_on in jobs:
         logger.info("Fitting the last layer for %s on %d rows", name, len(fit_on))
-        fit = fit_heads(fit_on, niter=niter)
+        fit = fit_heads(fit_on, niter=niter, **fit_options)
         scored = predictive(score_on, fit)
         cov = coverage_table(scored)
         rel = reliability_table(scored)
@@ -505,6 +609,12 @@ def build_cli() -> argparse.ArgumentParser:
     a.add_argument("--check", default=None, help="uncert_test.parquet (2021, second look)")
     a.add_argument("--out-dir", default="outputs")
     a.add_argument("--niter", type=int, default=100)
+    a.add_argument("--n-dirs", type=int, default=DEFAULT_FIT["n_dirs"])
+    a.add_argument("--no-clip", dest="clip", action="store_false", default=DEFAULT_FIT["clip"])
+    a.add_argument("--no-mean-correction", dest="mean_correction", action="store_false",
+                   default=DEFAULT_FIT["mean_correction"])  # fmt: skip
+    a.add_argument("--sd-cap", type=float, default=DEFAULT_FIT["sd_cap"],
+                   help="Largest error bar as a multiple of the constant one")  # fmt: skip
     return parser
 
 
@@ -526,9 +636,12 @@ def main() -> None:
         )
         return
     check = {"test_2021": pd.read_parquet(args.check)} if args.check else {}
-    tables = analyse(pd.read_parquet(args.fit), check, Path(args.out_dir), niter=args.niter)
-    cols = ["group", "method", "n_floats", "rmse_c", "mean_sd_c", "cover68", "cover68_lo",
-            "cover68_hi", "cover95", "cover95_lo", "cover95_hi"]  # fmt: skip
+    tables = analyse(pd.read_parquet(args.fit), check, Path(args.out_dir), niter=args.niter,
+                     n_dirs=args.n_dirs, clip=args.clip,
+                     mean_correction=args.mean_correction, sd_cap=args.sd_cap)  # fmt: skip
+    cols = ["group", "method", "n_floats", "mean_sd_c", "frac_blowup", "cover68", "cover68_lo",
+            "cover68_hi", "cover95", "cover95_lo", "cover95_hi", "crps_c", "nll",
+            "crps_skill_pct", "crps_skill_lo", "crps_skill_hi"]  # fmt: skip
     for name, table in tables.items():
         keep = table[~table["group"].str.endswith(" m") | table["group"].str.contains("-")]
         print(f"\n{name}\n" + keep[cols].round(3).to_string(index=False))

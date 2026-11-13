@@ -383,3 +383,12 @@ Format: `## YYYY-MM-DD — title` then decision, reason, who approved.
 - **The 2021 part is a second look at the sealed test year.** The mean prediction is the model scored once on 2021-11-10 and its 2021 headline does not change; nothing is fitted on 2021. Calibration numbers on 2021 are reported as a second look, never as an untouched result, and are not used to tune anything afterwards.
 - Kaggle: `scripts/kaggle_uncertainty.py` (one run, `OCEANSCOPE_OWNER_GO=1` for 2021). Nothing is published.
 - **Result (2026-11-13, notebook480bb00de4 + local refit with 8e882f5):** on the 2021 floats (second look) the per-level Bayesian last layer covers 0.71 / 0.94 overall (constant bar 0.83 / 0.98) and 0.74 / 0.96 in the Bay of Bengal 50–300 m (constant 0.79 / 0.97). Dev→final half check in 2018–2020: 0.71 / 0.93, but about 3.5% of rows get blown-up error bars (feature extrapolation); any fix is judged on that check only. Full posterior vs posterior-mean plug-in barely differ (parameter uncertainty is small at this data size). The last layer's mean correction (BoB 0.709 → 0.694 on 2021) is not a test result.
+- **Fix and final result (2026-11-13, Aryan's review before emailing):**
+  - **Settings, picked on the 2018–2020 dev→final float split only** (rule written before each round: [docs/uncertainty/SELECTION.md](uncertainty/SELECTION.md)): 8 whitened feature directions, features clipped to the fit range, predicted error size capped at 3× the constant bar, mean correction on.
+  - **New scores.** CRPS and Gaussian NLL are added next to coverage, with sharpness.
+  - **2021, scored once with those settings:**
+    - Coverage 0.74 / 0.95 (constant bar 0.83 / 0.98), mean sd 0.40 vs 0.49 °C.
+    - CRPS 5.7% (4.3–7.3) below the constant bar.
+    - Bay of Bengal 50–300 m: 0.79 / 0.97 for both methods, CRPS 4.2% (2.6–5.5) below the constant bar.
+  - **Blow-ups.** No observation now gets a bar above 5× the constant one. The cap binds on 3.0% of observations in the split and 0.04% in 2021.
+  - **Public page:** `docs/uncertainty/README.md`.
