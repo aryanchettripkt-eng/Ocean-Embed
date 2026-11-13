@@ -82,6 +82,17 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 
 The per-depth, per-season and per-region tables are in the published dataset under `metrics/` and on the site's Validation page.
 
+### Error bars: are they honest?
+
+A basic uncertainty version of `main3_aix30a` keeps the trained U-Net frozen and adds a Bayesian last layer for each depth. That layer predicts how large the error is at each point from the 32 features feeding the U-Net's output layer, and it is fitted with Batch-and-Match variational inference (Cai, Modi et al., ICML 2024). It was fitted on held-out ARGO floats in 2018–2020 and checked once on held-out floats in 2021. That was a second look at 2021, for error bars only; nothing was fitted on 2021.
+
+| 2021, held-out floats | 68% interval holds | 95% interval holds | mean error bar (sd) | CRPS vs a constant error bar |
+|---|---|---|---|---|
+| All depths, 23 floats | 0.74 (constant bar: 0.83) | 0.95 (0.98) | 0.40 °C (0.49) | 5.7% lower (95% CI 4.3–7.3) |
+| Bay of Bengal 50–300 m, 7 floats | 0.79 (0.79) | 0.97 (0.97) | 0.77 °C (0.78) | 4.2% lower (2.6–5.5) |
+
+The bars are sharper than a constant one per depth and still close to their nominal coverage. In the Bay of Bengal both are somewhat too wide. Bars that would extrapolate beyond what the fit saw are capped, with the settings chosen on 2018–2020 only. Full results, plots and the selection rule: [`docs/uncertainty/`](docs/uncertainty/README.md). Code: `ml/src/oceanscope_ml/evaluation/uncertainty.py`.
+
 ---
 
 ## Architecture
@@ -448,6 +459,7 @@ Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design
 - **Resolution.** 0.25° and daily. Fronts, eddies and coastal features smaller than about 25 km are smoothed out, and cells less than half ocean are masked.
 - **Depth.** 15 levels down to about 1,060 m. Values between levels in the profile chart (and in glasses answers) are interpolated linearly.
 - **Region.** The North Indian Ocean box only (40–100°E, 0–30°N). The model has not been tested elsewhere.
+- **Error bars are a first version.** They are checked on few floats (23 in 2021, 7 in the Bay of Bengal), are not yet shown on the site, and are measured against point floats, so they include the gap between a float and a 0.25° cell.
 - **Not a forecast.** Each map is a reconstruction of a past day from that day's and earlier observations.
 - **Live days are unchecked.** They run about 3 days behind real time and have no GLORYS reference yet.
 - **AI features are an interface, not a source.** The guide's wording, postcards and lasso shapes come from Meta's models; the numbers always come from the model outputs. The grounding guard still has known gaps (for example, a number spelled out in words).
