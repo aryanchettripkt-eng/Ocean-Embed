@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Landing } from "../../components/landing/Landing";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://ocean-embed.vercel.app"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://ocean-embed-xi.vercel.app"),
   title: "OceanScope AI — Beneath the Surface",
   description:
     "AI-powered 3D subsurface ocean temperature reconstruction for the North Indian Ocean from surface dynamics and in-situ observations.",
