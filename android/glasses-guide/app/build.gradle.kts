@@ -19,7 +19,7 @@ android {
         buildConfigField(
             "String",
             "DEFAULT_BACKEND_URL",
-            "\"https://oceanscope-backend.onrender.com/api/v1\"",
+            "\"https://p01--oceanscope-backend--mtdb7bsj52sr.code.run/api/v1\"",
         )
     }
 
