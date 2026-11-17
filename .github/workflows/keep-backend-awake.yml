@@ -1,0 +1,45 @@
+name: Keep backend awake
+
+# Pings the backend's health endpoint so the free instance does not scale to zero.
+# Koyeb's free instance sleeps after about an hour without traffic, and waking it means
+# re-downloading the data. UptimeRobot (every 5 minutes) is the main keep-alive; this is the
+# backup, because GitHub's scheduled runs can be delayed.
+#
+# Set the repository variable BACKEND_HEALTH_URL (Settings > Secrets and variables > Actions >
+# Variables), for example https://<service>-<org>.koyeb.app/api/v1/health. While it is unset the
+# job does nothing, so it never pings a host we no longer use.
+#
+# Render's free tier caps a workspace at 750 instance hours a month. Keeping a service awake
+# around the clock uses about 720 of them, which is how the Render workspace ran out in
+# November 2026. Don't point this at Render while other free services share the workspace.
+
+on:
+  schedule:
+    - cron: "7,27,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    name: Ping /api/v1/health
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: GET health endpoint
+        env:
+          TARGET: ${{ vars.BACKEND_HEALTH_URL }}
+        run: |
+          if [ -z "$TARGET" ]; then
+            echo "BACKEND_HEALTH_URL is not set; nothing to ping."
+            exit 0
+          fi
+          # One request, short timeout. Any HTTP response means the service is awake
+          # (503 while the data loads is fine), so only a connection failure or timeout fails.
+          status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 60 "$TARGET" || echo "000")
+          echo "Ping ${TARGET} -> HTTP ${status} at $(date -u +%FT%TZ)"
+          if [ "$status" = "000" ]; then
+            echo "No response from the backend (connection error or timeout)"
+            exit 1
+          fi
