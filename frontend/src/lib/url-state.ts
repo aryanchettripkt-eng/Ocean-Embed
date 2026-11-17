@@ -3,6 +3,7 @@
  */
 
 import type { components } from "./api/types";
+import { ServedDays } from "./date-ranges";
 
 export type MetaResponse = components["schemas"]["MetaResponse"];
 
@@ -85,6 +86,13 @@ export function parseExplorerParams(
     } else {
       defaultDate = availEnd;
     }
+    // The store can have a gap (live days are appended after the historical ones), and the
+    // val split's end may fall inside it. Never default to a day the backend can't serve:
+    // take the last served day before it, so the map opens on validation data, not a 404.
+    const served = new ServedDays(availStart, availEnd, meta.date_ranges);
+    if (!served.has(defaultDate)) {
+      defaultDate = served.step(defaultDate, -1) ?? served.snap(defaultDate);
+    }
   }
 
   // Validate date
@@ -92,7 +100,12 @@ export function parseExplorerParams(
   if (rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
     if (meta?.available_dates) {
       if (rawDate >= meta.available_dates.start && rawDate <= meta.available_dates.end) {
-        date = rawDate;
+        // A shared link can name a day in the gap; open the nearest served day instead.
+        date = new ServedDays(
+          meta.available_dates.start,
+          meta.available_dates.end,
+          meta.date_ranges,
+        ).snap(rawDate);
       }
     } else {
       date = rawDate;
