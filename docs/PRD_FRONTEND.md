@@ -228,7 +228,7 @@ All API access goes through `lib/api/hooks.ts`; components never call `fetch` di
 ## 6. Environment variables
 | Variable | Purpose |
 |---|---|
-| `NEXT_PUBLIC_API_BASE_URL` | e.g. `https://oceanscope-backend.onrender.com/api/v1` (backend is on Render, DECISIONS 2026-10-24) |
+| `NEXT_PUBLIC_API_BASE_URL` | e.g. `https://p01--oceanscope-backend--mtdb7bsj52sr.code.run/api/v1` (backend is on Northflank, DECISIONS 2026-11-17) |
 | `NEXT_PUBLIC_USE_MOCKS` | `true` to run fully on MSW mocks (default `false`) |
 
 ---

@@ -1,12 +1,11 @@
 name: Keep backend awake
 
-# Pings the backend's health endpoint so the free instance does not scale to zero.
-# Koyeb's free instance sleeps after about an hour without traffic, and waking it means
-# re-downloading the data. UptimeRobot (every 5 minutes) is the main keep-alive; this is the
-# backup, because GitHub's scheduled runs can be delayed.
+# Pings the backend's health endpoint. Northflank's free sandbox doesn't sleep, so this checks
+# that the API answers; on a host that sleeps it would also keep the service awake (waking means
+# re-downloading the data). UptimeRobot (every 5 minutes) is the main monitor.
 #
 # Set the repository variable BACKEND_HEALTH_URL (Settings > Secrets and variables > Actions >
-# Variables), for example https://<service>-<org>.koyeb.app/api/v1/health. While it is unset the
+# Variables), for example https://p01--oceanscope-backend--mtdb7bsj52sr.code.run/api/v1/health. While it is unset the
 # job does nothing, so it never pings a host we no longer use.
 #
 # Render's free tier caps a workspace at 750 instance hours a month. Keeping a service awake

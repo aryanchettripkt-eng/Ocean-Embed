@@ -36,7 +36,7 @@ cp .env.example .env.local   # .env.local is git-ignored; never commit it
 
 | Mode | Set in `.env.local` | Needs |
 |---|---|---|
-| **Deployed backend** (default in `.env.example`) | `NEXT_PUBLIC_API_BASE_URL=https://oceanscope-backend.onrender.com/api/v1` | Nothing. Real model output. The free Render instance can take about a minute to wake on the first request. |
+| **Deployed backend** (default in `.env.example`) | `NEXT_PUBLIC_API_BASE_URL=https://p01--oceanscope-backend--mtdb7bsj52sr.code.run/api/v1` | Nothing. Real model output. Hosted on Northflank; after a restart it takes a few minutes to load the data. |
 | **Mocks, no backend** | `NEXT_PUBLIC_USE_MOCKS=true` | Nothing. MSW answers every API call in the browser with synthetic data (`src/mocks/`). Best for offline UI work. |
 | **Local backend on fixtures** | `NEXT_PUBLIC_API_BASE_URL=http://localhost:7860/api/v1` | Python 3.11 and the backend running on `../fixtures/sample_outputs` (see the root README, "Run the site locally on synthetic data"). |
 
