@@ -49,6 +49,27 @@ describe("url-state.ts explorer query sync", () => {
     expect(state.lon).toBeNull();
   });
 
+  it("never defaults to a day inside a gap in the served dates", () => {
+    const meta = {
+      ...mockMeta,
+      available_dates: { start: "2018-01-01", end: "2026-11-03" },
+      splits: { ...mockMeta.splits, val: ["2018-01-01", "2020-12-01"] },
+      date_ranges: [
+        { start: "2018-01-01", end: "2020-11-30" },
+        { start: "2026-10-01", end: "2026-11-03" },
+      ],
+    } as typeof mockMeta;
+
+    expect(parseExplorerParams(new URLSearchParams(), meta).date).toBe("2020-11-30");
+    // A link to a gap day opens the next served day.
+    expect(parseExplorerParams(new URLSearchParams({ date: "2023-05-05" }), meta).date).toBe(
+      "2026-10-01",
+    );
+    expect(parseExplorerParams(new URLSearchParams({ date: "2019-06-01" }), meta).date).toBe(
+      "2019-06-01",
+    );
+  });
+
   it("round-trips state through buildExplorerSearchParams", () => {
     const original = {
       date: "2020-01-03",
