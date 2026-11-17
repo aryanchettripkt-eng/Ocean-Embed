@@ -3,7 +3,7 @@
 **See the ocean below the surface.** OceanScope AI reconstructs daily sea temperature at 15 depths, from the surface down to about 1,060 m, across the North Indian Ocean. It uses only what satellites and a few other sources can see from the surface, plus recent ARGO float profiles. You can explore the result as a 2D map or a 3D cutaway block, ask questions about it in plain language (typed or spoken), and even ask it out loud through a pair of Meta smart glasses.
 
 - **Live site:** https://ocean-embed-xi.vercel.app/
-- **API:** https://oceanscope-backend.onrender.com/api/v1 (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
+- **API:** moving from Render to Koyeb (November 2026, see [Hosting the backend](#hosting-the-backend)); the URL is updated here once the new service is live (OpenAPI schema in [`backend/openapi.json`](backend/openapi.json))
 - **Published outputs:** Hugging Face dataset [`zenzone3/oceanscope-outputs`](https://huggingface.co/datasets/zenzone3/oceanscope-outputs)
 - **Model run shown:** `main3_aix30a` since 10 November 2026: a U-Net that takes recent ARGO floats and the ARMOR3D product as extra inputs (see [Results](#results)). Before that the site showed `ens3`, then `main2_ft`.
 - **Live:** a new day is added every day at 06:00 UTC from near-real-time inputs, about 7 days behind today (see [Live mode](#live-mode-a-new-day-every-day))
@@ -20,7 +20,7 @@
 - [Results](#results)
 - [Architecture](#architecture)
 - [Frontend (Next.js on Vercel)](#frontend-nextjs-on-vercel)
-- [Backend (FastAPI on Render)](#backend-fastapi-on-render)
+- [Backend (FastAPI on Koyeb)](#backend-fastapi-on-koyeb)
 - [Meta AI features: "Talk to the ocean"](#meta-ai-features-talk-to-the-ocean)
 - [Android: Ocean Glasses](#android-ocean-glasses)
 - [Live mode: a new day every day](#live-mode-a-new-day-every-day)
@@ -53,11 +53,11 @@ Satellites measure the sea surface every day, but most of the ocean's heat sits 
 | Part | What it is | Where it runs |
 |---|---|---|
 | **ML** (`ml/`) | Data build, U-Net training, evaluation, prediction, publishing, daily live runs | Kaggle / Colab GPUs, GitHub Actions (live) |
-| **Backend** (`backend/`) | FastAPI service: data API plus every Meta model call | Render (Docker, free tier) |
+| **Backend** (`backend/`) | FastAPI service: data API plus every Meta model call | Koyeb (Docker, free instance) |
 | **Frontend** (`frontend/`) | Next.js site: landing, Explorer 2D/3D, Validation, About, beach mode | Vercel |
 | **Android** (`android/glasses-guide/`) | "Ocean Glasses" app for Ray-Ban/Oakley Meta glasses | Sideloaded on an Android phone |
 | **Meta models** | Muse Spark, Muse Voice Transcribe, Muse Image, SAM 3.1 | Meta Model API, called only from the backend |
-| **Monitoring** | UptimeRobot (every 5 min) and a GitHub Actions ping (every 10 min) | External |
+| **Monitoring** | UptimeRobot (every 5 min) and a GitHub Actions ping (every 20 min) | External |
 
 ---
 
@@ -146,7 +146,7 @@ flowchart LR
 
   HF[("Hugging Face dataset<br/>zenzone3/oceanscope-outputs")]
 
-  subgraph BE["backend/ (FastAPI on Render)"]
+  subgraph BE["backend/ (FastAPI on Koyeb)"]
     API["Data API<br/>/map /profile /section /timeseries<br/>/metrics /argo /headline /events"]
     META["app/meta/<br/>guide · voice · postcards · lasso<br/>budget · limits · grounding guard"]
   end
@@ -220,9 +220,13 @@ Next.js 15 (App Router, React 19, TypeScript), Tailwind, MapLibre GL, Three.js a
 
 ---
 
-## Backend (FastAPI on Render)
+## Backend (FastAPI on Koyeb)
 
-Python 3.11, FastAPI, xarray and zarr, pydantic-settings and httpx. It runs as a Docker web service on Render's free tier ([`render.yaml`](render.yaml), 512 MB RAM, Oregon).
+Python 3.11, FastAPI, xarray and zarr, pydantic-settings and httpx. It runs as a Docker web service on Koyeb's free instance (512 MB RAM, 0.1 vCPU, 2 GB disk, Washington D.C.), built from [`backend/Dockerfile`](backend/Dockerfile).
+
+### Hosting the backend
+
+Until 17 November 2026 the backend ran on Render's free tier ([`render.yaml`](render.yaml)). Render gives a workspace 750 free instance hours a month; keeping the backend awake around the clock uses about 720, and two other free services shared the workspace, so Render suspended all three until 1 December 2026. Hugging Face Spaces no longer runs Docker Spaces for free, so the backend moved to Koyeb, which has the same 512 MB limit (the memory work below carries over unchanged) and no monthly hour cap. Koyeb builds the image from GitHub (work directory `backend`, Dockerfile builder) on every push to `main`. Set the service's port to 8000 with a TCP health check, because `/health` answers 503 while the data loads. `render.yaml` stays as a fallback blueprint.
 
 ### How it serves data
 
@@ -265,7 +269,7 @@ All settings come from environment variables (see [`backend/.env.example`](backe
 | `HF_DATASET_REPO`, `HF_DATASET_REVISION`, `DATA_DIR` | Where to download the published run from, and where to keep it |
 | `CORS_ORIGINS` | Allowed site origins |
 | `RELOAD_INTERVAL_MIN` | How often to re-check the manifest (default 60) |
-| `META_API_BASE_URL`, `META_API_KEY` | Meta Model API (`https://api.meta.ai/v1`); the key lives only in Render secrets |
+| `META_API_BASE_URL`, `META_API_KEY` | Meta Model API (`https://api.meta.ai/v1`); the key lives only in the host's secrets |
 | `META_CHAT_MODEL`, `META_CHAT_FALLBACK_MODEL`, `META_TRANSCRIBE_MODEL`, `META_IMAGE_MODEL`, `META_SEGMENT_MODEL` | Model ids (for example `muse-spark-1.3`, `muse-voice-transcribe-1.0`, `muse-image-1.0`, `sam-3.1`) |
 | `META_CLIENT` | `http` for the real API, `mock` for an offline guide with no key and no network |
 | `CHAT_ENABLED`, `VOICE_ENABLED`, `POSTCARD_ENABLED`, `SEGMENT_ENABLED`, `BEACH_ENABLED`, `GLASSES_ENABLED` | One flag per feature; all off by default |
@@ -305,9 +309,9 @@ Meta's models are the interaction layer. They let people move through and ask ab
 
 ### Cost, abuse and privacy controls
 
-- **Credit budget, fail closed.** The Meta credits are a fixed pot, so every real call reserves its worst-case cost against a lifetime cap and a daily cap before it runs, then settles against the reported usage. With the real client, a feature stays off until both caps, its prices and a durable ledger are set. The ledger lives in a private Hugging Face repo, because Render wipes the disk on every restart. When the budget runs out, features degrade as if the API were down.
+- **Credit budget, fail closed.** The Meta credits are a fixed pot, so every real call reserves its worst-case cost against a lifetime cap and a daily cap before it runs, then settles against the reported usage. With the real client, a feature stays off until both caps, its prices and a durable ledger are set. The ledger lives in a private Hugging Face repo, because the host wipes the disk on every restart. When the budget runs out, features degrade as if the API were down.
 - **Rate limits.** Per IP per minute, per IP per day and globally per day, for each feature: chat 4/min, 30, 150; voice 3/min, 15, 60; postcards 1/min, 3, 20; lasso 3/min, 20, 60; glasses 4/min, 30, 150. Spoken glasses questions also count against the voice limits.
-- **Kill switch.** Set a feature's flag to `false` on Render; the feature disappears from `/meta` and the UI hides it. No Meta feature is on the critical path of the map, profile or section endpoints, so the rest of the site keeps working if Meta is down.
+- **Kill switch.** Set a feature's flag to `false` in the host's environment; the feature disappears from `/meta` and the UI hides it. No Meta feature is on the critical path of the map, profile or section endpoints, so the rest of the site keeps working if Meta is down.
 - **Privacy.** No user content is stored. Logs record feature, status, latency and a request id only.
 
 ---
@@ -362,10 +366,12 @@ The switch to `main3_aix30a` was published with `scripts/kaggle_publish_single.p
 
 ## Keeping the backend awake
 
-Render's free tier puts a web service to sleep after about 15 minutes without traffic, and waking it means re-downloading the data (a minute or more). Two monitors keep it awake:
+Koyeb's free instance scales to zero after about an hour without traffic, and waking it means re-downloading the data (a minute or more). Two monitors keep it awake:
 
-- **UptimeRobot** sends `GET https://oceanscope-backend.onrender.com/api/v1/health` **every 5 minutes**. It is the main keep-alive and also alerts if the API goes down. It is configured in UptimeRobot's dashboard, not in this repository.
-- **GitHub Actions** ([`.github/workflows/keep-render-awake.yml`](.github/workflows/keep-render-awake.yml)) pings the same endpoint every 10 minutes (minutes 7, 17, 27 and so on) as a backup, because GitHub's scheduled runs can be delayed. Any HTTP response counts as awake; only a connection failure or timeout fails the job. Set the repository variable `RENDER_URL` to point it elsewhere.
+- **UptimeRobot** sends `GET <backend>/api/v1/health` **every 5 minutes**. It is the main keep-alive and also alerts if the API goes down. It is configured in UptimeRobot's dashboard, not in this repository.
+- **GitHub Actions** ([`.github/workflows/keep-backend-awake.yml`](.github/workflows/keep-backend-awake.yml)) pings the endpoint in the repository variable `BACKEND_HEALTH_URL` every 20 minutes (minutes 7, 27 and 47) as a backup, because GitHub's scheduled runs can be delayed. Any HTTP response counts as awake; only a connection failure or timeout fails the job. With the variable unset it does nothing.
+
+On Render, never keep a free service awake around the clock while other free services share the workspace: together they pass the 750-hour monthly cap and every service is suspended.
 
 `/health` returns 503 for a few minutes after a restart while the data loads, so a short "down" blip after a deploy is expected.
 
@@ -472,7 +478,7 @@ python -m oceanscope_ml.publish --config configs/experiment.yaml --dry-run   # l
 HF_TOKEN=... python -m oceanscope_ml.publish --config configs/experiment.yaml
 ```
 
-`manifest.json` is uploaded last, so the backend never sees a half-published run. The backend is a Docker web service on Render ([`render.yaml`](render.yaml)) that reads `HF_DATASET_REPO` and `HF_DATASET_REVISION`. The frontend deploys to Vercel with `NEXT_PUBLIC_API_BASE_URL` set to the backend. For the Meta features, add the `META_*` variables and feature flags as Render secrets.
+`manifest.json` is uploaded last, so the backend never sees a half-published run. The backend is a Docker web service on Koyeb (see [Hosting the backend](#hosting-the-backend)) that reads `HF_DATASET_REPO` and `HF_DATASET_REVISION`. The frontend deploys to Vercel with `NEXT_PUBLIC_API_BASE_URL` set to the backend. For the Meta features, add the `META_*` variables and feature flags as secrets on the Koyeb service.
 
 ### Checks
 
@@ -495,8 +501,8 @@ frontend/              Next.js app (landing, Explorer 2D/3D, validation, about, 
 android/glasses-guide/ Ocean Glasses Android app for Meta glasses (Kotlin, Wearables Device Access Toolkit)
 fixtures/              synthetic, contract-exact sample outputs for development (< 5 MB)
 docs/                  PRDs, DECISIONS.md, PHASES.md, OPEN_QUESTIONS.md, PROGRESS.md, runbooks, reviews
-.github/workflows/     ci.yml, live.yml (daily live day), keep-render-awake.yml (backend ping)
-render.yaml            Render blueprint for the backend
+.github/workflows/     ci.yml, live.yml (daily live day), keep-backend-awake.yml (backend ping)
+render.yaml            Render blueprint for the backend (fallback; the backend runs on Koyeb)
 ```
 
 Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design decisions, with dates and who approved them, are in [`docs/DECISIONS.md`](docs/DECISIONS.md).
@@ -521,7 +527,7 @@ Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md). Design
 - **Live days are unchecked.** They run about 7 days behind real time and have no GLORYS reference yet. Near-real-time inputs, ARMOR3D especially, differ from the reprocessed ones the model trained on; the one-month check above bounds the effect but can't rule it out for every day.
 - **AI features are an interface, not a source.** The guide's wording, postcards and lasso shapes come from Meta's models; the numbers always come from the model outputs. The grounding guard still has known gaps (for example, a number spelled out in words).
 - **Glasses app is a demo.** It is tested on Meta's mock glasses only, not on real hardware, and it uses dev/beta toolkit APIs, so it can't be published as it is. The answer is for a cell about 27 km wide, and the phone's compass sets the direction.
-- **Hosting.** The backend runs on Render's free tier (512 MB). After a restart it re-downloads the data, which takes a few minutes; the uptime monitors keep restarts rare but can't prevent them.
+- **Hosting.** The backend runs on Koyeb's free instance (512 MB, 2 GB disk). After a restart it re-downloads the data, which takes a few minutes; the uptime monitors keep restarts rare but can't prevent them.
 
 ---
 
